@@ -86,7 +86,27 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
 - [ ] 14. Revivir automáticamente al morir.
 
-## Fase 9 — plan (propuesto; falta el OK de Enzo)
+## Ideas para después (de Enzo, 2026-11-19)
+Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La funcionalidad va en sus fases.
+- **Servidor:**
+  - Modo de recoger: `"uno_por_uno"` (Guabina: cada Z junta un objeto) o `"todo_junto"` (una Z junta todo).
+  - Tipo de captcha.
+- **Personaje:**
+  - Teclas de pociones: en Guabina, F2 vida y F3 maná, y se toman solas.
+  - Lista de habilidades con temporizador: tecla, duración en segundos, si requiere bajarse del caballo y duración de la animación. Ejemplos: guerrero "Aura de Espada" en F1, sura "Espada Espejo" en F1, defensiva en 4. → Fase 11.
+- **Zona:**
+  - Modo de farmeo: `"metin"` o `"bichos"` (→ Fase 13).
+  - Prioridad entre tipos de metin (→ Fase 12).
+  - Para el modo bichos: la tecla del ítem que atrae monstruos (F4 en la configuración de Enzo) y cada cuántos segundos usarlo.
+
+## Fase 9 — plan (aprobado por Enzo, con ajustes)
+**Ajustes de Enzo:**
+1. Los perfiles incluyen los lugares de "Ideas para después", con valores por defecto.
+2. Si `config.json` pisa un valor definido en el perfil elegido, el log lo avisa al arrancar (por ejemplo, "config.json pisa farm_zone del perfil de zona X"). `calibrate.py perfiles migrar` saca de `config.json` lo que pasa a los perfiles.
+3. Nuevo subcomando `calibrate.py personaje "Nombre"`: crea el perfil de un personaje nuevo, con su plantilla del nombre amarillo ("<Nombre>'s").
+4. El perfil de zona se llama **"Guabina - Oscuridad y Negro"**, no "Zona actual".
+
+**Plan original:**
 **Objetivo:** separar la configuración en tres perfiles sin cambiar nada de lo que hace el bot. El bot sigue recibiendo **el mismo diccionario `cfg` de siempre**. Lo único que cambia es de dónde salen los valores.
 - **Archivos** (JSON puro, en git, en `profiles/`):
   - `profiles/servidores/Guabina.json`: lo que depende del servidor o del cliente, es decir `window_title`, `expected_client_size`, `controls` (teclas del cliente) y `vision.*` (plantillas y colores de la interfaz).
