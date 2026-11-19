@@ -135,6 +135,20 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
 
+## Fase 11 — plan (pedido por Enzo, 2026-11-19): habilidades con temporizador
+- **Lista:** `character.skills` del perfil de personaje (Fase 9). Cada habilidad tiene `name`, `key`, `duration_s`, `requires_dismount`, `animation_s` y `enabled`. **Con la lista vacía el bot se comporta exactamente igual que antes**: un test compara la secuencia de input contra una grabada antes del cambio.
+- **`bot/skills.py`:** `SkillScheduler`. Al iniciar la sesión, todas las habilidades activas quedan vencidas, así se lanzan enseguida. Al lanzar una, su próximo vencimiento queda en `duration_s` (con un margen configurable).
+- **Momento seguro:** solo al principio de un ciclo, nunca en medio de un clic, de recoger, de un destrabe, de un acercamiento, de una vuelta a la zona, del captcha ni de la muerte. Se lanza en BUSCAR, entre pasos de EXPLORAR y en ATACAR con el metin ya confirmado y unos segundos después del último clic. Después del lanzamiento, otro clic en el metin para seguir atacando.
+- **Lanzamiento:**
+  1. Soltar todo.
+  2. Si `requires_dismount` y está montado: Ctrl+G y esperar.
+  3. Apretar la tecla y esperar `animation_s`, en tramos con chequeo de captcha y pánico.
+  4. Ctrl+G para subirse, solo si se bajó para esta habilidad.
+  
+  Si aparece el captcha en el medio: aborta, pasa a CAPTCHA, se sube al terminar el captcha y la habilidad queda vencida para reintentar. Con pánico: no manda nada más. Se lleva la cuenta de si está montado o no, para no desparejar Ctrl+G con el bajarse para recoger.
+- **Interfaz:** tabla editable de las habilidades del personaje elegido (agregar, editar, quitar y guardar en el perfil), con ejemplos para cargar rápido ("Aura de Espada" F1, "Espada Espejo" F1, defensiva 4). Contador de habilidades lanzadas en las estadísticas.
+- **Tests:** simulador con montar/desmontar, secuencia del lanzamiento, nunca durante RECOGER ni a mitad de un clic, relanzamiento al vencer, captcha y pánico durante el lanzamiento, habilidad sin bajarse, y la lista vacía sin cambios.
+
 ## Fase 10 — qué quedó (rama `desarrollo`)
 - **Arquitectura:** la interfaz (`gui.py` → `bot/ui/app.py`, tkinter) lanza el bot como **subproceso** (`run_bot.py --ui`). La ventana nunca se congela, y el corte forzado del bot (`os._exit`) no la cierra. F11, F12 y la esquina del mouse siguen funcionando igual, porque viven en el proceso del bot.
 - **Protocolo:**
