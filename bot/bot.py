@@ -22,6 +22,7 @@ from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
+from bot.priority import order_candidates
 from bot.skills import Skill, SkillScheduler
 from bot.tracking import CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
@@ -601,8 +602,24 @@ class Bot:
                 why.append((("zona", d.name), zr))
                 continue
             out.append(_Cand(d, gp))
-        out.sort(key=lambda c: math.dist(c.det.click_point, p.player_xy))
+        prio = self.cfg["zone"]["metin_priority"]
+        if prio and len(out) > 1:
+            near = sorted(out, key=lambda c: math.dist(c.det.click_point, p.player_xy))
+            out = order_candidates(out, p.player_xy, prio, lambda c: c.det.name, lambda c: c.det.click_point)
+            if out[0] is not near[0] and out[0].det.name != near[0].det.name:
+                self._log_priority(out[0].det.name, near[0].det.name)
+        else:
+            out.sort(key=lambda c: math.dist(c.det.click_point, p.player_xy))
         return out, why
+
+    def _log_priority(self, chosen: str | None, nearer: str | None) -> None:
+        """Una vez por decision: la prioridad cambio la eleccion respecto del mas cercano."""
+        key = ("prioridad", chosen, nearer)
+        t = self.clock()
+        mem = float(self.cfg["debug"]["reason_memory_s"])
+        if key not in self._diag_seen or t - self._diag_seen[key] > mem:
+            logger.info("Elegido %s por prioridad (mas cerca habia %s)", chosen, nearer)
+        self._diag_seen[key] = t
 
     def _candidates(self, p: Perception, t: float, check_discards: bool = True) -> list[_Cand]:
         """Metin objetivo permitidos, no descartados y dentro de la zona; el mas cercano primero."""

@@ -3,7 +3,7 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-19)
-**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, con 1113 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Próximas: 12–14. `main` no se tocó.
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, más la prioridad de metin de la 12, con 1140 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: el resto de la 12 (historial y conteo de objetos), la 13 y la 14. `main` no se tocó.
 
 **Rama `main`** (carpeta `D:\proyectos\metin-bot`):
 **Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
@@ -85,7 +85,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
   - F11 y F12 siguen funcionando igual.
   - Guarda las últimas opciones y tiene un `.bat` para abrirla con doble clic.
 - [x] 11. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Habilidades con temporizador (lista editable en la interfaz).
-- [ ] 12. Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin.
+- [ ] 12. Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin. *(La prioridad está hecha en `desarrollo` y falta la prueba de Enzo; quedan el historial y el conteo.)*
 - [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
 - [ ] 14. Revivir automáticamente al morir.
 
@@ -135,7 +135,18 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
 
-## Fase 12 (parte 1) — plan: prioridad entre tipos de metin (pedido por Enzo, 2026-11-19)
+## Fase 12 (parte 1) — estado: prioridad entre tipos de metin HECHA (1140 tests)
+- `bot/priority.py` (`priority_rank`, `order_candidates`). Se usa en `_label_view` de `bot/bot.py`: con la lista vacía (o con un solo candidato) queda el orden de antes, por distancia. Los 4 baselines salen idénticos.
+- Log "Elegido X por prioridad (más cerca había Y)", sin repetirse gracias a `debug.reason_memory_s`.
+- Validación: `metin_priority` sin repetidos (por slug) ni vacíos. WARNING si un nombre no es objetivo (se ignora).
+- **Interfaz:** sección "Prioridad de metin" en la pestaña Control, entre Perfiles y Opciones.
+  - Tiene un interruptor, la lista con ↑ y ↓, Guardar (perfil de zona, con `.bak`; apagado guarda la lista vacía) y el indicador "sin guardar".
+  - Se recarga al cambiar de zona, pregunta si hay cambios sin guardar y se bloquea durante la corrida.
+  - Lógica en `bot/ui/priority_editor.py`.
+- Ojo: si `config.json` define `zone.metin_priority`, pisa al perfil (sale el aviso de pisado al arrancar) y el editor de la ventana no lo refleja.
+- **Pendiente de la Fase 12:** historial de sesiones y conteo de objetos recogidos por tipo.
+
+### Plan original
 - **Config:** `zone.metin_priority` del perfil de zona (ya existe desde la Fase 9, vacía por defecto). Es una lista de nombres en orden: el primero tiene más prioridad. Los objetivos que no están en la lista van después, todos con la misma prioridad. Se compara por slug, como `is_target_name`.
 - **Elección en BUSCAR:** entre los objetivos válidos, gana el de mayor prioridad y, a igual prioridad, el más cercano. **Con la lista vacía, el comportamiento es idéntico al actual**: se verifica con los baselines de `tests/data/baseline_events_*.json`. Si la prioridad cambió la elección, se loguea ("elegido X por prioridad; más cerca había Y").
 - **Interfaz:** editor de la prioridad de la zona elegida, con los `target_metin_names` de esa zona ordenables con ↑ y ↓, un interruptor "Elegir por prioridad" (apagado = lista vacía) y Guardar en el perfil de zona, con `.bak`.
@@ -568,6 +579,13 @@ En `D:\proyectos\metin-bot-desarrollo`, con la interfaz (`abrir_interfaz.bat`):
 4. **F12 en medio de un lanzamiento:** tiene que cortar sin dejar teclas apretadas.
 5. **Con la lista vacía** (o todas desactivadas), el bot tiene que comportarse igual que antes.
 6. Contame si `mount_wait_s` y `attack_settle_s` (3 s) necesitan ajuste.
+
+### Rama `desarrollo`: Fase 12 (parte 1), prioridad de metin
+En la interfaz, pestaña Control, sección "Prioridad de metin":
+1. Encendé "Elegir por prioridad", poné "Metin Negro" arriba y guardá. Fijate que `profiles\zonas\Guabina - Oscuridad y Negro.json` quede con `metin_priority: ["Metin Negro", "Metin de Oscuridad"]` y que haya una copia `.bak`.
+2. Con un Oscuridad más cerca y un Negro más lejos a la vista (primero en modo Observar): tiene que elegir el Negro, y el log tiene que decir "Elegido metin_negro por prioridad (más cerca había metin_de_oscuridad)".
+3. Apagá el interruptor y guardá: tiene que volver a ir al más cercano.
+4. Cambiá de zona o tocá Iniciar con cambios sin guardar: tiene que preguntar.
 
 ### GitHub: decidir qué hacer con `samples/`
 El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.

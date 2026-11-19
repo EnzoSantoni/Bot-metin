@@ -12,6 +12,7 @@ from typing import Callable
 from bot.config import ConfigError
 from bot.ui import controller as ctl
 from bot.ui import skills_editor as se
+from bot.ui.priority_editor import PriorityEditor
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,9 @@ class App:
         self.editor = se.SkillsEditor(profiles_root)
         self.editor.load(self.opts.personaje)
         self._last_personaje = self.opts.personaje
+        self.prio = PriorityEditor(profiles_root)
+        self.prio.load(self.opts.zona)
+        self._last_zona = self.opts.zona
         self._build()
         self._apply_window_prefs()
         self.refresh_overrides()
@@ -88,6 +92,8 @@ class App:
         prof.columnconfigure(1, weight=1)
         self.warn_label = tk.Label(prof, text="", fg=COLOR_WARN, justify="left", anchor="w", wraplength=420)
         self.warn_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+
+        self._build_priority(main)
 
         opt = ttk.LabelFrame(main, text="Opciones", padding=6)
         opt.pack(fill="x", pady=6)
@@ -141,6 +147,80 @@ class App:
         self.log.tag_configure("ERROR", foreground=COLOR_ERROR)
         self.log.tag_configure("CRITICAL", foreground=COLOR_ERROR)
         ttk.Label(main, text=REMINDER, foreground="#444").pack(fill="x")
+
+    # ------------------------------------------------------------------ prioridad de metin
+    def _build_priority(self, parent: ttk.Frame) -> None:
+        box = ttk.LabelFrame(parent, text="Prioridad de metin", padding=6)
+        box.pack(fill="x", pady=(6, 0))
+        self.prio_var = tk.BooleanVar(value=self.prio.enabled)
+        self.prio_check = ttk.Checkbutton(box, text="Elegir por prioridad (arriba = primero)", variable=self.prio_var,
+                                          command=self._on_prio_toggle)
+        self.prio_check.grid(row=0, column=0, columnspan=4, sticky="w")
+        self.prio_list = tk.Listbox(box, height=3, exportselection=False, activestyle="none")
+        self.prio_list.grid(row=1, column=0, sticky="ew", pady=2)
+        box.columnconfigure(0, weight=1)
+        self.prio_buttons: list[ttk.Widget] = []
+        for col, (text, cmd, w) in enumerate((("↑", lambda: self.move_priority(-1), 3),
+                                              ("↓", lambda: self.move_priority(1), 3),
+                                              ("Guardar", self.save_priority, 8)), start=1):
+            b = ttk.Button(box, text=text, width=w, command=cmd)
+            b.grid(row=1, column=col, padx=2)
+            self.prio_buttons.append(b)
+        self.prio_state = tk.StringVar(value="")
+        tk.Label(box, textvariable=self.prio_state, anchor="w", fg=COLOR_WARN).grid(row=2, column=0, columnspan=4, sticky="ew")
+        self.refresh_priority()
+
+    def refresh_priority(self, select: int | None = None) -> None:
+        """Redibuja la lista, el interruptor y el indicador de cambios sin guardar."""
+        self.prio_list.delete(0, "end")
+        for i, n in enumerate(self.prio.names):
+            self.prio_list.insert("end", f"{i + 1}. {n}" if self.prio.enabled else n)
+        if select is not None and 0 <= select < len(self.prio.names):
+            self.prio_list.selection_set(select)
+        self.prio_var.set(self.prio.enabled)
+        parts = []
+        if self.prio.dirty:
+            parts.append("sin guardar")
+        if self.prio.locked:
+            parts.append("bloqueada mientras el bot corre")
+        self.prio_state.set(" - ".join(parts))
+
+    def _selected_priority(self) -> int | None:
+        sel = self.prio_list.curselection()
+        return int(sel[0]) if sel else None
+
+    def _on_prio_toggle(self) -> None:
+        if self.prio.locked:
+            self.prio_var.set(self.prio.enabled)
+            return
+        self.prio.set_enabled(self.prio_var.get())
+        self.refresh_priority(select=self._selected_priority())
+
+    def move_priority(self, delta: int) -> None:
+        i = self._selected_priority()
+        if i is None or self.prio.locked:
+            return
+        self.refresh_priority(select=self.prio.move(i, delta))
+
+    def save_priority(self) -> bool:
+        try:
+            self.prio.save()
+        except (ValueError, ConfigError, OSError) as e:
+            self._notify("No se pudo guardar la prioridad", str(e))
+            return False
+        self.refresh_priority(select=self._selected_priority())
+        return True
+
+    def _confirm_unsaved_priority(self, what: str) -> bool:
+        """Como `_confirm_unsaved`, para la prioridad de la zona. False = cancelar la accion."""
+        if not self.prio.dirty:
+            return True
+        ans = self._ask_save("Prioridad sin guardar",
+                             f"Hay cambios sin guardar en la prioridad de metin de '{self.prio.zona}'.\n"
+                             f"Guardarlos antes de {what}?")
+        if ans is None:
+            return False
+        return self.save_priority() if ans else True
 
     # ------------------------------------------------------------------ habilidades
     SKILL_COLS = (("enabled", "Activa", 50), ("name", "Nombre", 140), ("key", "Tecla", 60), ("duration_s", "Duracion (s)", 85),
@@ -290,6 +370,15 @@ class App:
                 self._last_personaje = new
                 self.editor.load(new)
                 self.refresh_skills()
+        if kind == "zona":
+            new = self.vars["zona"].get()
+            if new != self._last_zona:
+                if not self._confirm_unsaved_priority("cambiar de zona"):
+                    self.vars["zona"].set(self._last_zona)
+                    return
+                self._last_zona = new
+                self.prio.load(new)
+                self.refresh_priority()
         self.refresh_overrides()
 
     # ------------------------------------------------------------------ ventana
@@ -378,6 +467,8 @@ class App:
             return
         if not self._confirm_unsaved("iniciar (el bot usa el perfil guardado)"):
             return
+        if not self._confirm_unsaved_priority("iniciar (el bot usa el perfil guardado)"):
+            return
         self.opts = o
         ctl.save_settings(o, self.settings_path)
         try:
@@ -439,6 +530,10 @@ class App:
         self.editor.locked = not b.options
         for w in self.skill_buttons:
             w.configure(state="normal" if b.options else "disabled")
+        self.prio.locked = not b.options
+        for w in (self.prio_check, *self.prio_buttons):
+            w.configure(state="normal" if b.options else "disabled")
+        self.refresh_priority(select=self._selected_priority())
         self.refresh_skills(select=self._selected_skill())
 
     def _poll(self) -> None:

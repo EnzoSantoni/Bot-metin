@@ -790,8 +790,18 @@ def _validate_profile_sections(cfg: dict) -> None:
     prio = zn.get("metin_priority")
     if not isinstance(prio, list):
         raise ConfigError("zone.metin_priority debe ser una lista de nombres de metin (vacia = todos iguales)")
+    from bot.vision.metin import slugify   # import local: evita ciclos
+    seen: set[str] = set()
     for n in prio:
         _require_text(n, "zone.metin_priority[]")
+        slug = slugify(n)
+        if slug in seen:
+            raise ConfigError(f"zone.metin_priority tiene un nombre repetido: {n!r}")
+        seen.add(slug)
+    targets = {slugify(n) for n in cfg.get("target_metin_names") or [] if isinstance(n, str)}
+    for n in prio:
+        if slugify(n) not in targets:
+            logger.warning("zone.metin_priority: %r no esta en target_metin_names (se ignora)", n)
     bi = _require_dict(zn.get("bichos"), "zone.bichos")
     _check_game_key(bi.get("lure_key"), "zone.bichos.lure_key", reserved)
     _num_ge0(bi.get("lure_every_s"), "zone.bichos.lure_every_s")

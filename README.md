@@ -141,6 +141,7 @@ Opciones: `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida),
 Doble clic en `abrir_interfaz.bat` (o en `abrir_interfaz_admin.bat` si el juego corre como administrador: pide permisos). Abre `gui.py` con el `pythonw.exe` del `.venv` (sin consola); si no hay `.venv` local busca `..\metin-bot\.venv`.
 
 - **Perfiles:** listas de servidor, personaje y zona. Debajo, en naranja, los avisos de "config.json pisa X del perfil Y".
+- **Prioridad de metin:** debajo de los perfiles, en la pestaña Control. Lista los tipos de metin de la zona elegida; con el interruptor "Elegir por prioridad" encendido, el bot va primero al de más arriba que vea (con ↑ y ↓ lo ordenás) y, entre los del mismo tipo, al más cercano. Apagado (o lista vacía) elige siempre el más cercano, como antes. Se guarda en `zone.metin_priority` del perfil de zona (con `.bak`) y se bloquea mientras el bot corre. Solo cuenta para metin con etiqueta visible: las piedras lejanas sin nombre no tienen tipo conocido. Un nombre que no está en `target_metin_names` se ignora con un aviso.
 - **Opciones:** tiempo máximo en minutos (0 = sin límite), **Debug** (solo para esa corrida, no toca `config.json`), **Observar (sin input)** y **Siempre encima**.
 - **Iniciar / Pausar-Reanudar / Detener:** se habilitan según el estado. Detener manda la orden de parada (igual que F12); si el bot no termina en ~5 s se lo cierra a la fuerza.
 - **Estadísticas en vivo:** estado, metin rotos, objetos, captchas, destrabes, tiempo, cuenta regresiva y motivo de fin. Con el bot en pausa aparece "PAUSADO" en rojo.
