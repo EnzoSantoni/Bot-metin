@@ -1,0 +1,19 @@
+# Entorno y cachés de Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Salidas del bot (logs y capturas de depuración)
+logs/
+debug/
+
+# Configuración personal: se crea a partir de config.example.jsonc (ver README)
+config.json
+
+# Ajustes locales de Claude Code
+.claude/settings.local.json
+
+# Capturas del juego (~35 MB; muestran el nombre del personaje y el chat de otros jugadores).
+# Fuera del repo hasta que Enzo decida. Para subirlas: borrar esta línea, `git add samples` y commit.
+samples/

@@ -1,0 +1,466 @@
+{
+  // Texto (o parte unica del texto) del titulo de la ventana del juego.
+  // Corre `.venv\Scripts\python.exe list_windows.py` para ver los titulos y copia el tuyo.
+  "window_title": "Guabina",
+
+  // Tamano esperado del area de cliente (sin barra de titulo). Si la ventana mide otra cosa
+  // solo se avisa en el log; cambialo solo si jugas a otra resolucion.
+  "expected_client_size": [1858, 1057],
+
+  // Espera tras traer el juego al frente. mss captura lo que se VE en pantalla: Windows tarda
+  // en redibujar (y en animar el restaurar si estaba minimizado), y una captura temprana
+  // todavia muestra la ventana anterior encima.
+  "window": {
+    // ms que el juego tiene que estar al frente y sin tapar antes de capturar / mandar input.
+    "settle_ms": 500,
+    // ms entre chequeos de "el juego no esta tapado por otra ventana".
+    "unobstructed_poll_ms": 50
+  },
+
+  "log": {
+    // Nivel de logging: DEBUG, INFO, WARNING, ERROR. Usa DEBUG solo para diagnosticar.
+    "level": "INFO",
+    // Carpeta donde se guarda el archivo de log (relativa al proyecto).
+    "dir": "logs",
+    // Nombre del archivo de log (rota a 5 MB, 3 copias).
+    "file": "bot.log"
+  },
+
+  "debug": {
+    // true guarda capturas anotadas con lo detectado. Activalo solo para depurar: ocupa disco.
+    "enabled": false,
+    // Carpeta de salida de las capturas de debug (y de capture_preview.png). Con enabled, cada corrida guarda un JPEG
+    // anotado por evento en <dir>/run_<fecha_hora>/NNNN_<estado>_<motivo>.jpg, mas un events.log (una linea por imagen).
+    // Eventos: cambio de estado, metin o piedra descartados/ignorados, intento de destrabe, entrada a ACERCARSE y, mientras
+    // explora, una imagen cada explore_every_s. max_images: tope por corrida. jpeg_quality: 1-100.
+    // max_per_kind: tope de imagenes por tipo de evento (estado = cambios de estado, descarte, destrabe, ignorada,
+    // equivocada = seleccion equivocada, bloqueado, explorar = la periodica); lo que pase del tope no se guarda.
+    // reason_memory_s: un motivo de "no elegido" que desaparece y vuelve antes de este tiempo (parpadeo de la deteccion)
+    // no cuenta como nuevo: no genera otra linea de log ni otra imagen.
+    "dir": "debug",
+    "explore_every_s": 30.0,
+    "max_images": 400,
+    "jpeg_quality": 80,
+    "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
+                     "bloqueado": 20, "explorar": 40},
+    "reason_memory_s": 60.0
+  },
+
+  // Alarma sonora (captcha o muerte): winsound.Beep en un hilo hasta que se la para.
+  "alarm": {
+    "freq": 1000,        // Hz (37 a 32767)
+    "beep_ms": 400,      // duracion de cada beep
+    "pause_ms": 300,     // pausa entre beeps
+    "max_seconds": 0     // corta sola a los N segundos; 0 = suena hasta stop()
+  },
+
+  // Teclas del juego. "ctrl+g" = combinacion (se aprietan en orden y se sueltan al reves).
+  // Tienen que estar TODAS las acciones de abajo, con teclas conocidas (bot/input/base.py: VALID_KEYS),
+  // y ninguna puede ser panic_key ni pause_key (el hook veria la tecla que manda el bot).
+  "controls": {
+    "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
+    "camera_left": "q", "camera_right": "e",
+    "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
+    "deselect": "esc"
+  },
+
+  // Seguridad (bot/control.py). Si el juego corre como administrador, ejecuta el bot como administrador:
+  // si no, Windows puede no entregar F11/F12 mientras el juego tiene el foco.
+  "safety": {
+    "panic_key": "f12",          // detiene el bot al instante y suelta todo
+    "pause_key": "f11",          // alterna pausa / reanudar (distinta de panic_key)
+    "corner_px": 5,              // mouse a <= N px de la esquina sup. izq. de la PANTALLA = panico
+    "corner_poll_ms": 50,        // cada cuanto se mira el cursor
+    "countdown_s": 5,            // cuenta regresiva antes de arrancar
+    "hard_kill_after_s": 2.0     // > 0. Si tras el panico el loop no termina en N s, se suelta todo y se corta el proceso
+  },
+
+  // Input. Rangos [min, max] en ms (aleatorios por accion).
+  "input": {
+    "backend": "pydirectinput",
+    "click_jitter_px": 4,        // variacion aleatoria de la posicion del clic (radio)
+    "delay_ms": [60, 140],       // pausa entre acciones
+    "key_hold_ms": [50, 110],    // tiempo que se mantiene una tecla
+    "move_settle_ms": [30, 80]   // espera tras mover el mouse y antes del clic
+  },
+
+  // Nombres EXACTOS de los metin a atacar (lista no vacia; cualquiera de ellos es objetivo y se elige el mas
+  // cercano). Cada uno se verifica contra una plantilla en templates/labels/<slug>.png,
+  // slug = minusculas, sin tildes, espacios -> "_"; se genera con tools/make_label_template.py.
+  // Los demas (ej. "Metin de Avaricia") se detectan pero se ignoran.
+  // Compatibilidad: la clave vieja "target_metin_name" (texto) se convierte a lista con un WARNING.
+  "target_metin_names": ["Metin de Oscuridad", "Metin Negro"],
+
+  // Zona de farmeo poligonal, en coordenadas del juego (las que se leen debajo del minimapa).
+  //  polygon: >= 3 vertices [x, y] en orden de contorno, sin cruces, area > 0.
+  //  outside_tolerance: cuanto puede alejarse el personaje hacia afuera del borde (unidades del juego, >= 0).
+  //    Adentro = INSIDE; afuera a <= tolerancia = TOLERANCE (se acepta); mas lejos = OUTSIDE. Ver bot/zone.py.
+  "farm_zone": {
+    "polygon": [[439, 141], [753, 91], [702, 203], [436, 196]],
+    "outside_tolerance": 30
+  },
+
+  // Filtro de coordenadas leidas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
+  //  max_speed: unidades del juego por segundo (> 0, con margen sobre la velocidad real del caballo).
+  //  slack: tolerancia fija en unidades (ruido de lectura). accept_after: lecturas rechazadas consecutivas y
+  //  consistentes entre si (a <= consistency_dist unidades) que se aceptan como teletransporte real.
+  //  max_dt_s: tope del dt usado en el filtro (una pausa en las lecturas no habilita saltos grandes).
+  //  history: lecturas que se recuerdan para detectar trabas.
+  "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0, "max_dt_s": 0.5,
+                    "history": 512},
+
+  // "No me muevo": trabado si en los ultimos window_s segundos el desplazamiento maximo es < min_move unidades
+  // (solo mientras el bot intenta moverse: CoordTracker.mark_moving).
+  //  max_attempts: intentos de la rutina de destrabe (clic perpendicular, clic opuesto, girar camara + clic, tecla atras).
+  //  unstuck_radius_px: distancia (px) de los clics de destrabe. back_key_s: segundos de la tecla "atras" (S).
+  //
+  //  EPISODIOS DE TRABA (Fase 6b): la traba se abre al detectarla en cualquier estado que camina o va a un metin y persiste
+  //  entre VOLVER / EXPLORAR / ATACAR / ACERCARSE / CENTRO; se cierra solo con progreso real: alejarse resolve_dist
+  //  unidades del punto de traba (no 2) SIN empeorar la distancia firmada a la zona (en VOLVER / CENTRO tiene que
+  //  mejorar) ni la distancia al objetivo (en ATACAR / ACERCARSE), confirmar un metin o llegar al destino (o episode_ttl_s
+  //  sin intentos nuevos). progress_tol: tolerancia (unidades) de esas comparaciones.
+  //  Estrategias: con >= monsters_min monstruos cerca al empezar el intento, ESPACIO (regla A) y se repite hasta fallar
+  //  space_fail_max veces seguidas; sin monstruos (o con ESPACIO ya fallado) rotan MIRAR y ATRAS:
+  //   ESPACIO: mantiene el ataque space_s y despues avanza (W) forward_s, en tramos de forward_chunk_s mirando las
+  //     coordenadas entre tramos (no sigue si empeora hacia el limite de la zona; en la franja de tolerancia no avanza);
+  //   MIRAR (regla C): gira la camara look_steps pasos de look_step_s mirando etiquetas y piedras y, si
+  //     no hay nada, camina hacia una direccion >= min_dir_sep_deg distinta de las ya probadas (dir_step_deg = paso de
+  //     busqueda) y, con la camara lista, hacia el interior;  ATRAS: tecla atras back_key_s y clic hacia un costado.
+  //  memory_dirs: direcciones probadas que hereda el episodio siguiente si es seguido.
+  //  Al agotar max_attempts en el episodio, o con repeat_max episodios en repeat_window_s -> estado CENTRO (regla D).
+  //  (resolve_dist, monsters_min, space_*, forward_*, repeat_*, look_*, *_deg, episode_ttl_s: ESTIMADOS, a calibrar.)
+  //  Las claves viejas stuck.max_no_progress y volver.alt_targets se ignoran con un WARNING.
+  "stuck": {"window_s": 3.0, "min_move": 2.0, "max_attempts": 4, "unstuck_radius_px": 200, "back_key_s": 0.6,
+            "resolve_dist": 10.0, "monsters_min": 2, "space_s": 2.0, "forward_s": 1.0,
+            "repeat_max": 3, "repeat_window_s": 120.0, "look_steps": 4, "look_step_s": 0.8,
+            "min_dir_sep_deg": 60.0, "dir_step_deg": 30.0, "episode_ttl_s": 120.0,
+            "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5},
+
+  // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
+  // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
+  // (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un chequeo de captcha (captura + zona fija,
+  // ~3 ms) entre tramos: si aparece, se suelta todo y pasa a CAPTCHA enseguida.
+  "loop": {"cycle_ms": 150, "captcha_full_search_every": 10, "hold_chunk_s": 0.5},
+
+  // ATACAR. confirm_timeout_s: tiempo sin ver el panel del metin (ni moverse) antes de reclickear.
+  //  hp_stall_s: la vida no baja por tanto tiempo -> reclic. max_reclicks: mas que esto -> descartar el metin.
+  //  max_seconds: tope total de un ataque. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
+  //  metin por roto. discard_minutes: un metin descartado no se vuelve a elegir por ese tiempo.
+  //  discard_radius: unidades del juego a la redonda que se consideran "el mismo metin".
+  //  discard_error_frac: se suma al radio esta fraccion de la distancia al metin (el error de la camara crece con la distancia).
+  //  Sin camara calibrada el descarte se guarda con la posicion del JUGADOR y solo aplica cerca de ese lugar (ver approach.blind_*).
+  //  max_wrong_selections: veces que un mismo metin selecciona otra cosa (monstruo, NPC) antes de descartarlo.
+  //  Regla B (ESTIMADOS): blocked_s = confirmado, la vida no baja por tanto tiempo y el personaje esta quieto o gira en
+  //  circulo (recorrido en la ventana > circle_ratio x desplazamiento neto, con al menos circle_min_path unidades) ->
+  //  ESPACIO (stuck.space_s) y reclic en el metin (cuenta como reclic). Seleccion equivocada de un monstruo (panel "other")
+  //  con >= wrong_monsters_min monstruos cerca -> ESPACIO, Escape y reclic (sigue contando para max_wrong_selections).
+  //  blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
+  //  Si el personaje sale de la zona atacando un metin cuya posicion queda afuera (o no se conoce), esa posicion se descarta.
+  "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
+             "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
+             "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
+             "wrong_monsters_min": 1, "blocked_window_frac": 0.8},
+
+  // RECOGER. Z cada press_interval_ms; tras presses_before_click Z seguidas con objetos todavia a la vista, un clic en la
+  //  etiqueta. Termina tras empty_confirm_cycles ciclos seguidos sin objetos validos (los objetos tardan en aparecer),
+  //  o al llegar a max_presses / max_seconds. dismount: bajarse del caballo al entrar y subirse al salir.
+  //  mount_wait_s: espera tras cada Ctrl+G.
+  "pickup": {"press_interval_ms": 350, "presses_before_click": 3, "empty_confirm_cycles": 5, "max_presses": 30,
+             "max_seconds": 20.0, "dismount": false, "mount_wait_s": 2.0},
+
+  // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
+  //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...
+  //  border_margin: el destino de cada tramo queda a >= esta distancia del borde (y los destinos de vuelta). leg_units /
+  //  leg_s: largo (unidades) y tope de tiempo de un tramo. min_leg_sep_deg / recent_legs: el rumbo nuevo se aparta tanto
+  //  de los ultimos rumbos. max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO.
+  //  walk_timeout_s: tope de un tramo de VOLVER/CENTRO. (camera_steps, border_margin, leg_*, max_without_metin_s: ESTIMADOS.)
+  //  visited_keep: puntos recientes que la exploracion trata de no repetir. leg_tiebreak_units: desempate al azar
+  //  (unidades) entre destinos de tramo parecidos.
+  "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
+              "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
+              "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0},
+
+  // ACERCARSE: caminar hacia una piedra lejana (sin etiqueta) hasta que aparezca el nombre. Entra desde BUSCAR/EXPLORAR
+  //  si no hay etiqueta valida y hay una piedra permitida, no ignorada y cuya posicion estimada (o el jugador, sin camara)
+  //  esta en la zona. Etiqueta de un objetivo -> ATACAR; etiqueta de otro tipo donde estaba la piedra -> esa posicion se
+  //  ignora ignore_minutes (radio ignore_radius, mas el error de la camara). lost_cycles ciclos sin verla -> BUSCAR.
+  //  label_match_px: una etiqueta a esa distancia de la piedra es "esa piedra". match_px: seguimiento entre ciclos.
+  //  label_exclude_down_px: la piedra de una etiqueta visible (hasta tantos px debajo de ella) no es "lejana".
+  //  Perder la piedra de vista tambien ignora su posicion. max_tries_per_spot: aproximaciones a una misma posicion sin
+  //  llegar a atacar antes de ignorarla (se reinicia al atacar).
+  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego): un metin con etiqueta solo se ataca si el personaje
+  //  esta adentro del poligono con margen (navigation.explore_margin) y la etiqueta queda a <= blind_screen_px del personaje
+  //  en pantalla. Un descarte o ignorado se guarda con la posicion del JUGADOR y solo aplica a menos de blind_player_radius
+  //  unidades de ese lugar (y a lo que se ve en el mismo sitio de la pantalla), no a todo.
+  //  far_monsters_n / far_monsters_px: una piedra lejana SIN humo (criterio secundario) con >= n etiquetas de monstruos a
+  //  menos de px de ella es un falso positivo (un grupo de bichos) y se ignora. Las que tienen humo no se filtran.
+  "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
+               "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
+               "blind_screen_px": 160, "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+               "far_monsters_n": 2, "far_monsters_px": 200},
+
+  // CENTRO (regla D / E): como VOLVER pero el destino es el centro del poligono; termina a <= arrive_dist unidades y
+  //  sigue con barrido + EXPLORAR. Su tope de tiempo y sus episodios de traba son los de VOLVER (volver.max_seconds).
+  "center": {"arrive_dist": 8.0},
+
+  // VOLVER (hacia el centro). max_seconds: tiempo acumulado de una misma "vuelta" (se reinicia al volver a quedar adentro);
+  //  al superarlo el bot termina con "no puede volver a la zona" (en CENTRO, "no puede llegar al centro") y suena la alarma.
+  "volver": {"max_seconds": 120.0},
+
+  // CAPTCHA (el bot NO lo resuelve): suelta todo, suena la alarma y espera. Lee la pantalla cada poll_s sin traer el juego
+  //  al frente (solo si ya esta adelante). clear_confirm lecturas seguidas sin panel -> para la alarma y sigue.
+  "captcha_wait": {"poll_s": 0.5, "clear_confirm": 2},
+
+  // Navegacion por realimentacion (bot/navigation.py). Pantalla en px, juego en unidades de coordenadas.
+  //  probe_radius_px: distancia del clic de sondeo (camara sin calibrar). click_radius_px: [min, max] del clic de caminata (el clic mide la distancia al destino, hasta max; si hay que
+  //  acortarlo por la mascara no baja de min; cerca del destino se acorta hasta el, nunca menos de min_segment_px).
+  //  arrive_dist: llego si esta a <= N unidades. explore_margin: margen al borde del poligono para puntos de exploracion.
+  //  min_segment_px / min_segment_game: tramos mas cortos se ignoran (bloqueados o ruido de redondeo).
+  //  min_sin: seno minimo del angulo entre dos tramos para aprender la camara (no colineales).
+  //  fit_segments: tramos usados en el ajuste. max_ratio_error: un tramo cuya longitud difiere mas de esta fraccion
+  //  de la esperada se descarta (bloqueado); tras relearn_after_rejects descartes seguidos se reaprende todo.
+  //  phi_smooth_deg: si el giro nuevo difiere menos de esto se promedia con el anterior.
+  //  angle_step_deg / max_angle_deg: si el punto de clic no esta permitido, se prueban angulos +-step hasta max.
+  //  shorten_factors: distancias relativas a probar (1.0 = completa) para cada angulo.
+  "navigation": {
+    "probe_radius_px": 150, "click_radius_px": [60, 120], "arrive_dist": 5.0, "explore_margin": 15.0,
+    "min_segment_px": 20, "min_segment_game": 8.0, "min_sin": 0.3, "fit_segments": 8,
+    "max_ratio_error": 0.35, "relearn_after_rejects": 4, "phi_smooth_deg": 10.0,
+    "angle_step_deg": 15, "max_angle_deg": 60, "shorten_factors": [1.0, 0.75, 0.5],
+    // settle_s: sin cambio de coordenadas por tanto tiempo = el personaje se freno (fin del tramo).
+    // segment_timeout_s: tope de un tramo caminado.
+    "settle_s": 1.0, "segment_timeout_s": 8.0,
+    // avoid_metin_px: los clics de caminata y destrabe no caen a menos de N px de un metin que NO es objetivo
+    // (clickearlo lo ataca). 0 = desactivado.
+    "avoid_metin_px": 70,
+    // scale_hint: rango plausible de la escala pantalla->juego [menor, mayor] (unidades por px). Solo acorta los
+    // sondeos cerca del borde de la zona mientras la camara no esta calibrada.
+    "scale_hint": [0.15, 0.4],
+    // Giro externo de la camara (no hecho por el bot). external_rotation_deg: si el giro estimado cambia mas que esto con
+    // un tramo consistente, se avisa y se re-estima. heading_tolerance_deg: rumbo observado vs esperado durante un tramo
+    // (2 ciclos seguidos fuera -> se corta el tramo y se invalida el giro). zone_guard_margin: el tramo se corta si el
+    // personaje baja de -(outside_tolerance - margen). max_walk_px: largo maximo de un tramo (tambien de sondeos y destrabes).
+    // brake_px: distancia del clic de freno al cortar un tramo. La guardia de zona vale para TODOS los tramos (tambien
+    // sondeos y destrabes): se corta si el personaje esta mas alla de ese umbral fijo y la distancia no mejora.
+    "external_rotation_deg": 25.0, "heading_tolerance_deg": 30.0, "zone_guard_margin": 10.0,
+    "max_walk_px": 120, "brake_px": 12,
+    // Sondeos (camara sin calibrar). probe_measure_factor: holgura sobre el largo minimo para poder medir un tramo
+    // (cerca del borde el sondeo se acorta por debajo de eso, sin piso). probe_turn_jitter_deg: variacion al azar del
+    // giro de ~90 grados entre sondeos.
+    "probe_measure_factor": 1.5, "probe_turn_jitter_deg": 17.0
+  },
+
+  "vision": {
+    // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
+    //  anchor: top-left, top-center, top-right, center-left, center, center-right,
+    //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).
+    //  dx, dy: desplazamiento de la ESQUINA SUPERIOR IZQUIERDA del rectangulo respecto del ancla.
+    //  w, h:   tamano en pixeles. Se recorta al tamano de la imagen (w grande = hasta el borde).
+    // Asi la misma config vale aunque la captura mida unos pixeles distinto.
+    "exclusion_zones": [
+      { "name": "chat",       "anchor": "bottom-center", "dx": -340, "dy": -190, "w": 640,  "h": 190 },
+      { "name": "exp_log",    "anchor": "bottom-center", "dx": 265,  "dy": -200, "w": 170,  "h": 200 },
+      { "name": "bottom_bar", "anchor": "bottom-left",   "dx": 0,    "dy": -60,  "w": 4000, "h": 60 },
+      { "name": "buffs",      "anchor": "top-left",      "dx": 0,    "dy": 0,    "w": 235,  "h": 130 },
+      { "name": "quests",     "anchor": "center-left",   "dx": 0,    "dy": -260, "w": 112,  "h": 170 },
+      { "name": "top_right",  "anchor": "top-right",     "dx": -420, "dy": 0,    "w": 420,  "h": 240 },
+      { "name": "top_center", "anchor": "top-center",    "dx": -400, "dy": 0,    "w": 800,  "h": 80 }
+    ],
+
+    "metin": {
+      // Carpeta con las plantillas de etiqueta (una por nombre de metin conocido).
+      "label_templates_dir": "templates/labels",
+      // Rango HSV (OpenCV: H 0-179) del naranja de los nombres de metin. El texto es BGR (0,128,255)
+      // exacto; el rojo de monstruos, el verde de "Lv" y el amarillo quedan fuera.
+      "hsv_lo": [13, 220, 220],
+      "hsv_hi": [17, 255, 255],
+      // Kernel [ancho, alto] de dilatacion que une las letras en una etiqueta.
+      "group_kernel": [9, 3],
+      // Tamano valido del texto de una etiqueta (px) y minimo de pixeles naranjas.
+      "min_text_w": 40, "max_text_w": 160,
+      "min_text_h": 6, "max_text_h": 16,
+      "min_pixels": 60,
+      // Se descarta la etiqueta si mas de esta fraccion de su rectangulo cae en zonas excluidas.
+      "max_zone_overlap": 0.5,
+      // Coincidencia minima con la plantilla y ventaja minima sobre la segunda mejor.
+      // Ante la duda NO es objetivo.
+      "min_score": 0.85,
+      "min_margin": 0.1,
+      // Punto de clic respecto del centro de la etiqueta: la piedra queda 55-80 px debajo.
+      "click_dx": 0, "click_dy": 65
+    },
+
+    // Piedras de metin SIN etiqueta (bot/vision/far_metin.py): nucleo rojo "calido" con humo encima.
+    // Medido sobre ./samples: piedras H 5-9, S 140-175, V>=150; el naranja de la piel de monstruos es H>=12,
+    // el texto rojo/naranja tiene S>=245 y la sangre V<100. El humo es gris palido de matiz 14-45 (fondo azul, H~115).
+    "far_metin": {
+      "core_h_max": 9,                           // matiz del nucleo: 0..core_h_max (OpenCV 0-179)
+      "core_s": [100, 205], "core_v_min": 150,   // saturacion min/max y brillo minimo del nucleo
+      "smoke_hsv_lo": [14, 8, 105], "smoke_hsv_hi": [45, 80, 230],  // rango HSV del humo
+      "group_kernel": [9, 9],                    // dilatacion [ancho, alto] que une los trozos de una piedra
+      "min_core_pixels": 60, "min_smoke_pixels": 40,  // minimo de pixeles de nucleo y de humo encima
+      "min_w": 8, "max_w": 140, "min_h": 8, "max_h": 160,  // tamano valido del cuerpo (px)
+      // Zona de humo: desde smoke_height_frac*alto sobre la piedra hasta smoke_overlap_frac*alto dentro de ella,
+      // con margen lateral smoke_side_frac*ancho + smoke_side_px (el humo se inclina).
+      "smoke_height_frac": 1.2, "smoke_side_frac": 0.5, "smoke_side_px": 8, "smoke_overlap_frac": 0.15,
+      "center_y_frac": 0.85,                     // el punto "center" (base) esta a esta fraccion del alto del cuerpo
+      "max_zone_overlap": 0.5,                   // fraccion maxima del cuerpo dentro de zonas excluidas/ventanas
+      "exclude_overlap": 0.3,                    // se descarta si mas de esta fraccion cae en un rect de `exclude`
+      "core_ref": 300, "smoke_ref": 150,         // nucleo y humo que dan score 1 (score = promedio de ambos)
+      // Segundo criterio, para piedras SIN humo (Metin Negro, anaranjado): cuerpo claro naranja sobre el nucleo.
+      "alt_enabled": true,
+      "alt_bright_lo": [3, 30, 200], "alt_bright_hi": [24, 190, 255],  // HSV de los pixeles claros del cuerpo
+      "alt_min_bright_px": 100, "alt_min_bright_frac": 0.08,  // minimo de pixeles claros y fraccion de la ventana
+      "alt_bright_max_ratio": 1.6,               // maximo de claros / nucleo (un efecto de habilidad es mucho mayor)
+      "alt_min_ground_frac": 0.3                 // fraccion minima de suelo oscuro azulado alrededor
+    },
+
+    // Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano pegado a la izquierda de un nombre
+    // rojo plano. Colores exactos medidos en samples (el amarillo del personaje y el naranja de metin no calzan).
+    "monsters": {
+      "red_bgr": [9, 22, 235], "green_bgr": [51, 255, 152], "color_tol": 6,
+      "green_kernel": [9, 1],                         // dilatacion [ancho, alto] que une "Lv" con el numero
+      "min_red_pixels": 15, "min_green_pixels": 10,   // rojo minimo a la derecha del verde; verde minimo del bloque
+      "min_green_w": 12, "max_green_w": 40, "min_green_h": 6, "max_green_h": 16,  // tamano del bloque "Lv XX"
+      "probe_w": 30,                                  // ancho (px) donde se busca el rojo a la derecha del verde
+      "max_gap_px": 10, "word_gap_px": 8,             // separacion maxima verde->rojo; hueco maximo entre palabras
+      "max_label_w": 260,                             // ancho maximo de la etiqueta (verde + nombre)
+      "max_zone_overlap": 0.5,
+      "near_radius_px": 120                           // "cerca del personaje" (px, centro de etiqueta a player_point)
+    },
+
+    // Objetos en el piso (bot/vision/items.py). El recuadro tiene borde negro exacto de 1 px, fondo oscuro
+    // translucido y texto blanco sin antialiasing; una linea (alto 15 px) o dos (30 px) si tiene dueno, con el
+    // nombre del dueno en amarillo (0,255,255) encima. "Yang" se reconoce por plantilla y NO se recoge.
+    "items": {
+      "yang_template": "templates/items/yang.png",  // mascara binaria (0/255) de la palabra "Yang"
+      "border_color": [0, 0, 0],      // BGR del borde (exacto)
+      "min_edge_run": 21,             // largo minimo (IMPAR) de un borde horizontal negro
+      "box_w": [24, 260],             // ancho min/max del recuadro, borde incluido
+      "box_dy": [14, 30],             // distancia minima y maxima entre borde superior e inferior
+      "box_dy_allowed": [14, 30],     // distancias validas: 1 linea (alto 15), 2 lineas (alto 31)
+      "box_dy_tol": 1,                // tolerancia (px) sobre box_dy_allowed
+      "edge_x_tol": 6,                // diferencia maxima (px) de x/ancho entre el borde de arriba y el de abajo
+      "border_min_frac": 0.7,         // fraccion minima negra de los dos bordes laterales (promedio; un objeto puede taparlos)
+      "white_min": 250,               // canal minimo (B,G,R) del texto blanco
+      "yellow_lo": [0, 230, 230],     // rango BGR del amarillo del dueno
+      "yellow_hi": [30, 255, 255],
+      "text_rows": 13,                // filas de la linea de texto, desde el borde inferior hacia arriba
+      "min_white_px": 15,             // pixeles blancos minimos para considerar que hay un nombre
+      "yellow_noise_px": 3,           // amarillo en la franja superior por encima de esto = tiene dueno (si no calza con el propio: reserved_other). Publicos reales: 0 px
+      "owner_size_tol": 2,            // tolerancia (px) de tamano de la caja amarilla respecto de la plantilla del dueno
+      "max_edges": 1500,              // tope de bordes candidatos por captura (samples: <=24); si se supera, WARNING y sin objetos ese ciclo
+      "owner_template": "templates/items/owner.png",  // mascara del amarillo "Farfarfa's" (dueno propio)
+      "owner_min_score": 0.95,        // score minimo para reserved; amarillo bajo eso = reserved_other (de otro)
+      "yang_min_score": 0.85,         // score minimo de la plantilla "Yang" (kind="yang")
+      "max_zone_overlap": 0.5         // fraccion maxima del recuadro en zonas excluidas
+    },
+
+    // Ventanas de interfaz que se pueden mover (inventario, Mapa grande). Se buscan en cada captura por la
+    // plantilla de su barra de titulo (recortada desde la esquina superior izquierda del marco; generala con
+    // tools/make_ui_template.py) y se excluyen enteras de la deteccion y de los clics.
+    //  size: [ancho, alto] fijo de la ventana completa en pixeles (la esquina sup. izq. es donde calza la plantilla).
+    //  min_score: coincidencia minima (0-1) de la plantilla; las capturas sin esas ventanas dan ~0.3 o menos.
+    // Busqueda en dos pasos: gruesa en gris a coarse_scale (umbral coarse_min_score) y refinada a
+    // resolucion completa en +-refine_margin px (umbral min_score).
+    // anchor2: segundo ancla (esquina/borde inferior del marco) por si el titulo esta tapado o fuera de
+    // la imagen; offset = [dx, dy] del recorte respecto de la esquina sup. izq. de la ventana.
+    "ui_windows": {
+      "min_score": 0.8,
+      "coarse_scale": 0.25,
+      "coarse_min_score": 0.5,
+      "refine_margin": 4,
+      // safety_margin: px que se agregan por cada lado a las ventanas detectadas en la mascara, para que
+      // ningun clic quede pegado a su borde (la piedra mide ~40 px y el clic puede errar ~10 px).
+      // alt: variantes de la misma ventana con otro tamano (inventario compacto, sin panel de estadisticas);
+      // solo se prueban si no calza la principal.
+      "safety_margin": 30,
+      "windows": [
+        { "name": "mapa_grande", "template": "templates/ui/mapa_grande.png", "size": [214, 289],
+          "anchor2": { "template": "templates/ui/mapa_grande_base.png", "offset": [0, 268] } },
+        { "name": "inventario",  "template": "templates/ui/inventario.png",  "size": [295, 575],
+          "anchor2": { "template": "templates/ui/inventario_base.png", "offset": [0, 539] },
+          "alt": [ { "template": "templates/ui/inventario_compacto.png", "size": [165, 575] } ] }
+      ]
+    },
+
+    // Panel "Bot Verify": SOLO se detecta (el bot no lo resuelve; pausa y suena la alarma). Dos anclas fijas
+    // que no dependen de los digitos: el pie (boton OK + "Bot Verify") y el bloque de botones 1-9. offset = esquina sup.
+    // izq. del recorte respecto de la esquina sup. izq. del panel. size = [ancho, alto] del panel.
+    // Busqueda gruesa en gris a coarse_scale (umbral coarse_min_score) y refinada a resolucion completa.
+    "captcha": {
+      "min_score": 0.8, "coarse_scale": 0.25, "coarse_min_score": 0.5, "refine_margin": 4,
+      "size": [152, 194],
+      // Zona fija donde aparece el panel (formato de las zonas excluidas: anchor + dx/dy + w/h), con ~80 px de
+      // holgura por lado. El loop busca solo aca en cada ciclo (pocos ms) y en toda la imagen cada N ciclos
+      // como respaldo (find_captcha(..., full=True)).
+      "search_region": { "anchor": "center-right", "dx": -400, "dy": -180, "w": 400, "h": 374 },
+      "footer": { "template": "templates/captcha/pie.png",    "offset": [24, 146] },
+      "keypad": { "template": "templates/captcha/teclado.png", "offset": [9, 49] }
+    },
+
+    // Pantalla de muerte: botones "Volver a Empezar Aqui" y "...en la Ciudad". search = region (desde la
+    // esquina sup. izq. de la imagen) donde se buscan las plantillas. Calza cualquiera de los dos.
+    "death": {
+      "search": { "w": 420, "h": 320 },
+      "min_score": 0.8, "coarse_scale": 0.5, "coarse_min_score": 0.5, "refine_margin": 4,
+      "here_template": "templates/death/aqui.png",
+      "city_template": "templates/death/ciudad.png"
+    },
+
+    // Posicion del personaje respecto del centro de la imagen (va montado, un poco mas abajo).
+    "player_offset": [0, 20],
+
+    // Lectura de numeros por plantillas de caracter (bot/vision/digits.py), un set por fuente.
+    // dir: carpeta con un PNG por caracter (0.png..9.png, dot, slash, lparen, rparen, comma);
+    //      se completan con tools/make_glyph_templates.py.
+    // color / color_tol: color BGR exacto del texto (sin antialiasing) y tolerancia por canal.
+    // min_score: similitud minima (Jaccard) para aceptar un caracter; si no, sale como '?'.
+    // min_margin: ventaja minima del mejor glifo sobre el segundo (8/9 y 8/6 se parecen 0.80; un digito
+    //   tapado a medias no puede pasar por otro). Digitos completos: 1.0 contra <= 0.80.
+    // max_gap / max_gap_after_comma: hueco maximo (px) entre caracteres; uno mayor es un caracter
+    //   tapado ('?'). Despues de la coma va un espacio.
+    "glyphs": {
+      "coords": {"dir": "templates/glyphs/coords", "color": [217, 217, 217], "color_tol": 12, "min_score": 0.9,
+                 "min_margin": 0.15, "max_gap": 3, "max_gap_after_comma": 7},
+      "panel":  {"dir": "templates/glyphs/panel",  "color": [199, 199, 199], "color_tol": 12, "min_score": 0.9,
+                 "min_margin": 0.15, "max_gap": 3, "max_gap_after_comma": 7}
+    },
+
+    // Coordenadas "(x, y)" debajo del minimapa. search: region de busqueda (ancla + dx/dy/w/h; la linea se
+    // corre en vertical entre capturas, asi que se busca por su aspecto). line_w / line_h: [min, max] del
+    // ancho y alto de la linea de texto. range: valores validos de x e y. min_score: confianza minima.
+    "coords": {
+      "search": {"anchor": "top-right", "dx": -200, "dy": 140, "w": 200, "h": 110},
+      "line_w": [20, 90], "line_h": [9, 12],
+      "range": [0, 4000],
+      "min_score": 0.9
+    },
+
+    // Panel superior (nombre, barra y numero de vida). Todo se ubica relativo al marco, que se busca por
+    // el color exacto de su borde en `search`.
+    "panel": {
+      "search": {"anchor": "top-center", "dx": -450, "dy": 0, "w": 900, "h": 110},
+      "frame_color": [85, 85, 85],   // borde del marco
+      "frame_min_w": 150,            // largo minimo del borde horizontal (sin contar adornos de las esquinas)
+      "frame_h": [30, 90],           // alto minimo y maximo del marco
+      "frame_x_tol": 2,              // diferencia maxima (px) de x entre el borde superior y el inferior
+      "frame_edge_merge": 1,         // filas consecutivas del mismo borde que cuentan como una sola
+      "name_templates_dir": "templates/panel_names",  // plantillas del nombre entero (tools/make_panel_name_template.py)
+      "name_color": [199, 199, 199], "name_color_tol": 12,
+      // Linea del nombre: x desde el borde izquierdo hasta (borde derecho + x_to_right); y desde el borde superior.
+      "name_region": {"x_from_left": 8, "x_to_right": -176, "dy": 14, "h": 16},
+      "name_min_score": 0.85,        // score minimo del nombre
+      "name_min_margin": 0.1,        // ventaja minima sobre el segundo mejor nombre
+      // Barra: las tapas doradas (R >= G+cap_diff y G >= B+cap_diff) dentro de la banda de filas `band` y de
+      // columnas `search_x` (relativas al borde derecho) delimitan el recipiente, de ancho `width` +- width_tol.
+      // gold_gap: columnas vacias que separan dos tapas doradas. Sin barra validada no se acepta el numero.
+      // Rojo lleno: R >= red_min_r, G y B <= red_max_gb, R-G >= red_min_rg.
+      "bar": {"band": [17, 24], "search_x": [-200, -24], "cap_diff": 25, "gold_gap": 4, "width": 108, "width_tol": 3,
+              "red_min_r": 110, "red_max_gb": 110, "red_min_rg": 40},
+      // Numero "actual/maxima": region desde el borde derecho (dx) y superior (dy).
+      "number_region": {"dx": -165, "w": 115, "dy": 4, "h": 13},
+      "hp_ratio_tol": 0.03           // diferencia maxima entre actual/maxima y la barra para validar el numero
+    }
+  }
+}
