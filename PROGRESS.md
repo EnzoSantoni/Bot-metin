@@ -135,6 +135,15 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
 
+## Fase 11 — estado
+- **Parte 1, núcleo: hecha** (commit `9265068`, 1093 tests).
+  - `bot/skills.py` (`Skill`, `SkillScheduler`).
+  - Lanzamiento en `bot/bot.py`, solo en momentos seguros (BUSCAR, EXPLORAR entre tramos, ATACAR confirmado y con `attack_settle_s` desde el último clic, con re-clic después).
+  - Config `skill_timing` (`mount_wait_s` 1.5 estimado, `press_hold_s` 0.1, `recast_margin_s` 0, `attack_settle_s` 3, `chunk_s` 0.5).
+  - `GameInput.press_key`, y `skills_cast` + `skills` en `@@STATUS`.
+  - Baselines `tests/data/baseline_events_*.json` (se regeneran con `tests/baseline_scenarios.py`): con la lista vacía o deshabilitada, la secuencia es idéntica.
+- **Parte 2, tabla editable en la interfaz: en curso.**
+
 ## Fase 11 — plan (pedido por Enzo, 2026-11-19): habilidades con temporizador
 - **Lista:** `character.skills` del perfil de personaje (Fase 9). Cada habilidad tiene `name`, `key`, `duration_s`, `requires_dismount`, `animation_s` y `enabled`. **Con la lista vacía el bot se comporta exactamente igual que antes**: un test compara la secuencia de input contra una grabada antes del cambio.
 - **`bot/skills.py`:** `SkillScheduler`. Al iniciar la sesión, todas las habilidades activas quedan vencidas, así se lanzan enseguida. Al lanzar una, su próximo vencimiento queda en `duration_s` (con un margen configurable).
