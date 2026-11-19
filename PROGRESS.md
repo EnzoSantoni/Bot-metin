@@ -135,6 +135,13 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
 
+## Fase 12 (parte 1) — plan: prioridad entre tipos de metin (pedido por Enzo, 2026-11-19)
+- **Config:** `zone.metin_priority` del perfil de zona (ya existe desde la Fase 9, vacía por defecto). Es una lista de nombres en orden: el primero tiene más prioridad. Los objetivos que no están en la lista van después, todos con la misma prioridad. Se compara por slug, como `is_target_name`.
+- **Elección en BUSCAR:** entre los objetivos válidos, gana el de mayor prioridad y, a igual prioridad, el más cercano. **Con la lista vacía, el comportamiento es idéntico al actual**: se verifica con los baselines de `tests/data/baseline_events_*.json`. Si la prioridad cambió la elección, se loguea ("elegido X por prioridad; más cerca había Y").
+- **Interfaz:** editor de la prioridad de la zona elegida, con los `target_metin_names` de esa zona ordenables con ↑ y ↓, un interruptor "Elegir por prioridad" (apagado = lista vacía) y Guardar en el perfil de zona, con `.bak`.
+- **Validación:** lista de strings no vacíos, sin repetidos. Aviso si un nombre no está en `target_metin_names` (se ignora).
+- **Queda para después:** el historial de sesiones y el conteo de objetos por tipo.
+
 ## Fase 11 — estado
 - **Parte 1, núcleo: hecha** (commit `9265068`, 1093 tests).
   - `bot/skills.py` (`Skill`, `SkillScheduler`).
