@@ -64,6 +64,19 @@ Campos principales:
 | `safety` | Pánico (F12), pausa (F11), esquina de pánico y cuenta regresiva. |
 | `debug.enabled` | Guarda capturas anotadas de cada decisión en `debug/run_<fecha>/`. |
 
+### Calibración
+
+`calibrate.py` ayuda a medir y guardar valores en `config.json`. **Es pasivo: nunca manda teclas ni clics al juego.** Solo lee la pantalla y escucha las hotkeys **F8 / F9 / F10** (para que marques momentos mientras jugás); **F12** o Ctrl+C cancelan sin guardar. Los subcomandos que escriben muestran el cambio (antes → después), piden `s/n` (o usá `--si`), copian `config.json.bak` y validan antes de guardar. Todos aceptan `--config ruta`.
+
+| Cuándo | Comando |
+|---|---|
+| Elegir la ventana del juego y medir su cliente (`window_title`, `expected_client_size`) | `.venv\Scripts\python.exe calibrate.py ventana [--filtro texto]` |
+| Definir la zona de farmeo: caminá a cada esquina y apretá F9 (F8 borra el último, F10 termina); guarda `debug\calibrate_zona.png` | `.venv\Scripts\python.exe calibrate.py zona [--tolerancia N]` |
+| Medir la velocidad a caballo y proponer `coords_filter.max_speed` (F9 y cabalgá en línea recta) | `.venv\Scripts\python.exe calibrate.py velocidad [--segundos 10]` |
+| Agregar un tipo de metin: mouse cerca de la etiqueta + F9 (un segundo F9 con el metin seleccionado guarda el nombre del panel) | `.venv\Scripts\python.exe calibrate.py metin "Metin de Oscuridad"` |
+| Revisar a ojo las zonas excluidas, ventanas y coordenadas: `debug\calibrate_zonas.png` (no modifica nada) | `.venv\Scripts\python.exe calibrate.py zonas` |
+| Ver qué valores siguen siendo estimaciones y cómo medirlos | `.venv\Scripts\python.exe calibrate.py resumen` |
+
 ## Puesta en marcha (en este orden)
 
 Todo con `.venv\Scripts\python.exe` desde la carpeta del proyecto y el juego abierto:

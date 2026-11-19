@@ -3,7 +3,17 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-19)
-**Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6, y después viene la Fase 7.
+**Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
+- **GitHub (2026-11-19):** el proyecto está en https://github.com/EnzoSantoni/Bot-metin, rama `main`, con el primer commit `21724e4` (pusheado y verificado).
+  - Autor: el que tenía configurado git en la PC de Enzo.
+  - Excluidos por `.gitignore`: `.venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `logs/`, `debug/`, `config.json`, `.claude/settings.local.json` y **`samples/`**, este último pendiente de la decisión de Enzo (ver "A probar por Enzo → GitHub").
+  - README con la instalación y cómo crear `config.json`.
+- **Fase 7 completa en código** (sin tocar la Fase 6; 933 tests pasan):
+  - `calibrate.py` (lógica en `bot/calibration.py`), pasivo: nunca manda input.
+  - El modo debug quedó hecho en la Fase 6b.
+  - `README.md`: instalación, `config.json`, puesta en marcha, uso, debug, tests, problemas comunes y la sección "Calibración".
+  - **Sin commitear todavía**: `calibrate.py`, `bot/calibration.py`, `tests/test_calibration.py`, `README.md` y `PROGRESS.md` están modificados localmente, después del commit `21724e4`.
+  - Falta la prueba de Enzo de `calibrate.py` (ver "A probar por Enzo → Fase 7").
 - Fases 0–5 completas y probadas por Enzo. Quedan para más adelante: B con el juego minimizado, muerte, alarma y lo pendiente de la Fase 3.
 - Fase 6: primera prueba de 3 min. Atacó y recogió bien el primer metin, pero buscar, explorar, destrabar y respetar la zona funcionaron mal. Eso dio origen a la Fase 6b, con las reglas A–E de Enzo (ver "Resultado de Enzo" en "A probar por Enzo → Fase 6").
 - La sesión del 2026-11-19 se cortó dos veces por el límite de uso, pero no quedó trabajo a medio hacer.
@@ -53,7 +63,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - [x] 4. Objetos vs yang, captcha (solo detección) y muerte, más la alarma. *Falta la prueba de Enzo en el juego.*
 - [x] 5. Input (interfaz + pydirectinput), `test_input.py`, pánico (F12 / esquina) y pausa (F11). Probada por Enzo.
 - [x] 6. Máquina de estados, zona de farmeo y destrabe. *Falta la prueba de Enzo en el juego.*
-- [ ] 7. `calibrate.py`, modo debug y README.
+- [x] 7. `calibrate.py`, modo debug y README. *Falta la prueba de Enzo de `calibrate.py` en el juego.*
 - [ ] 8. Opcional: buff F1 y auto-revivir.
 
 ## Fase 1 — qué quedó
@@ -376,6 +386,25 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - Datos nuevos del juego: en el mapa también hay **"Metin Negro"** (a ignorar), y a veces están abiertos el **inventario** y el **"Mapa grande"**: el bot tiene que ignorarlos en la detección y no clickear encima.
 
 ## A probar por Enzo
+### GitHub: decidir qué hacer con `samples/`
+El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.
+- **Para subirlas**, desde `D:\proyectos\metin-bot`:
+  1. Borrar la línea `samples/` (y sus dos comentarios) del final de `.gitignore`.
+  2. `git add .gitignore samples`
+  3. `git commit -m "Agregar capturas de samples para los tests"`
+  4. `git push`
+- **Para dejarlas afuera:** no hacer nada. Opcional: cambiar el comentario de `.gitignore` por "capturas privadas, no se suben".
+- Si en algún momento `git push` pide iniciar sesión, se abre la ventana de GitHub en el navegador: iniciá sesión y el push sigue solo.
+
+### Fase 7: `calibrate.py` (después de la prueba de la Fase 6b)
+Desde una terminal en `D:\proyectos\metin-bot`, con el juego abierto. **`calibrate.py` no manda teclas ni clics.** Solo escucha F8, F9 y F10 para que marques momentos mientras jugás, y F12 o Ctrl+C cancelan sin guardar. Esas teclas no se le ocultan al juego: fijate que no hagan nada raro en él. Antes de guardar, todo muestra el antes → después, pregunta `s/n` y hace una copia `config.json.bak`.
+1. `.venv\Scripts\python.exe calibrate.py resumen`: lista los valores que siguen siendo estimaciones y cómo medir cada uno.
+2. `.venv\Scripts\python.exe calibrate.py zonas`: abrí `debug\calibrate_zonas.png` y fijate que las zonas grises cubran la interfaz (chat, minimapa, etc.) y que las coordenadas y el panel se lean bien.
+3. `.venv\Scripts\python.exe calibrate.py velocidad`: pasá al juego, apretá F9 y cabalgá en línea recta unos 10 s. Propone `coords_filter.max_speed`. Confirmá con `s` si el número parece razonable.
+4. (Solo si querés rehacer la zona) `.venv\Scripts\python.exe calibrate.py zona`: caminá a cada esquina y apretá F9 (F8 borra el último vértice, F10 termina). Mirá `debug\calibrate_zona.png` antes de confirmar.
+5. (Solo para un tipo de metin nuevo) `.venv\Scripts\python.exe calibrate.py metin "Nombre del metin"`: con el nombre naranja visible, poné el mouse encima y apretá F9. Después, con el metin seleccionado, otro F9 para la plantilla del panel.
+6. Contame si F8, F9 o F10 hicieron algo en el juego y si alguna lectura salió mal.
+
 ### Fase 6b: segunda prueba del bot (con modo debug)
 Desde una terminal en `D:\proyectos\metin-bot` (como administrador si el juego corre como administrador). La mano cerca de **F12**, y no gires la cámara con el mouse mientras corre.
 1. Parate adentro de la zona, mejor lejos del borde y sin nada seleccionado: `.venv\Scripts\python.exe run_bot.py --max-minutos 10`. La consola avisa que el modo debug está activo.
