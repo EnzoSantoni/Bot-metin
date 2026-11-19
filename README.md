@@ -128,13 +128,26 @@ Todo con `.venv\Scripts\python.exe` desde la carpeta del proyecto y el juego abi
 .venv\Scripts\python.exe run_bot.py
 ```
 
-Opciones: `--max-minutos N` (termina solo a los N minutos), `--observar` (sin input), `--config ruta`, `--servidor`/`--personaje`/`--zona` (perfiles, ver más abajo).
+Opciones: `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida), `--ui` (protocolo para la interfaz), `--max-minutos N` (termina solo a los N minutos), `--observar` (sin input), `--config ruta`, `--servidor`/`--personaje`/`--zona` (perfiles, ver más abajo).
 
 - Cuenta regresiva de 5 s antes de arrancar.
 - **F12** o llevar el mouse a la **esquina superior izquierda** de la pantalla: detiene el bot al instante y suelta todas las teclas.
 - **F11**: pausa / reanuda.
 - No gires la cámara con el mouse mientras corre (el bot lo detecta y corrige, pero conviene no hacerlo).
 - Al terminar imprime un resumen (metin rotos, objetos, tiempo por estado, motivo de fin). El detalle queda en `logs\bot.log`.
+
+## Interfaz
+
+Doble clic en `abrir_interfaz.bat` (o en `abrir_interfaz_admin.bat` si el juego corre como administrador: pide permisos). Abre `gui.py` con el `pythonw.exe` del `.venv` (sin consola); si no hay `.venv` local busca `..\metin-bot\.venv`.
+
+- **Perfiles:** listas de servidor, personaje y zona. Debajo, en naranja, los avisos de "config.json pisa X del perfil Y".
+- **Opciones:** tiempo máximo en minutos (0 = sin límite), **Debug** (solo para esa corrida, no toca `config.json`), **Observar (sin input)** y **Siempre encima**.
+- **Iniciar / Pausar-Reanudar / Detener:** se habilitan según el estado. Detener manda la orden de parada (igual que F12); si el bot no termina en ~5 s se lo cierra a la fuerza.
+- **Estadísticas en vivo:** estado, metin rotos, objetos, captchas, destrabes, tiempo, cuenta regresiva y motivo de fin. Con el bot en pausa aparece "PAUSADO" en rojo.
+- **Log:** últimas 200 líneas (WARNING en naranja, ERROR en rojo). Si el bot no arranca (juego no encontrado, falta de admin, plantillas), muestra el error y un aviso.
+- La ventana no se minimiza (para dejarla en el segundo monitor) y recuerda posición y tamaño.
+- El bot corre como subproceso (`run_bot.py --ui`): la ventana no se congela y **F12, la esquina del mouse y F11 siguen funcionando igual**. Si cerrás la ventana con el bot corriendo, pide confirmación y lo detiene.
+- Las últimas opciones se guardan en `ui_settings.json` (no se sube al repo).
 
 ## Modo debug
 

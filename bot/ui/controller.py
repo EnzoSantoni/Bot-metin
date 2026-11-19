@@ -1,0 +1,346 @@
+"""Logica pura de la interfaz (sin tkinter): linea de comando, protocolo con run_bot.py --ui, estado de los botones,
+ajustes guardados y manejo del subproceso. Testeable sin pantalla."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import queue
+import re
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from bot.config import PROJECT_ROOT, ConfigError
+from bot.profiles import KINDS, build_config, list_profiles
+
+logger = logging.getLogger(__name__)
+
+STATUS_TAG = "@@STATUS "
+END_TAG = "@@END "
+CMD_PAUSE = "pause"
+CMD_STOP = "stop"
+STOP_GRACE_S = 5.0                    # tras `stop`, cuanto se espera antes de terminar el proceso a la fuerza
+SETTINGS_FILE = PROJECT_ROOT / "ui_settings.json"
+RUN_BOT = PROJECT_ROOT / "run_bot.py"
+_LOG_RE = re.compile(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]")
+_GEOMETRY_RE = re.compile(r"\d+x\d+[+-]-?\d+[+-]-?\d+")
+
+
+# ----------------------------------------------------------------------------- opciones
+
+@dataclass
+class UiOptions:
+    """Opciones elegidas en la ventana (se guardan en ui_settings.json)."""
+    servidor: str = ""
+    personaje: str = ""
+    zona: str = ""
+    max_minutes: float = 0.0          # 0 = sin limite
+    debug: bool = False
+    observar: bool = False
+    always_on_top: bool = False
+    geometry: str = ""                # "ANCHOxALTO+X+Y" de tkinter
+
+
+def validate_options(opts: UiOptions) -> list[str]:
+    """Lista de errores (vacia si esta todo bien)."""
+    errors = []
+    mm = opts.max_minutes
+    if not isinstance(mm, (int, float)) or isinstance(mm, bool) or mm != mm or mm < 0 or mm == float("inf"):
+        errors.append("El tiempo maximo tiene que ser 0 (sin limite) o mayor que 0.")
+    for k in KINDS:
+        if not getattr(opts, k):
+            errors.append(f"Falta elegir el perfil de {k}.")
+    return errors
+
+
+def parse_minutes(text: str) -> float:
+    """Texto del campo de minutos -> float >= 0. ValueError si no es un numero valido."""
+    try:
+        v = float(str(text).strip().replace(",", "."))
+    except ValueError as e:
+        raise ValueError("El tiempo maximo tiene que ser un numero (0 = sin limite).") from e
+    if v != v or v < 0 or v == float("inf"):
+        raise ValueError("El tiempo maximo tiene que ser 0 (sin limite) o mayor que 0.")
+    return v
+
+
+def gui_python(executable: str | None = None) -> str:
+    """Interprete para el subproceso: si la GUI corre con pythonw.exe (sin stdout), usa el python.exe vecino."""
+    exe = executable or sys.executable
+    p = Path(exe)
+    if p.name.lower() == "pythonw.exe" and p.with_name("python.exe").exists():
+        return str(p.with_name("python.exe"))
+    return exe
+
+
+def build_command(opts: UiOptions, *, python: str | None = None, script: str | Path = RUN_BOT,
+                  config: str | None = None) -> list[str]:
+    """Linea de comando de `run_bot.py --ui` segun las opciones (debug se manda siempre, explicito)."""
+    cmd = [python or gui_python(), "-u", str(script), "--ui"]
+    if config:
+        cmd += ["--config", config]
+    for k in KINDS:
+        v = getattr(opts, k)
+        if v:
+            cmd += [f"--{k}", v]
+    if opts.max_minutes and opts.max_minutes > 0:
+        cmd += ["--max-minutos", f"{opts.max_minutes:g}"]
+    cmd.append("--debug" if opts.debug else "--sin-debug")
+    if opts.observar:
+        cmd.append("--observar")
+    return cmd
+
+
+# ----------------------------------------------------------------------------- protocolo
+
+@dataclass
+class Status:
+    """Estado en vivo informado por el bot."""
+    state: str = ""
+    phase: str = "running"            # countdown | running | ended
+    countdown: int = 0
+    metins: int = 0
+    items: int = 0
+    captchas: int = 0
+    unstucks: int = 0
+    elapsed_s: float = 0.0
+    paused: bool = False
+    profiles: dict = field(default_factory=dict)
+
+
+@dataclass
+class ParsedLine:
+    kind: str                         # status | end | log
+    text: str = ""
+    level: str = "INFO"
+    status: Status | None = None
+    end: dict | None = None
+
+
+def _as_int(v: Any) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def status_from_dict(d: dict) -> Status:
+    prof = d.get("profiles")
+    return Status(state=str(d.get("state", "")), phase=str(d.get("phase", "running")), countdown=_as_int(d.get("countdown")),
+                  metins=_as_int(d.get("metins")), items=_as_int(d.get("items")), captchas=_as_int(d.get("captchas")),
+                  unstucks=_as_int(d.get("unstucks")), elapsed_s=_as_float(d.get("elapsed_s")),
+                  paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {})
+
+
+def log_level(text: str) -> str:
+    """Nivel de una linea de log (formato bot.log) o INFO si no lo trae. Los errores de arranque cuentan como ERROR."""
+    m = _LOG_RE.search(text)
+    if m:
+        return m.group(1)
+    if text.startswith(("Traceback", "  File ", "Falta una plantilla", "Config invalida", "No se encontro")):
+        return "ERROR"
+    return "INFO"
+
+
+def parse_line(line: str) -> ParsedLine:
+    """Clasifica una linea del subproceso. Nunca lanza: una linea @@ mal formada se trata como log."""
+    text = line.rstrip("\r\n")
+    for tag, kind in ((STATUS_TAG, "status"), (END_TAG, "end")):
+        if text.startswith(tag):
+            try:
+                d = json.loads(text[len(tag):])
+                if not isinstance(d, dict):
+                    raise ValueError("no es un objeto")
+            except ValueError:
+                return ParsedLine("log", text, "WARNING")
+            return ParsedLine("status", text, status=status_from_dict(d)) if kind == "status" \
+                else ParsedLine("end", text, end=d)
+    return ParsedLine("log", text, log_level(text))
+
+
+def format_elapsed(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+# ----------------------------------------------------------------------------- botones
+
+STOPPED, RUNNING, STOPPING = "detenido", "corriendo", "terminando"
+
+
+@dataclass(frozen=True)
+class Buttons:
+    start: bool
+    pause: bool
+    stop: bool
+    pause_label: str
+    options: bool                     # se pueden tocar perfiles y opciones
+
+
+def button_state(phase: str, paused: bool = False) -> Buttons:
+    """Que botones estan habilitados segun el estado del proceso."""
+    if phase == RUNNING:
+        return Buttons(False, True, True, "Reanudar" if paused else "Pausar", False)
+    if phase == STOPPING:
+        return Buttons(False, False, False, "Pausar", False)
+    return Buttons(True, False, False, "Pausar", True)
+
+
+# ----------------------------------------------------------------------------- ajustes guardados
+
+def available_profiles(root: str | Path | None = None) -> dict[str, list[str]]:
+    return {k: list_profiles(k, root) for k in KINDS}
+
+
+def load_settings(path: str | Path = SETTINGS_FILE, profiles: dict[str, list[str]] | None = None) -> UiOptions:
+    """Lee ui_settings.json. Archivo roto/ausente -> valores por defecto; perfil inexistente -> el primero disponible."""
+    data: dict = {}
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        if isinstance(raw, dict):
+            data = raw
+    except (OSError, ValueError):
+        pass
+    opts = UiOptions()
+    for k in KINDS:
+        v = data.get(k)
+        setattr(opts, k, v if isinstance(v, str) else "")
+    mm = data.get("max_minutes")
+    if isinstance(mm, (int, float)) and not isinstance(mm, bool) and 0 <= mm < float("inf"):
+        opts.max_minutes = float(mm)
+    for k in ("debug", "observar", "always_on_top"):
+        if isinstance(data.get(k), bool):
+            setattr(opts, k, data[k])
+    if isinstance(data.get("geometry"), str) and _GEOMETRY_RE.fullmatch(data["geometry"]):
+        opts.geometry = data["geometry"]
+    if profiles is not None:
+        for k in KINDS:
+            avail = profiles.get(k) or []
+            if getattr(opts, k) not in avail:
+                setattr(opts, k, avail[0] if avail else "")
+    return opts
+
+
+def save_settings(opts: UiOptions, path: str | Path = SETTINGS_FILE) -> bool:
+    """Guarda las opciones. False (y log) si no se pudo escribir; nunca lanza."""
+    try:
+        Path(path).write_text(json.dumps(asdict(opts), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        logger.exception("No se pudo guardar %s", path)
+        return False
+
+
+def override_warnings(opts: UiOptions, config_path: str | Path = "config.json",
+                      profiles_root_dir: str | Path | None = None) -> list[str]:
+    """Avisos de 'config.json pisa X del perfil Y' para la seleccion actual (o el error de config, si lo hay)."""
+    try:
+        cfg = build_config(config_path, opts.servidor or None, opts.personaje or None, opts.zona or None,
+                           profiles_root_dir=profiles_root_dir, warn=False)
+    except ConfigError as e:
+        return [f"Config invalida: {e}"]
+    except Exception as e:  # noqa: BLE001 - la ventana no debe romperse por esto
+        return [f"No se pudo leer la config: {e}"]
+    return [o["message"] for o in (cfg.get("_profiles") or {}).get("overrides", [])]
+
+
+# ----------------------------------------------------------------------------- subproceso
+
+class BotProcess:
+    """Subproceso del bot: un hilo lee stdout y deja las lineas en una cola; `send` escribe comandos por stdin."""
+
+    def __init__(self) -> None:
+        self.lines: "queue.Queue[str | None]" = queue.Queue()   # None = el proceso cerro stdout (fin)
+        self.proc: subprocess.Popen | None = None
+        self._reader: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    @property
+    def returncode(self) -> int | None:
+        return None if self.proc is None else self.proc.poll()
+
+    def start(self, cmd: list[str], cwd: str | Path = PROJECT_ROOT) -> None:
+        if self.running:
+            raise RuntimeError("el bot ya esta corriendo")
+        self.lines = queue.Queue()
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        self.proc = subprocess.Popen(cmd, cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                     bufsize=1, env=env, creationflags=flags)
+        self._reader = threading.Thread(target=self._read, args=(self.proc, self.lines), name="bot-reader", daemon=True)
+        self._reader.start()
+
+    @staticmethod
+    def _read(proc: subprocess.Popen, q: "queue.Queue[str | None]") -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                q.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            q.put(None)
+
+    def send(self, command: str) -> bool:
+        """Manda un comando (`pause` / `stop`). False si el proceso ya no lo recibe."""
+        if not self.running or self.proc is None or self.proc.stdin is None:
+            return False
+        try:
+            self.proc.stdin.write(command + "\n")
+            self.proc.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def stop(self, grace_s: float = STOP_GRACE_S) -> bool:
+        """`stop` y espera; si no termina en `grace_s`, lo mata. True si termino solo."""
+        if self.proc is None:
+            return True
+        self.send(CMD_STOP)
+        try:
+            self.proc.wait(timeout=grace_s)
+            return True
+        except subprocess.TimeoutExpired:
+            self.kill()
+            return False
+
+    def kill(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.kill()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def drain(self, limit: int = 500) -> list[str | None]:
+        """Lineas pendientes (sin bloquear). None marca el fin del flujo."""
+        out: list[str | None] = []
+        while len(out) < limit:
+            try:
+                out.append(self.lines.get_nowait())
+            except queue.Empty:
+                break
+        return out
+
+    def wait_closed(self, timeout: float = 5.0) -> None:
+        """Espera a que el proceso termine (tests y cierre)."""
+        if self.proc is not None:
+            t0 = time.monotonic()
+            while self.proc.poll() is None and time.monotonic() - t0 < timeout:
+                time.sleep(0.02)

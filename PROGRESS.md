@@ -3,6 +3,9 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-19)
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles) y 10 (interfaz) hechas, con 1065 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Próximas: 11–14. `main` no se tocó.
+
+**Rama `main`** (carpeta `D:\proyectos\metin-bot`):
 **Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
 - **GitHub (2026-11-19):** el proyecto está en https://github.com/EnzoSantoni/Bot-metin, rama `main`, con el primer commit `21724e4` (pusheado y verificado).
   - Autor: el que tenía configurado git en la PC de Enzo.
@@ -75,7 +78,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - [x] 7. `calibrate.py`, modo debug y README. *Falta la prueba de Enzo de `calibrate.py` en el juego.*
 - [ ] 8. Opcional: buff F1 y auto-revivir. *(Quedan absorbidas por la 11 (habilidades con temporizador) y la 14 (revivir automáticamente).)*
 - [x] 9. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* **Perfiles:** separar la configuración en perfil de servidor, de personaje y de mapa/zona, compatible con el `config.json` actual. Por defecto: servidor "Guabina", personaje "Farfarfa" y la zona actual, para que todo siga igual. Reorganiza la configuración, no la lógica del bot.
-- [ ] 10. **Interfaz base** (tkinter, pensada para el segundo monitor y sin minimizarse):
+- [x] 10. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* **Interfaz base** (tkinter, pensada para el segundo monitor y sin minimizarse):
   - Elegir perfiles; iniciar, pausar y detener; tiempo máximo; interruptor de debug.
   - Estadísticas en vivo: estado, metin rotos, objetos, captchas, destrabes y tiempo.
   - Las últimas líneas del log.
@@ -131,6 +134,25 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Precedencia, validación por tipo, perfil faltante, selección por CLI, migración ida y vuelta (migrar y reconstruir da lo mismo) y que `calibrate` guarde en el perfil correcto.
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
+
+## Fase 10 — qué quedó (rama `desarrollo`)
+- **Arquitectura:** la interfaz (`gui.py` → `bot/ui/app.py`, tkinter) lanza el bot como **subproceso** (`run_bot.py --ui`). La ventana nunca se congela, y el corte forzado del bot (`os._exit`) no la cierra. F11, F12 y la esquina del mouse siguen funcionando igual, porque viven en el proceso del bot.
+- **Protocolo:**
+  - El bot emite `@@STATUS {json}` cada 0,5 s (estado, fase, metin, objetos, captchas, destrabes, tiempo, pausado y perfiles) y `@@END {json}` al terminar.
+  - Por stdin acepta `pause` (= F11) y `stop` (= F12, `panic("interfaz")`). Si stdin se cierra, se detiene.
+  - Lo implementa `UiBridge` en `run_bot.py`.
+- **Flags nuevos de `run_bot.py`:** `--ui`, `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida) y `--sin-cuenta-regresiva`. Sin esos flags, `run_bot.py` funciona igual que antes.
+- **`bot/ui/controller.py`** (lógica pura): línea de comando, parseo del protocolo, estado de los botones, `ui_settings.json` (últimas opciones, posición y tamaño; ignorado por git) y avisos de pisado de perfiles.
+- **Ventana:**
+  - Perfiles con los avisos de pisado; tiempo máximo (0 = sin límite); Debug, Observar y Siempre encima.
+  - Iniciar, Pausar/Reanudar y Detener. Si el bot no termina en ~5 s, Detener lo cierra a la fuerza.
+  - Estadísticas en vivo, "PAUSADO" en rojo, cuenta regresiva y motivo de fin.
+  - Log de 200 líneas con colores.
+  - **No se minimiza:** se quita el botón de minimizar (`WS_MINIMIZEBOX` por ctypes) y, además, vuelve sola si algo la minimiza (Win+D, Win+M).
+  - Al cerrarla con el bot corriendo, pide confirmación y lo detiene.
+- **Lanzadores:** `abrir_interfaz.bat` (`pythonw` del `.venv` local, o del de `..\metin-bot` en el worktree) y `abrir_interfaz_admin.bat` (pide permisos de administrador, con la ruta completa a `gui.py`).
+- Tests: 1065 pasan (52 nuevos), con un bot falso (`tests/fake_ui_bot.py`). Nunca se lanzó el bot real ni la interfaz interactiva.
+- Nota: durante el desarrollo quedaron procesos `python.exe` colgados del agente (comandos mal armados que esperaban stdin). La sesión principal los revisó, detuvo el agente y los cerró (2026-11-19 ~17:15). No quedó ninguno.
 
 ## Fase 9 — qué quedó (rama `desarrollo`)
 - **`bot/profiles.py`:**
@@ -481,6 +503,18 @@ Se prueba desde la carpeta **`D:\proyectos\metin-bot-desarrollo`**, con el Pytho
    - que haya copias `.bak`;
    - que `perfiles listar` ya no muestre avisos.
 4. (Opcional, en el juego) `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py personaje "Prueba"`: con un objeto tuyo en el piso, poné el mouse sobre el "Farfarfa's" amarillo y apretá F9. Mirá el recorte en `debug\` y cancelá con F12 (o guardalo y después borrá `profiles\personajes\Prueba.json`).
+
+### Rama `desarrollo`: Fase 10, interfaz
+En `D:\proyectos\metin-bot-desarrollo`:
+1. **Abrir:** doble clic en `abrir_interfaz.bat`. Usa el venv de `..\metin-bot` porque el worktree no tiene uno propio. Si el juego corre como administrador, usá `abrir_interfaz_admin.bat`: tiene que aparecer el aviso de permisos de Windows y abrirse la ventana.
+2. Mové la ventana al segundo monitor, cerrala y volvé a abrirla: tiene que aparecer en el mismo lugar y con el mismo tamaño.
+3. **No se minimiza:** probá Win+D y Win+M. La ventana no tiene que desaparecer, o tiene que volver sola.
+4. **Sin el juego abierto:** Iniciar → tiene que mostrar en el log el error "no se encuentra la ventana" y un aviso, sin colgarse.
+5. **Con el juego abierto, en modo Observar:** Iniciar → cuenta regresiva, estados y tiempo en vivo, log. Probá Pausar/Reanudar ("PAUSADO" en rojo) y Detener.
+6. **F11 y F12 desde el juego** con la interfaz abierta: F11 pausa (lo muestra la interfaz) y F12 corta. Probá también la esquina del mouse.
+7. Cerrá la ventana con el bot corriendo: tiene que pedir confirmación y detenerlo.
+8. Interruptor **Debug** encendido y una corrida corta: tiene que crearse la carpeta `debug\run_*`. Apagado, no se crea, aunque `config.json` tenga `debug.enabled: true`.
+9. Cambiá la zona en la lista: si `config.json` todavía pisa `farm_zone`, tiene que aparecer el aviso en naranja.
 
 ### GitHub: decidir qué hacer con `samples/`
 El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.

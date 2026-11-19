@@ -8,8 +8,10 @@ La muerte y "no puede volver a la zona" terminan la corrida y dejan la alarma so
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -21,8 +23,11 @@ from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
 from bot.input.game_input import GameInput, InputBlockedError
 from bot.profiles import build_config
+from bot.ui.controller import CMD_PAUSE, CMD_STOP, END_TAG, STATUS_TAG
 
 logger = logging.getLogger("run_bot")
+
+UI_STATUS_PERIOD_S = 0.5   # en --ui, cada cuanto se emite la linea @@STATUS
 
 ALARM_POLL_S = 0.2   # tras la muerte, cada cuanto se mira si la alarma sigue o se pidio parar
 OBSERVE_POLL_S = 0.25   # en --observar, cada cuanto se mira si el juego esta al frente
@@ -138,8 +143,77 @@ def _wait_alarm(control: BotControl, alarm: Any, reason: str) -> None:
         control.sleep(ALARM_POLL_S)
 
 
+class UiBridge:
+    """Protocolo con la interfaz (--ui): emite @@STATUS cada ~0.5 s y @@END al terminar, y lee `pause` / `stop` por stdin.
+    Solo lee `bot.state` / `bot.stats`. Si stdin se cierra (la interfaz murio), detiene el bot como `stop`."""
+
+    def __init__(self, bot: Any, control: BotControl, cfg: dict, stdin: Any, out: Any = None,
+                 period_s: float = UI_STATUS_PERIOD_S) -> None:
+        self.bot, self.control, self.cfg, self._stdin = bot, control, cfg, stdin
+        self._out = out if out is not None else sys.stdout
+        self._period = period_s
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self._end_sent = False
+        self.phase = "countdown"
+        self.countdown = 0
+
+    def emit(self, tag: str, payload: dict) -> None:
+        line = tag + json.dumps(payload, ensure_ascii=False) + "\n"
+        with self._lock:
+            try:
+                self._out.write(line)
+                self._out.flush()
+            except (OSError, ValueError):
+                pass
+
+    def status(self) -> dict:
+        st, state = self.bot.stats, self.bot.state
+        prof = self.cfg.get("_profiles") or {}
+        return {"state": getattr(state, "value", str(state)), "phase": self.phase, "countdown": self.countdown,
+                "metins": st.metins, "items": st.items, "captchas": st.captchas, "unstucks": st.unstucks,
+                "elapsed_s": round(st.elapsed_s, 1), "paused": self.control.is_paused,
+                "profiles": {k: prof.get(k) for k in ("servidor", "personaje", "zona")}}
+
+    def start(self) -> None:
+        threading.Thread(target=self._status_loop, name="ui-status", daemon=True).start()
+        threading.Thread(target=self._stdin_loop, name="ui-stdin", daemon=True).start()
+
+    def _status_loop(self) -> None:
+        while not self._done.is_set():
+            self.emit(STATUS_TAG, self.status())
+            self._done.wait(self._period)
+
+    def _stdin_loop(self) -> None:
+        try:
+            for line in self._stdin:
+                cmd = line.strip().lower()
+                if cmd == CMD_PAUSE:
+                    self.control.toggle_pause()
+                elif cmd == CMD_STOP:
+                    self.control.panic("interfaz")
+        except (OSError, ValueError):
+            pass
+        if not self._done.is_set():   # stdin cerrado sin que el bot haya terminado: la interfaz murio
+            self.control.panic("interfaz cerrada")
+
+    def set_countdown(self, n: int) -> None:
+        self.phase, self.countdown = ("countdown", n) if n > 0 else ("running", 0)
+
+    def end(self, reason: str, summary: str) -> None:
+        """Emite @@END una sola vez y deja de emitir @@STATUS."""
+        if self._end_sent:
+            return
+        self._end_sent = True
+        self.phase = "ended"
+        self._done.set()
+        self.emit(END_TAG, {"reason": reason, "summary": summary, **{k: v for k, v in self.status().items()
+                                                                       if k in ("metins", "items", "captchas", "unstucks", "elapsed_s")}})
+
+
 def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any = None, backend: Any = None,
-         control: BotControl | None = None, alarm: Any = None, bot_kwargs: dict | None = None) -> int:
+         control: BotControl | None = None, alarm: Any = None, bot_kwargs: dict | None = None,
+         stdin: Any = None) -> int:
     """Devuelve el codigo de salida. Los argumentos con nombre permiten inyectar dependencias (tests)."""
     ap = argparse.ArgumentParser(description="Bot de farmeo (F12/esquina cortan, F11 pausa).")
     ap.add_argument("--observar", action="store_true", help="percibe y decide sin mandar input (loguea lo que haria)")
@@ -148,6 +222,11 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     ap.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
     ap.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
     ap.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Guabina - Oscuridad y Negro)")
+    dbg = ap.add_mutually_exclusive_group()
+    dbg.add_argument("--debug", dest="debug", action="store_true", default=None, help="activa debug.enabled solo en esta corrida")
+    dbg.add_argument("--sin-debug", dest="debug", action="store_false", help="desactiva debug.enabled solo en esta corrida")
+    ap.add_argument("--sin-cuenta-regresiva", action="store_true", help="omite la cuenta regresiva inicial (no recomendado)")
+    ap.add_argument("--ui", action="store_true", help="modo interfaz: emite @@STATUS/@@END por stdout y lee pause/stop por stdin")
     args = ap.parse_args(argv)
 
     if cfg is None:
@@ -159,6 +238,8 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
         from bot.log import setup_logging
         setup_logging(cfg)
         log_profiles(cfg)
+    if args.debug is not None:
+        cfg["debug"]["enabled"] = args.debug   # solo esta corrida: config.json no se toca
     try:
         verify_templates(cfg)
     except FileNotFoundError as e:
@@ -197,6 +278,10 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     control.add_stop_callback(alarm.stop)
     control.start()
     died = False
+    ui = UiBridge(bot, control, cfg, stdin if stdin is not None else sys.stdin) if args.ui else None
+    end_reason = "error"
+    if ui is not None:
+        ui.start()
     try:
         print("MODO OBSERVAR: no se manda nada, solo se loguea lo que el bot haria." if args.observar
               else "El bot va a mandar teclas y clics REALES al juego.")
@@ -205,9 +290,19 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
                   f"hasta {cfg['debug']['max_images']} imagenes).")
         print(f"F12 o el mouse en la esquina superior izquierda cortan; F11 pausa/reanuda. "
               f"{'Tope: %g min. ' % args.max_minutos if args.max_minutos else ''}El bot no resuelve el captcha: suena la alarma.")
-        control.countdown(on_tick=lambda n: print(f"Arrancando en {n}..."))
+        if not args.sin_cuenta_regresiva:
+            def _tick(n: int) -> None:
+                print(f"Arrancando en {n}...")
+                if ui is not None:
+                    ui.set_countdown(n)
+            control.countdown(on_tick=_tick)
+        if ui is not None:
+            ui.set_countdown(0)
         stats = bot.run(max_minutes=args.max_minutos)
         print("\n" + stats.summary())
+        end_reason = stats.end_reason or "fin"
+        if ui is not None:
+            ui.end(end_reason, stats.summary())
         died = stats.end_reason in ALARM_END_REASONS
         if died:
             _wait_alarm(control, alarm, stats.end_reason)
@@ -215,8 +310,11 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     except PanicStop:
         print(f"\nCortado por pánico ({cfg['safety']['panic_key'].upper()} o esquina)")
         print(bot.stats.summary())
+        end_reason = "panico"
         return 0
     finally:
+        if ui is not None:
+            ui.end(end_reason, bot.stats.summary())
         control.mark_finished()
         gi.release_all()
         if not died:

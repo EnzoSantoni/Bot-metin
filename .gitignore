@@ -20,3 +20,6 @@ samples/
 
 # Copias de seguridad de calibrate.py (config.json.bak, perfiles .bak)
 *.bak
+
+# Ultimas opciones de la interfaz (gui.py)
+ui_settings.json
