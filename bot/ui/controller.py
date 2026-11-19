@@ -111,6 +111,8 @@ class Status:
     elapsed_s: float = 0.0
     paused: bool = False
     profiles: dict = field(default_factory=dict)
+    skills_cast: int = 0
+    skills: list = field(default_factory=list)   # [{name, key, remaining_s}]
 
 
 @dataclass
@@ -136,12 +138,23 @@ def _as_float(v: Any) -> float:
         return 0.0
 
 
+def parse_skills_status(raw: Any) -> list[dict]:
+    """`skills` de @@STATUS -> [{name, key, remaining_s}] (ignora entradas mal formadas)."""
+    out = []
+    for e in raw if isinstance(raw, list) else []:
+        if isinstance(e, dict):
+            out.append({"name": str(e.get("name", "")), "key": str(e.get("key", "")),
+                        "remaining_s": _as_float(e.get("remaining_s"))})
+    return out
+
+
 def status_from_dict(d: dict) -> Status:
     prof = d.get("profiles")
     return Status(state=str(d.get("state", "")), phase=str(d.get("phase", "running")), countdown=_as_int(d.get("countdown")),
                   metins=_as_int(d.get("metins")), items=_as_int(d.get("items")), captchas=_as_int(d.get("captchas")),
                   unstucks=_as_int(d.get("unstucks")), elapsed_s=_as_float(d.get("elapsed_s")),
-                  paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {})
+                  paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {},
+                  skills_cast=_as_int(d.get("skills_cast")), skills=parse_skills_status(d.get("skills")))
 
 
 def log_level(text: str) -> str:

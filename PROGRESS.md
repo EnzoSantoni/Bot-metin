@@ -3,7 +3,7 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-19)
-**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles) y 10 (interfaz) hechas, con 1065 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Próximas: 11–14. `main` no se tocó.
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, con 1113 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Próximas: 12–14. `main` no se tocó.
 
 **Rama `main`** (carpeta `D:\proyectos\metin-bot`):
 **Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
@@ -84,7 +84,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
   - Las últimas líneas del log.
   - F11 y F12 siguen funcionando igual.
   - Guarda las últimas opciones y tiene un `.bat` para abrirla con doble clic.
-- [ ] 11. Habilidades con temporizador (lista editable en la interfaz).
+- [x] 11. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Habilidades con temporizador (lista editable en la interfaz).
 - [ ] 12. Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin.
 - [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
 - [ ] 14. Revivir automáticamente al morir.
@@ -142,7 +142,14 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Config `skill_timing` (`mount_wait_s` 1.5 estimado, `press_hold_s` 0.1, `recast_margin_s` 0, `attack_settle_s` 3, `chunk_s` 0.5).
   - `GameInput.press_key`, y `skills_cast` + `skills` en `@@STATUS`.
   - Baselines `tests/data/baseline_events_*.json` (se regeneran con `tests/baseline_scenarios.py`): con la lista vacía o deshabilitada, la secuencia es idéntica.
-- **Parte 2, tabla editable en la interfaz: en curso.**
+- **Parte 2, tabla editable en la interfaz: hecha** (1113 tests).
+  - La ventana ahora tiene pestañas, "Control" y "Habilidades". La de Habilidades tiene una tabla con Activa, Nombre, Tecla, Duración, Bajarse, Animación y el tiempo Restante en vivo.
+  - Botones Agregar, Editar (o doble clic), Quitar, ↑, ↓, Guardar y "Agregar ejemplo": "Aura de Espada" F1, "Espada Espejo" F1 y "Defensiva" 4, con 100 s, 2 s y bajarse sí, valores para ajustar.
+  - El diálogo valida en vivo, reutilizando la validación de `bot/config.py`. Avisa, sin bloquear, si la tecla coincide con una de `controls`.
+  - Indicador "sin guardar" y pregunta al cambiar de personaje o al iniciar con cambios pendientes.
+  - Durante la corrida la tabla se bloquea y muestra el tiempo restante. "Habilidades lanzadas" aparece en las estadísticas.
+  - Lógica en `bot/ui/skills_editor.py` (`SkillsEditor`, `validate_skill`, `key_warnings` y `EXAMPLES`). Guarda en el perfil de personaje, con `.bak`.
+- **Fase 11 completa en `desarrollo`. Falta la prueba de Enzo en la PC.**
 
 ## Fase 11 — plan (pedido por Enzo, 2026-11-19): habilidades con temporizador
 - **Lista:** `character.skills` del perfil de personaje (Fase 9). Cada habilidad tiene `name`, `key`, `duration_s`, `requires_dismount`, `animation_s` y `enabled`. **Con la lista vacía el bot se comporta exactamente igual que antes**: un test compara la secuencia de input contra una grabada antes del cambio.
@@ -538,6 +545,22 @@ En `D:\proyectos\metin-bot-desarrollo`:
 7. Cerrá la ventana con el bot corriendo: tiene que pedir confirmación y detenerlo.
 8. Interruptor **Debug** encendido y una corrida corta: tiene que crearse la carpeta `debug\run_*`. Apagado, no se crea, aunque `config.json` tenga `debug.enabled: true`.
 9. Cambiá la zona en la lista: si `config.json` todavía pisa `farm_zone`, tiene que aparecer el aviso en naranja.
+
+### Rama `desarrollo`: Fase 11, habilidades con temporizador
+En `D:\proyectos\metin-bot-desarrollo`, con la interfaz (`abrir_interfaz.bat`):
+1. **Pestaña "Habilidades":**
+   - "Agregar ejemplo" → el de tu clase. Editalo con la tecla, la **duración real** de la habilidad y la **duración de la animación**.
+   - Probá que rechace F11, duración 0, y que avise con la tecla `z`.
+   - Guardá y fijate que `profiles\personajes\Farfarfa.json` tenga la habilidad, y que haya una copia `.bak`.
+2. **Con el juego, primero en modo Observar:** Iniciar → en el log tiene que aparecer "Habilidad … lanzada" enseguida (al iniciar se activan todas), y la tabla tiene que mostrar el tiempo restante.
+3. **De verdad, `--max-minutos` corto, montado:** al arrancar se tiene que bajar (Ctrl+G), apretar la tecla, esperar la animación y subirse. Mirá que:
+   - la habilidad se active de verdad;
+   - `skill_timing.mount_wait_s` (1.5 s) alcance para bajarse y subirse; si no, subilo en `config.json`;
+   - cuando vence, la vuelva a lanzar cuando está buscando, explorando o pegándole a un metin, y nunca mientras recoge;
+   - después de lanzarla pegándole a un metin, vuelva a clickearlo y siga pegando.
+4. **F12 en medio de un lanzamiento:** tiene que cortar sin dejar teclas apretadas.
+5. **Con la lista vacía** (o todas desactivadas), el bot tiene que comportarse igual que antes.
+6. Contame si `mount_wait_s` y `attack_settle_s` (3 s) necesitan ajuste.
 
 ### GitHub: decidir qué hacer con `samples/`
 El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.
