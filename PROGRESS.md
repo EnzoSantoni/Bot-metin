@@ -55,6 +55,15 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - Definiciones en `.claude/agents/`. **Solo se cargan al abrir una sesión nueva**; si no aparecen, usar un agente `general-purpose` con `model` sonnet/haiku y decirle que lea su `.md` primero (así se hizo la Fase 1).
 - Al cerrar cada fase: actualizar este archivo (hecho / pendiente / "a probar por Enzo").
 
+### Ramas (desde el 2026-11-19)
+- **`main`** = la versión que Enzo prueba en el juego. **No se toca** mientras se desarrolla. La carpeta `D:\proyectos\metin-bot` queda **siempre en `main`**.
+- **`desarrollo`** = rama de trabajo (fases 9 en adelante), en un worktree aparte: **`D:\proyectos\metin-bot-desarrollo`**.
+  - Usa el venv de la carpeta principal: `D:\proyectos\metin-bot\.venv\Scripts\python.exe`.
+  - `samples/` y `config.json` están copiados ahí (no están en git).
+- Commit y push a `desarrollo` al terminar cada fase, y en puntos intermedios si la fase es larga.
+- Errores que encuentre Enzo en `main`: se corrigen en `main` y después se pasan a `desarrollo` (merge de `main` en `desarrollo`).
+- `config.json` es personal y no está en git. Cada carpeta tiene su copia: **nunca cambiar el formato del `config.json` de la carpeta principal** desde `desarrollo`.
+
 ## Fases
 - [x] 0. Subagentes en `.claude/agents/`, especificación guardada, este archivo.
 - [x] 1. Estructura, venv, captura de la ventana (+ script para listar ventanas). Probada por Enzo.
@@ -64,7 +73,44 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - [x] 5. Input (interfaz + pydirectinput), `test_input.py`, pánico (F12 / esquina) y pausa (F11). Probada por Enzo.
 - [x] 6. Máquina de estados, zona de farmeo y destrabe. *Falta la prueba de Enzo en el juego.*
 - [x] 7. `calibrate.py`, modo debug y README. *Falta la prueba de Enzo de `calibrate.py` en el juego.*
-- [ ] 8. Opcional: buff F1 y auto-revivir.
+- [ ] 8. Opcional: buff F1 y auto-revivir. *(Quedan absorbidas por la 11 (habilidades con temporizador) y la 14 (revivir automáticamente).)*
+- [ ] 9. **Perfiles:** separar la configuración en perfil de servidor, de personaje y de mapa/zona, compatible con el `config.json` actual. Por defecto: servidor "Guabina", personaje "Farfarfa" y la zona actual, para que todo siga igual. Reorganiza la configuración, no la lógica del bot.
+- [ ] 10. **Interfaz base** (tkinter, pensada para el segundo monitor y sin minimizarse):
+  - Elegir perfiles; iniciar, pausar y detener; tiempo máximo; interruptor de debug.
+  - Estadísticas en vivo: estado, metin rotos, objetos, captchas, destrabes y tiempo.
+  - Las últimas líneas del log.
+  - F11 y F12 siguen funcionando igual.
+  - Guarda las últimas opciones y tiene un `.bat` para abrirla con doble clic.
+- [ ] 11. Habilidades con temporizador (lista editable en la interfaz).
+- [ ] 12. Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin.
+- [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
+- [ ] 14. Revivir automáticamente al morir.
+
+## Fase 9 — plan (propuesto; falta el OK de Enzo)
+**Objetivo:** separar la configuración en tres perfiles sin cambiar nada de lo que hace el bot. El bot sigue recibiendo **el mismo diccionario `cfg` de siempre**. Lo único que cambia es de dónde salen los valores.
+- **Archivos** (JSON puro, en git, en `profiles/`):
+  - `profiles/servidores/Guabina.json`: lo que depende del servidor o del cliente, es decir `window_title`, `expected_client_size`, `controls` (teclas del cliente) y `vision.*` (plantillas y colores de la interfaz).
+  - `profiles/personajes/Farfarfa.json`: lo que depende del personaje, es decir nombre, clase (para la Fase 11), `vision.items.owner_template` (el "Farfarfa's" amarillo), `pickup.dismount` y `coords_filter.max_speed` (velocidad a caballo).
+  - `profiles/zonas/Zona actual.json`: dónde se farmea, es decir `farm_zone` (polígono y tolerancia) y `target_metin_names`.
+  - Cada perfil guarda **solo lo que difiere de los valores por defecto**. Como los valores por defecto se hicieron para Guabina, los perfiles por defecto quedan cortos.
+  - El resto (tiempos de ataque, destrabe, navegación, debug, alarma, seguridad) sigue siendo configuración **general** en `config.json`.
+- **Cómo se arma la configuración:** valores por defecto ← perfil de servidor ← perfil de personaje ← perfil de zona ← `config.json` (**el `config.json` gana**). Con el `config.json` actual (que tiene `farm_zone` y `target_metin_names`), el resultado es **idéntico** al de hoy.
+- **Qué perfiles se usan:**
+  - Una clave nueva opcional en `config.json`: `"profiles": {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Zona actual"}`. Sin esa clave se usan esos tres por defecto.
+  - `run_bot.py`, `detect_preview.py` y `calibrate.py` aceptan `--servidor`, `--personaje` y `--zona`, que la interfaz de la Fase 10 va a usar.
+  - Un perfil inexistente da un error claro con la lista de los que hay.
+  - Al arrancar, el log dice qué perfiles se usaron.
+- **Validación por tipo:** cada perfil solo acepta las claves de su categoría (por ejemplo, un perfil de zona no puede traer `controls`). Error claro si no.
+- **`bot/profiles.py`:** `list_profiles(tipo)`, `load_profile` / `save_profile` (valida y hace `.bak`), `build_config(ruta_config, selección)` y `migrate_config(ruta_config)`.
+  - `load_config()` sigue existiendo con la misma firma, así que todo el código actual funciona sin cambios.
+- **Migración (opcional, la corre Enzo cuando quiera):** `calibrate.py perfiles migrar` pasa los valores de `config.json` a los perfiles y deja en `config.json` solo `profiles` y lo general, con `.bak`. **No se aplica al `config.json` de la carpeta principal desde `desarrollo`**, para no romper la prueba en `main`.
+- **`calibrate.py`:** cada subcomando guarda en el perfil que corresponde (`ventana` → servidor, `zona` → zona, `velocidad` → personaje, `metin` → plantillas del servidor + lista de la zona), salvo que ese valor esté pisado en `config.json`. En ese caso guarda en `config.json` como hoy y sugiere migrar.
+- **Plantillas:** se quedan donde están (`templates/`); el perfil de servidor solo apunta a ellas. Más adelante se puede mover cada servidor a su carpeta.
+- **Tests:**
+  - El principal: con el `config.json` actual y los perfiles por defecto, `build_config` da **exactamente** el mismo `cfg` que la versión de `main`, comparando clave por clave.
+  - Precedencia, validación por tipo, perfil faltante, selección por CLI, migración ida y vuelta (migrar y reconstruir da lo mismo) y que `calibrate` guarde en el perfil correcto.
+  - Toda la suite actual tiene que seguir pasando sin cambios.
+- **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
 
 ## Fase 1 — qué quedó
 - `.venv` con Python 3.14.2. `requirements.txt`: mss 10.2.0, numpy 2.5.5, opencv-python 5.1.0.95, pywin32 312, pydirectinput 1.0.4, keyboard 0.13.5, pytest 9.2.0.
