@@ -202,6 +202,7 @@ class SimWorld(SimGame):
         self.clicks_on_metin: list[tuple[float, SimMetin]] = []
         self.selected_log: list[tuple[float, str, str]] = []   # (t, tipo, nombre) de cada seleccion
         self.mounted = False
+        self.skill_log: list[tuple[float, str, bool, bool]] = []   # (t, tecla, estaba montado, tuvo efecto)
         self.held_move: np.ndarray | None = None   # direccion del juego (unitaria) mientras se mantiene W/A/S/D
         self.rot_dir = 0
         self.captcha_until = 0.0
@@ -342,6 +343,11 @@ class SimWorld(SimGame):
     def toggle_mount(self) -> None:
         if not self.frozen:
             self.mounted = not self.mounted
+
+    def cast_skill(self, key: str, requires_dismount: bool) -> None:
+        """Tecla de habilidad. Una que requiere bajarse no tiene efecto estando montado (detecta errores de secuencia)."""
+        effective = not self.frozen and not (requires_dismount and self.mounted)
+        self.skill_log.append((self.t, key, self.mounted, effective))
 
     def key_move(self, direction: str | None) -> None:
         """Empieza (o termina con None) a caminar con W/A/S/D: 'up' = hacia donde apunta la camara (arriba en pantalla)."""

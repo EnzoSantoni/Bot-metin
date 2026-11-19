@@ -19,7 +19,7 @@ from test_calibration import CLIENT, ORIGIN, QUAD, SAMPLES, FakeKeyboard, Script
 
 DATA = Path(__file__).parent / "data"
 REAL_PROFILES = PROJECT_ROOT / "profiles"
-NEW_SECTIONS = ("server", "character", "zone", "_profiles")
+NEW_SECTIONS = ("server", "character", "zone", "_profiles", "skill_timing")   # skill_timing: Fase 11
 ZONA = "Guabina - Oscuridad y Negro"
 
 

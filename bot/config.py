@@ -83,6 +83,12 @@ DEFAULTS: dict[str, Any] = {
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
     "loop": {"cycle_ms": 150, "captcha_full_search_every": 10, "hold_chunk_s": 0.5},
+    # Habilidades con temporizador (bot/skills.py; las habilidades en si estan en character.skills). mount_wait_s: espera tras
+    # cada Ctrl+G de una habilidad (estimada); press_hold_s: cuanto se mantiene la tecla; recast_margin_s: se relanza este
+    # tiempo antes de que venza; attack_settle_s: atacando, solo se lanza pasado este tiempo desde el ultimo clic;
+    # chunk_s: las esperas (montar, animacion) se parten en tramos de este largo con chequeo de captcha y panico.
+    "skill_timing": {"mount_wait_s": 1.5, "press_hold_s": 0.1, "recast_margin_s": 0.0, "attack_settle_s": 3.0,
+                     "chunk_s": 0.5},
     # ATACAR: tiempos en s, descarte en minutos, radio de descarte en unidades del juego.
     "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
                "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
@@ -690,6 +696,10 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("pickup", ("press_interval_ms", "presses_before_click", "empty_confirm_cycles", "max_presses", "max_seconds",
                     "mount_wait_s"),
          ("presses_before_click", "empty_confirm_cycles", "max_presses", "max_seconds"))
+    nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s"),
+         ("press_hold_s", "chunk_s"))
+    if cfg["skill_timing"]["chunk_s"] > 0.5:
+        raise ConfigError("skill_timing.chunk_s debe ser <= 0.5 (chequeo de captcha entre tramos)")
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
@@ -737,7 +747,7 @@ def _check_game_key(spec: Any, name: str, reserved: set[str]) -> None:
 
 
 def _validate_profile_sections(cfg: dict) -> None:
-    """Secciones server, character y zone (todavia no las usa el bot)."""
+    """Secciones server, character y zone (el bot usa character.skills; el resto es lugar previsto)."""
     safety = cfg.get("safety") or {}
     reserved = {str(safety.get(k, "")).strip().lower() for k in ("panic_key", "pause_key")}
     sv = _require_dict(cfg.get("server"), "server")
@@ -765,8 +775,10 @@ def _validate_profile_sections(cfg: dict) -> None:
         _require_dict(sk, n)
         _require_text(sk.get("name"), f"{n}.name")
         _check_game_key(sk.get("key"), f"{n}.key", reserved)
-        for k in ("duration_s", "animation_s"):
-            _num_ge0(sk.get(k), f"{n}.{k}")
+        _num_ge0(sk.get("animation_s"), f"{n}.animation_s")
+        _num_ge0(sk.get("duration_s"), f"{n}.duration_s")
+        if sk["duration_s"] <= 0:
+            raise ConfigError(f"{n}.duration_s debe ser un numero > 0")
         for k in ("requires_dismount", "enabled"):
             if not isinstance(sk.get(k), bool):
                 raise ConfigError(f"{n}.{k} debe ser true o false")

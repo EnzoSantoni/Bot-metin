@@ -13,7 +13,7 @@ from typing import Any, Iterator
 
 from bot.capture import elevation_mismatch
 from bot.control import BotControl, PanicStop
-from bot.input.base import InputBackend, parse_keys
+from bot.input.base import VALID_KEYS, InputBackend, parse_keys
 from bot.vision.metin import player_point
 from bot.vision.screen_mask import ScreenMask
 
@@ -145,7 +145,21 @@ class GameInput:
 
     def press(self, action: str, hold_s: float | None = None) -> bool:
         """Aprieta la tecla (o combinacion) de `controls[action]`."""
-        keys = self._key_spec(action)
+        return self._press_keys(self._key_spec(action), hold_s)
+
+    def press_key(self, spec: str, hold_s: float | None = None) -> bool:
+        """Aprieta una tecla (o combinacion) cualquiera que no sea una accion de `controls` (por ejemplo la de una
+        habilidad). Lanza ValueError si no es una tecla valida o es la de panico / pausa."""
+        keys = parse_keys(spec)
+        bad = [k for k in keys if k not in VALID_KEYS]
+        if bad:
+            raise ValueError(f"tecla invalida: {bad[0]!r} (de {spec!r})")
+        safety = self.cfg["safety"]
+        if {str(safety["panic_key"]).strip().lower(), str(safety["pause_key"]).strip().lower()} & set(keys):
+            raise ValueError(f"{spec!r} usa la tecla de panico o de pausa")
+        return self._press_keys(keys, hold_s)
+
+    def _press_keys(self, keys: list[str], hold_s: float | None) -> bool:
         with self._action() as ready:
             if not ready:
                 return False

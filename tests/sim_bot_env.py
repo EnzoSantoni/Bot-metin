@@ -112,6 +112,7 @@ class SimBackend(FakeBackend):
         self.k_mount = parse_keys(c["mount"])
         self.k_cam = {parse_keys(c["camera_left"])[0]: +1, parse_keys(c["camera_right"])[0]: -1}
         self.k_move = {parse_keys(c[f"move_{d}"])[0]: d for d in ("up", "down", "left", "right")}
+        self.k_skills = {str(sk["key"]).lower(): bool(sk["requires_dismount"]) for sk in cfg["character"]["skills"]}
         self.cursor = (0, 0)
 
     def _log(self, *ev) -> None:
@@ -140,6 +141,8 @@ class SimBackend(FakeBackend):
             w.deselect()
         elif key == self.k_mount[-1] and all(k in self._keys_down for k in self.k_mount):
             w.toggle_mount()
+        elif key in self.k_skills:
+            w.cast_skill(key, self.k_skills[key])
         elif key in self.k_cam:
             w.rot_dir = self.k_cam[key]
         elif key in self.k_move:

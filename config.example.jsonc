@@ -142,6 +142,13 @@
   // ~3 ms) entre tramos: si aparece, se suelta todo y pasa a CAPTCHA enseguida.
   "loop": {"cycle_ms": 150, "captcha_full_search_every": 10, "hold_chunk_s": 0.5},
 
+  // skill_timing. Tiempos de las habilidades de character.skills (el bot las lanza solo en momentos seguros).
+  //  mount_wait_s: espera tras cada Ctrl+G de una habilidad (estimada). press_hold_s: cuanto se mantiene la tecla.
+  //  recast_margin_s: se relanza este tiempo antes de que venza. attack_settle_s: atacando, solo se lanza pasado este
+  //  tiempo desde el ultimo clic. chunk_s (<= 0.5): las esperas se parten en tramos con chequeo de captcha y panico.
+  "skill_timing": {"mount_wait_s": 1.5, "press_hold_s": 0.1, "recast_margin_s": 0.0, "attack_settle_s": 3.0,
+                   "chunk_s": 0.5},
+
   // ATACAR. confirm_timeout_s: tiempo sin ver el panel del metin (ni moverse) antes de reclickear.
   //  hp_stall_s: la vida no baja por tanto tiempo -> reclic. max_reclicks: mas que esto -> descartar el metin.
   //  max_seconds: tope total de un ataque. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
@@ -491,6 +498,7 @@
   //  skills: lista de habilidades con temporizador (vacia por defecto). Cada una necesita TODOS estos campos:
   //    name, key (tecla valida, no la de panico/pausa), duration_s (cuanto dura el efecto), requires_dismount (hay que
   //    bajarse del caballo), animation_s (cuanto dura la animacion), enabled.
+  //    duration_s tiene que ser > 0. Con la lista vacia (o todas con enabled false) el bot no hace nada distinto.
   //  Ejemplos (no se aplican, estan comentados):
   //    guerrero: {"name": "Aura de Espada", "key": "f1", "duration_s": 60, "requires_dismount": true, "animation_s": 1.5, "enabled": true}
   //    sura:     {"name": "Espada Espejo", "key": "f1", "duration_s": 60, "requires_dismount": true, "animation_s": 1.5, "enabled": true}

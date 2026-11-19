@@ -22,6 +22,7 @@ from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
+from bot.skills import Skill, SkillScheduler
 from bot.tracking import CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
@@ -88,15 +89,17 @@ class BotStats:
     episodes_resolved: int = 0   # cerrados con progreso real
     centros: int = 0             # veces que se fue al CENTRO
     approaches: int = 0          # acercamientos a piedras lejanas
+    skills_cast: int = 0         # habilidades lanzadas
     elapsed_s: float = 0.0
     time_by_state: dict[str, float] = field(default_factory=dict)
     end_reason: str = ""
 
     def summary(self) -> str:
         per = ", ".join(f"{k} {v:.0f}s" for k, v in self.time_by_state.items() if v >= 0.5) or "-"
+        skills = f" | habilidades lanzadas: {self.skills_cast}" if self.skills_cast > 0 else ""
         return (f"Metin rotos: {self.metins} | objetos recogidos (estimado): {self.items} | captchas: {self.captchas} | "
                 f"destrabes: {self.unstucks} ({self.episodes} episodios, {self.episodes_resolved} resueltos, "
-                f"{self.centros} al centro) | acercamientos: {self.approaches} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
+                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
                 f"motivo de fin: {self.end_reason or '-'}")
 
 
@@ -254,7 +257,10 @@ class Bot:
         self._zero_streak = 0
         self._last_click_vec: Xy | None = None
         self._clear = 0
-        self._dismounted = False
+        self._dismounted = False   # False = montado (o sin caballo); lo comparten recoger y las habilidades
+        self.skill_cfg = cfg["skill_timing"]
+        self.skills = SkillScheduler(cfg["character"]["skills"], self.clock, float(self.skill_cfg["recast_margin_s"]))
+        self._skills_started = False
         self._new_sweep()
 
     # ------------------------------------------------------------------ ciclo
@@ -265,6 +271,7 @@ class Bot:
     def run(self, max_minutes: float | None = None) -> BotStats:
         """Corre hasta FIN. PanicStop se propaga. Sin tope de tiempo mientras espera el captcha."""
         self._t_start = self._last_t = self.clock()
+        self._start_skills(self._t_start)
         limit = None if max_minutes is None else float(max_minutes) * 60
         try:
             while self.state is not State.FIN:
@@ -342,6 +349,8 @@ class Bot:
             self._update_episode(t)
         if self.state in (State.ATACAR, State.RECOGER, State.ACERCARSE):
             self._no_target_t = t      # atacando o yendo a una piedra: hay objetivo
+        if self._maybe_cast_skill(t):
+            return
         before = self.state
         out = getattr(self, "_do_" + self.state.name.lower())(p, t)
         if out is not None and self.state is before:   # si el handler ya cambio de estado (captcha en una tecla) no se pisa
@@ -925,6 +934,78 @@ class Bot:
         self._planned = point
         a.last_click_t = a.last_drop_t = self.clock()
         return None
+
+    # ------------------------------------------------------------------ habilidades
+    def _start_skills(self, t: float) -> None:
+        """Al iniciar la sesion todas las habilidades activas quedan vencidas (una sola vez)."""
+        if not self._skills_started:
+            self._skills_started = True
+            self.skills.start(t)
+
+    def _skill_safe(self, t: float) -> bool:
+        """Momento seguro: BUSCAR; EXPLORAR entre pasos; ATACAR con el metin confirmado y `attack_settle_s` despues del
+        ultimo clic. Nunca en los demas estados ni a mitad de una caminata."""
+        if self.state is State.BUSCAR:
+            return True
+        if self.state is State.EXPLORAR:
+            return self._walk is None
+        a = self._atk
+        return (self.state is State.ATACAR and a is not None and a.confirmed and a.pending is None
+                and t - a.last_click_t >= float(self.skill_cfg["attack_settle_s"]))
+
+    def _maybe_cast_skill(self, t: float) -> bool:
+        """Lanza la habilidad mas atrasada si hay una vencida y es un momento seguro. True = el ciclo termina aca."""
+        if not self.skills:
+            return False
+        self._start_skills(t)
+        due = self.skills.due(t)
+        if not due or not self._skill_safe(t):
+            return False
+        self._cast_skill(due[0])
+        return True
+
+    def _skill_wait(self, seconds: float) -> bool:
+        """Espera en tramos de `skill_timing.chunk_s` con chequeo de captcha. False si un captcha la corto (ya en CAPTCHA)."""
+        def step(s: float) -> bool:
+            self._sleep(s)
+            return True
+        return self._hold_chunked(step, seconds, float(self.skill_cfg["chunk_s"])) != "captcha"
+
+    def _cast_skill(self, skill: Skill) -> None:
+        """Suelta todo, se baja si hace falta, aprieta la tecla, espera la animacion y se vuelve a subir (solo si se bajo
+        por esta habilidad). Un captcha la aborta: la habilidad queda vencida y `_do_captcha` sube al salir."""
+        wait = float(self.skill_cfg["mount_wait_s"])
+        self.gi.release_all()
+        down_here = False
+        if skill.requires_dismount and not self._dismounted:
+            if not self.gi.press("mount"):
+                return   # el juego no esta listo: se reintenta
+            self._dismounted = down_here = True
+            if not self._skill_wait(wait):
+                return
+        pressed = self.gi.press_key(skill.key, float(self.skill_cfg["press_hold_s"]))
+        if pressed and not self._skill_wait(skill.animation_s):
+            return
+        if pressed:
+            self.skills.mark_cast(skill, self.clock())
+        if down_here:
+            if self.gi.press("mount"):
+                self._dismounted = False
+                self._skill_wait(wait)   # un captcha aca ya no aborta nada: la habilidad salio
+            else:
+                logger.warning("No se pudo volver a montar tras la habilidad; se reintenta en la proxima salida")
+        if not pressed:
+            logger.warning("Habilidad %s: el juego no estaba listo, no se lanzo", skill.name)
+            return
+        self.stats.skills_cast += 1
+        a = self._atk
+        if self.state is State.ATACAR and a is not None:   # sigue atacando: reclic con una captura fresca
+            a.last_click_t = a.last_drop_t = a.progress_t = self.clock()
+            a.pending = ("habilidad lanzada", False)
+        self.tracker.forget_reference()
+        logger.info("Habilidad %s (%s) lanzada; proxima en %.0f s", skill.name, skill.key,
+                    self.skills.due_in(skill, self.clock()))
+        self._dbg("habilidad", f"{skill.name} ({skill.key})")
 
     # ------------------------------------------------------------------ RECOGER
     def _start_pickup(self) -> None:
