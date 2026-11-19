@@ -1,0 +1,25 @@
+{
+  "window_title": "Guabina",
+  "expected_client_size": [
+    1858,
+    1057
+  ],
+  "controls": {
+    "attack_forward": "space",
+    "pickup": "z",
+    "mount": "ctrl+g",
+    "buff": "f1",
+    "camera_left": "q",
+    "camera_right": "e",
+    "move_up": "w",
+    "move_left": "a",
+    "move_down": "s",
+    "move_right": "d",
+    "deselect": "esc"
+  },
+  "server": {
+    "name": "Guabina",
+    "pickup_mode": "uno_por_uno",
+    "captcha_type": "bot_verify_numerico"
+  }
+}

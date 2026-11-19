@@ -1,0 +1,36 @@
+{
+  "farm_zone": {
+    "polygon": [
+      [
+        439,
+        141
+      ],
+      [
+        753,
+        91
+      ],
+      [
+        702,
+        203
+      ],
+      [
+        436,
+        196
+      ]
+    ],
+    "outside_tolerance": 30
+  },
+  "target_metin_names": [
+    "Metin de Oscuridad",
+    "Metin Negro"
+  ],
+  "zone": {
+    "name": "Guabina - Oscuridad y Negro",
+    "farm_mode": "metin",
+    "metin_priority": [],
+    "bichos": {
+      "lure_key": "f4",
+      "lure_every_s": 60
+    }
+  }
+}

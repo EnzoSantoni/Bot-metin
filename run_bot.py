@@ -16,10 +16,11 @@ from typing import Any, Callable
 
 from bot.alarm import Alarm
 from bot.bot import Bot
-from bot.config import ConfigError, load_config, resolve_path
+from bot.config import ConfigError, resolve_path
 from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
 from bot.input.game_input import GameInput, InputBlockedError
+from bot.profiles import build_config
 
 logger = logging.getLogger("run_bot")
 
@@ -119,6 +120,17 @@ def verify_templates(cfg: dict) -> None:
         raise FileNotFoundError("Faltan plantillas: " + ", ".join(str(resolve_path(f)) for f in missing))
 
 
+def log_profiles(cfg: dict) -> None:
+    """Loguea los perfiles usados y los avisos de config.json que pisa valores de un perfil."""
+    prof = cfg.get("_profiles") or {}
+    if not prof.get("servidor"):
+        logger.info("Perfiles: sin carpeta profiles/ (DEFAULTS + config.json)")
+        return
+    logger.info("Perfiles: servidor=%s, personaje=%s, zona=%s", prof["servidor"], prof["personaje"], prof["zona"])
+    for o in prof.get("overrides", []):
+        logger.warning(o["message"])
+
+
 def _wait_alarm(control: BotControl, alarm: Any, reason: str) -> None:
     """Tras la muerte o si no puede volver a la zona: la alarma sigue sonando hasta F12 (PanicStop) o hasta su max_seconds."""
     print(f"Alarma sonando ({reason}). F12 (o la esquina) la corta.")
@@ -133,16 +145,20 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     ap.add_argument("--observar", action="store_true", help="percibe y decide sin mandar input (loguea lo que haria)")
     ap.add_argument("--max-minutos", type=float, default=None, help="termina solo a los N minutos (no corta mientras hay un captcha en pantalla: espera a que se resuelva)")
     ap.add_argument("--config", default="config.json")
+    ap.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
+    ap.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
+    ap.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Guabina - Oscuridad y Negro)")
     args = ap.parse_args(argv)
 
     if cfg is None:
         try:
-            cfg = load_config(args.config)
+            cfg = build_config(args.config, args.servidor, args.personaje, args.zona, warn=False)
         except ConfigError as e:
             print(f"Config invalida: {e}")
             return 1
         from bot.log import setup_logging
         setup_logging(cfg)
+        log_profiles(cfg)
     try:
         verify_templates(cfg)
     except FileNotFoundError as e:

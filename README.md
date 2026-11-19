@@ -66,7 +66,7 @@ Campos principales:
 
 ### Calibración
 
-`calibrate.py` ayuda a medir y guardar valores en `config.json`. **Es pasivo: nunca manda teclas ni clics al juego.** Solo lee la pantalla y escucha las hotkeys **F8 / F9 / F10** (para que marques momentos mientras jugás); **F12** o Ctrl+C cancelan sin guardar. Los subcomandos que escriben muestran el cambio (antes → después), piden `s/n` (o usá `--si`), copian `config.json.bak` y validan antes de guardar. Todos aceptan `--config ruta`.
+`calibrate.py` ayuda a medir y guardar valores (en los perfiles o en `config.json`, ver "Perfiles"). **Es pasivo: nunca manda teclas ni clics al juego.** Solo lee la pantalla y escucha las hotkeys **F8 / F9 / F10** (para que marques momentos mientras jugás); **F12** o Ctrl+C cancelan sin guardar. Los subcomandos que escriben muestran el cambio (antes → después), piden `s/n` (o usá `--si`), copian `config.json.bak` y validan antes de guardar. Todos aceptan `--config ruta`.
 
 | Cuándo | Comando |
 |---|---|
@@ -76,6 +76,40 @@ Campos principales:
 | Agregar un tipo de metin: mouse cerca de la etiqueta + F9 (un segundo F9 con el metin seleccionado guarda el nombre del panel) | `.venv\Scripts\python.exe calibrate.py metin "Metin de Oscuridad"` |
 | Revisar a ojo las zonas excluidas, ventanas y coordenadas: `debug\calibrate_zonas.png` (no modifica nada) | `.venv\Scripts\python.exe calibrate.py zonas` |
 | Ver qué valores siguen siendo estimaciones y cómo medirlos | `.venv\Scripts\python.exe calibrate.py resumen` |
+
+## Perfiles
+
+La configuración se arma en capas: **valores por defecto ← perfil de servidor ← perfil de personaje ← perfil de zona ← `config.json`**. Gana siempre la última: `config.json` pisa a todo. El bot recibe el mismo diccionario de siempre; lo único que cambia es de dónde salen los valores.
+
+Los perfiles son archivos JSON (sin comentarios) en `profiles/`, **dentro del repo**, y guardan solo lo que difiere de los valores por defecto:
+
+| Perfil | Archivo | Qué va |
+|---|---|---|
+| Servidor | `profiles/servidores/Guabina.json` | `window_title`, `expected_client_size`, `controls`, `vision.*` (plantillas y colores de la interfaz) y la sección `server` (`name`, `pickup_mode`, `captcha_type`). |
+| Personaje | `profiles/personajes/Farfarfa.json` | La sección `character` (`name`, `class`, `potions`, `skills`), `vision.items.owner_template` (el nombre amarillo "Farfarfa's"), `pickup.dismount` y `coords_filter.max_speed`. |
+| Zona | `profiles/zonas/Guabina - Oscuridad y Negro.json` | `farm_zone`, `target_metin_names` y la sección `zone` (`name`, `farm_mode`, `metin_priority`, `bichos`). |
+
+Todo lo demás (tiempos de ataque, destrabe, navegación, debug, alarma, seguridad) es configuración **general** y va en `config.json`. Un perfil con una clave de otra categoría da un error claro (por ejemplo, "la clave 'controls' no va en un perfil de zona; va en el de servidor"). Las secciones `server`, `character` y `zone` son el lugar previsto para las fases 11 a 13: **el bot todavía no las usa** (están documentadas en `config.example.jsonc`).
+
+**Qué perfiles se usan.** Sin nada más: `Guabina`, `Farfarfa` y `Guabina - Oscuridad y Negro`. Para cambiarlo, el bloque `"profiles": {"servidor": "...", "personaje": "...", "zona": "..."}` de `config.json`, o las opciones `--servidor`, `--personaje` y `--zona` de `run_bot.py`, `detect_preview.py` y `calibrate.py` (pisan al bloque). Un perfil inexistente da un error con la lista de los disponibles. Si la carpeta `profiles/` no existe, todo funciona como antes (valores por defecto + `config.json`). `run_bot.py` loguea al arrancar `Perfiles: servidor=…, personaje=…, zona=…`.
+
+**Avisos de pisado.** Si `config.json` define un valor que el perfil elegido también define, el log avisa una sola vez por sección: `config.json pisa farm_zone del perfil de zona 'Guabina - Oscuridad y Negro'` (y, si el valor es igual, que podés borrarlo o migrar). El bot sigue usando el de `config.json`.
+
+**Comandos**
+
+```bat
+.venv\Scripts\python.exe calibrate.py perfiles listar
+.venv\Scripts\python.exe calibrate.py perfiles migrar
+.venv\Scripts\python.exe calibrate.py personaje "Nombre" [--clase guerrero]
+```
+
+- `perfiles listar`: perfiles disponibles, cuáles están activos y qué pisa `config.json`.
+- `perfiles migrar`: pasa de `config.json` a los perfiles activos todos los valores de servidor, personaje y zona, **los saca de `config.json`**, agrega el bloque `profiles` y deja el resto general. Muestra el plan, pide `s/n` y hace `.bak` de todo lo que toca. Después de migrar la configuración resultante es idéntica y no hay avisos.
+- `personaje "Nombre"`: crea `profiles/personajes/Nombre.json`. Con un objeto reservado para ese personaje en el piso (se ve su nombre amarillo "Nombre's"), poné el mouse cerca y apretá **F9**: muestra el recorte en `debug\calibrate_personaje.png`, pide confirmación y guarda `templates/items/owner_<nombre>.png`. Opcional: con el propio personaje seleccionado, un segundo **F9** guarda la plantilla del nombre del panel. Al final pregunta si lo dejás como personaje activo. Es pasivo (nunca manda input); F12 o Ctrl+C cancelan.
+
+**Dónde guarda cada subcomando de calibración:** `ventana` → perfil de servidor, `zona` → perfil de zona, `velocidad` → perfil de personaje, `metin` → plantillas + `target_metin_names` del perfil de zona. Si ese valor está definido en `config.json` (lo pisa), se guarda ahí y se avisa que conviene migrar.
+
+**Crear un perfil nuevo a mano:** copiá uno existente de la misma carpeta, cambiale el nombre del archivo y el campo `name`, dejá solo lo que difiere, y usalo con `--zona "Otro"` (o en el bloque `profiles`). Los nombres pueden tener espacios y guiones, pero no `/`, `\`, `..` ni `< > : " | ? *`.
 
 ## Puesta en marcha (en este orden)
 
@@ -94,7 +128,7 @@ Todo con `.venv\Scripts\python.exe` desde la carpeta del proyecto y el juego abi
 .venv\Scripts\python.exe run_bot.py
 ```
 
-Opciones: `--max-minutos N` (termina solo a los N minutos), `--observar` (sin input), `--config ruta`.
+Opciones: `--max-minutos N` (termina solo a los N minutos), `--observar` (sin input), `--config ruta`, `--servidor`/`--personaje`/`--zona` (perfiles, ver más abajo).
 
 - Cuenta regresiva de 5 s antes de arrancar.
 - **F12** o llevar el mouse a la **esquina superior izquierda** de la pantalla: detiene el bot al instante y suelta todas las teclas.
@@ -136,6 +170,8 @@ bot/            lógica del bot
   control.py      pánico, pausa y cuenta regresiva
   bot.py          máquina de estados
   navigation.py   navegación en coordenadas del juego
+  profiles.py     perfiles (servidor, personaje, zona) y armado del cfg
+profiles/       perfiles en JSON (servidores, personajes, zonas)
 templates/      plantillas recortadas de capturas reales
 tools/          herramientas para generar plantillas
 tests/          tests (pytest) y simulador del juego

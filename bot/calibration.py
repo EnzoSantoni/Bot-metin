@@ -22,8 +22,13 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-from bot.config import DEFAULTS, ConfigError, _merge, resolve_path, save_config, validate_config, validate_farm_zone
+from bot.config import ConfigError, resolve_path, save_config, validate_config, validate_farm_zone
 from bot.debug_draw import annotate, draw_panel_coords
+from bot.geometry import Rect
+from bot.profiles import (KIND_DIRS, KINDS, apply_migration, build_config, has_path, kind_of, leaf_paths, list_profiles,
+                          load_profile, merge_layers, plan_migration, profile_path, raw_without_profiles, save_profile,
+                          set_path)
+from bot.vision.items import find_boxes
 from bot.vision.coords import read_coords
 from bot.vision.metin import find_label_candidates, slugify, target_slugs
 from bot.vision.panel import find_frame, read_panel
@@ -77,6 +82,7 @@ class Session:
     cursor_fn: Callable[[], tuple[int, int]] = _default_cursor   # mouse en coords de pantalla
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    profiles_root: Any = None                  # carpeta de perfiles (None = profiles/ del proyecto)
     say: Callable[[str], None] = print
     ask: Callable[[str], str] = field(default=lambda prompt: input(prompt))
 
@@ -174,36 +180,76 @@ def _set_path(d: dict, path: tuple[str, ...], value: Any) -> None:
     d[path[-1]] = copy.deepcopy(value)
 
 
-def apply_changes(s: Session, changes: list[Change]) -> bool:
-    """Muestra antes -> despues, valida, pide confirmacion, copia config.json.bak y guarda.
+def _active_profiles(s: Session) -> dict[str, str]:
+    """Perfiles con que se armo s.cfg ({} si no se uso ninguno: sin carpeta profiles/)."""
+    p = s.cfg.get("_profiles") or {}
+    return {k: p[k] for k in KINDS if p.get(k)} if all(p.get(k) for k in KINDS) else {}
 
-    Escribe el JSON crudo del archivo (no el mezclado con DEFAULTS) con los cambios, asi se conservan las demas claves
-    tal cual. La config invalida nunca se guarda. Devuelve True si guardo.
+
+def _read_raw(path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+
+
+def _refresh_cfg(s: Session, sel: dict[str, str]) -> None:
+    """Vuelve a armar s.cfg con los mismos perfiles que tenia."""
+    s.cfg = build_config(s.config_path, sel.get("servidor"), sel.get("personaje"), sel.get("zona"),
+                         profiles_root_dir=s.profiles_root, warn=False)
+
+
+def apply_changes(s: Session, changes: list[Change]) -> bool:
+    """Muestra antes -> despues, valida, pide confirmacion, hace .bak y guarda donde corresponde.
+
+    Cada cambio va al perfil activo de su categoria (servidor, personaje o zona) o a config.json si es general o si
+    config.json ya define ese valor (lo pisa: se guarda ahi y se avisa que conviene migrar). Escribe el JSON crudo de cada
+    archivo (no el mezclado con DEFAULTS), asi se conservan las demas claves tal cual. La config invalida nunca se guarda.
+    Devuelve True si guardo.
     """
     path = resolve_path(s.config_path)
-    raw = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
-    before = _merge(DEFAULTS, raw)
-    new_raw = copy.deepcopy(raw)
+    raw = _read_raw(path)
+    sel = _active_profiles(s)
+    datas = {k: load_profile(k, n, s.profiles_root) for k, n in sel.items()}
+    layers = lambda d, r: [d[k] for k in KINDS if k in d] + [raw_without_profiles(r)]   # noqa: E731
+    before = merge_layers(layers(datas, raw))
+    new_raw, new_datas = copy.deepcopy(raw), copy.deepcopy(datas)
+    dests: list[str] = []
+    notes: list[str] = []
     for c in changes:
-        _set_path(new_raw, c.path, c.new)
-    after = _merge(DEFAULTS, new_raw)
+        kind = kind_of(c.path)
+        if kind in datas and not has_path(raw, c.path):
+            set_path(new_datas[kind], c.path, c.new)
+            dests.append(f"perfil de {kind} '{sel[kind]}'")
+        else:
+            set_path(new_raw, c.path, c.new)
+            dests.append("config.json")
+            if kind in datas:
+                notes.append(f"Aviso: {'.'.join(c.path)} esta definido en config.json (pisa el perfil de {kind} '{sel[kind]}'): "
+                             "se guarda ahi. Conviene migrar con 'calibrate.py perfiles migrar'.")
+    after = merge_layers(layers(new_datas, new_raw))
     try:
         validate_config(after)
     except ConfigError as e:
         s.say(f"La config resultante es invalida, no se guarda nada: {e}")
         return False
     s.say("Cambios en la config:")
-    for c in changes:
-        s.say(f"  {'.'.join(c.path)}: {get_path(before, c.path)}  ->  {get_path(after, c.path)}")
-    if not s.confirm(f"Guardar en {path.name}?"):
+    for c, dest in zip(changes, dests):
+        s.say(f"  {'.'.join(c.path)}: {get_path(before, c.path)}  ->  {get_path(after, c.path)}   [{dest}]")
+    for n in dict.fromkeys(notes):
+        s.say(n)
+    if not s.confirm(f"Guardar en {', '.join(dict.fromkeys(dests))}?"):
         s.say("No se guardo nada.")
         return False
-    bak = path.with_name(path.name + ".bak")
-    if path.exists():
-        shutil.copy2(path, bak)
-    save_config(new_raw, path)
-    s.cfg = after
-    s.say(f"Guardado en {path}" + (f" (copia anterior: {bak.name})." if path.exists() and bak.exists() else "."))
+    saved: list[str] = []
+    for kind in KINDS:
+        if kind in datas and new_datas[kind] != datas[kind]:
+            saved.append(str(save_profile(kind, sel[kind], new_datas[kind], s.profiles_root)))
+    if "config.json" in dests:
+        bak = path.with_name(path.name + ".bak")
+        if path.exists():
+            shutil.copy2(path, bak)
+        save_config(new_raw, path)
+        saved.append(str(path))
+    _refresh_cfg(s, sel)
+    s.say("Guardado en " + ", ".join(saved) + " (copias anteriores: .bak).")
     return True
 
 
@@ -473,11 +519,11 @@ def _save_label(s: Session, img: np.ndarray, cand: Any, name: str) -> bool:
     return err is None
 
 
-def _save_panel_name(s: Session, hk: Hotkeys, name: str) -> None:
-    """Segundo F9 (opcional): plantilla del nombre del panel con el metin seleccionado."""
+def _save_panel_name(s: Session, hk: Hotkeys, name: str, skip_words: int | None = None, what: str = "el metin") -> None:
+    """Segundo F9 (opcional): plantilla del nombre del panel con `what` seleccionado (skip_words: ver la herramienta)."""
     from tools import make_panel_name_template
     pcfg = s.cfg["vision"]["panel"]
-    s.say("Opcional: selecciona el metin con un clic (que se vea el panel de arriba) y apreta F9 para guardar tambien la "
+    s.say(f"Opcional: selecciona {what} con un clic (que se vea el panel de arriba) y apreta F9 para guardar tambien la "
           "plantilla del nombre del panel. F10 = saltear.")
     while True:
         key = hk.next()
@@ -487,13 +533,14 @@ def _save_panel_name(s: Session, hk: Hotkeys, name: str) -> None:
             continue
         img = s.grab(hk)
         if find_frame(img, pcfg) is None:
-            s.say("No se ve el panel superior. Selecciona el metin y apreta F9 de nuevo (F10 = saltear).")
+            s.say(f"No se ve el panel superior. Selecciona {what} y apreta F9 de nuevo (F10 = saltear).")
             continue
         out = resolve_path(pcfg["name_templates_dir"]) / f"{slugify(name)}.png"
         if out.exists() and not s.confirm(f"Ya existe {out.name}. Pisarla?"):
             return
         cap = _save_capture(s, img, "calibrate_metin_panel.png")
-        err = _run_tool(make_panel_name_template.main, ["--image", cap, "--name", name, "--force",
+        extra = [] if skip_words is None else ["--skip-words", str(skip_words)]
+        err = _run_tool(make_panel_name_template.main, ["--image", cap, "--name", name, "--force", *extra,
                                                         "--config", s.config_path])
         if err:
             s.say(f"No se pudo guardar la plantilla del panel: {err}")
@@ -522,6 +569,200 @@ def cmd_metin(s: Session, name: str) -> int:
         return 0
     names = list(s.cfg["target_metin_names"]) + [name]
     apply_changes(s, [Change(("target_metin_names",), names)])   # la plantilla ya esta guardada: sigue siendo exito
+    return 0
+
+
+# ----------------------------------------------------------------------------- personaje
+
+OWNER_PREVIEW_MARGIN = 6
+
+
+def owner_candidates(img: np.ndarray, icfg: dict) -> list[tuple[Rect, np.ndarray]]:
+    """Recuadros de objetos con texto amarillo de dueno: (recuadro, mascara 0/255 del amarillo recortada a su caja).
+
+    Misma logica que bot/vision/items.py::find_items (recuadro + franja superior amarilla), sin plantilla de por medio.
+    """
+    rows = int(icfg["text_rows"])
+    out: list[tuple[Rect, np.ndarray]] = []
+    for rect in find_boxes(img, icfg):
+        inner = img[rect.y + 1:rect.bottom - 1, rect.x + 1:rect.right - 1]
+        top = max(0, inner.shape[0] - rows)
+        if top == 0:
+            continue
+        upper = cv2.inRange(inner[:top], tuple(icfg["yellow_lo"]), tuple(icfg["yellow_hi"]))
+        if int(np.count_nonzero(upper)) <= icfg["yellow_noise_px"]:
+            continue
+        ys, xs = np.nonzero(upper)
+        out.append((rect, upper[ys.min():ys.max() + 1, xs.min():xs.max() + 1]))
+    return out
+
+
+def owner_preview(img: np.ndarray, rect: Rect, mask: np.ndarray) -> np.ndarray:
+    """Recuadro ampliado (arriba el color, abajo la mascara amarilla que queda como plantilla)."""
+    m = OWNER_PREVIEW_MARGIN
+    crop = img[max(0, rect.y - m):rect.bottom + m, max(0, rect.x - m):rect.right + m]
+    big = cv2.resize(crop, None, fx=LABEL_CROP_ZOOM, fy=LABEL_CROP_ZOOM, interpolation=cv2.INTER_NEAREST)
+    mask3 = cv2.cvtColor(cv2.resize(mask, None, fx=LABEL_CROP_ZOOM, fy=LABEL_CROP_ZOOM, interpolation=cv2.INTER_NEAREST),
+                         cv2.COLOR_GRAY2BGR)
+    canvas = np.zeros((big.shape[0] + mask3.shape[0] + 6, max(big.shape[1], mask3.shape[1]), 3), np.uint8)
+    canvas[:big.shape[0], :big.shape[1]] = big
+    canvas[big.shape[0] + 6:, :mask3.shape[1]] = mask3
+    return canvas
+
+
+def _pick_owner(s: Session, hk: Hotkeys, name: str) -> np.ndarray | None:
+    """F9 -> texto amarillo de dueno mas cercano al mouse, vista ampliada y confirmacion. None si se termina con F10."""
+    icfg = s.cfg["vision"]["items"]
+    while True:
+        key = hk.next()
+        if key == KEY_DONE:
+            return None
+        if key != KEY_CAPTURE:
+            continue
+        img = s.grab(hk)
+        cands = owner_candidates(img, icfg)
+        if not cands:
+            s.say("No se vio ningun objeto con nombre amarillo (reservado). Acerca el mouse al objeto y apreta F9 de nuevo.")
+            continue
+        cx, cy = s.cursor_client()
+        rect, mask = min(cands, key=lambda c: math.dist(c[0].center, (cx, cy)))
+        prev = _debug_path(s, "calibrate_personaje.png")
+        cv2.imwrite(str(prev), owner_preview(img, rect, mask))
+        s.say(f"Recuadro elegido (mouse en {(cx, cy)}): {rect.w}x{rect.h} en {rect.center}; texto amarillo {mask.shape[1]}x"
+              f"{mask.shape[0]}. Recorte ampliado en {prev}")
+        if s.confirm(f"Es el nombre amarillo de {name!r} (\"{name}'s\")?"):
+            return mask
+        s.say("Descartado. Apunta con el mouse al correcto y apreta F9 otra vez (F10 = salir).")
+
+
+def new_character_profile(name: str, clase: str | None, owner_template: str, existing: dict | None = None) -> dict:
+    """Datos del perfil: estructura del personaje por defecto con su nombre (o el existente, actualizado)."""
+    from bot.config import DEFAULTS
+    if existing is None:
+        data = {"character": copy.deepcopy(DEFAULTS["character"]),
+                "pickup": {"dismount": DEFAULTS["pickup"]["dismount"]},
+                "coords_filter": {"max_speed": DEFAULTS["coords_filter"]["max_speed"]}}
+    else:
+        data = copy.deepcopy(existing)
+    ch = data.setdefault("character", copy.deepcopy(DEFAULTS["character"]))
+    ch["name"] = name
+    if clase is not None:
+        ch["class"] = clase
+    set_path(data, ("vision", "items", "owner_template"), owner_template)
+    return data
+
+
+def cmd_personaje(s: Session, name: str, clase: str | None = None) -> int:
+    """Crea (o actualiza) profiles/personajes/<name>.json con la plantilla del nombre amarillo "<name>'s" (F9)."""
+    slug = slugify(name)
+    try:
+        pfile = profile_path("personaje", name, s.profiles_root)
+    except ConfigError as e:
+        s.say(str(e))
+        return 1
+    if not slug:
+        s.say("El nombre del personaje no puede estar vacio.")
+        return 1
+    tpl_rel = f"templates/items/owner_{slug}.png"
+    tpl_out = resolve_path(tpl_rel)
+    with Hotkeys(s.keyboard, (KEY_CAPTURE, KEY_DONE)) as hk:
+        s.say(f"Con un objeto reservado para {name!r} en el piso (se ve su nombre amarillo \"{name}'s\" encima), pone el "
+              f"mouse cerca y apreta {KEY_CAPTURE.upper()} ({KEY_DONE.upper()} = salir, {KEY_CANCEL.upper()} = cancelar).")
+        mask = _pick_owner(s, hk, name)
+        if mask is None:
+            s.say("Terminado sin guardar nada.")
+            return 1
+        existing = load_profile("personaje", name, s.profiles_root) if pfile.is_file() else None
+        data = new_character_profile(name, clase, tpl_rel, existing)
+        s.say(f"Se va a {'actualizar' if existing else 'crear'} {pfile} y guardar la plantilla {tpl_out}"
+              + (" (ya existe: se pisa)." if tpl_out.exists() else "."))
+        if not s.confirm("Guardar?"):
+            s.say("No se guardo nada.")
+            return 1
+        tpl_out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(tpl_out), mask)
+        save_profile("personaje", name, data, s.profiles_root)
+        s.say(f"Guardados {tpl_out.name} y el perfil {pfile.name}.")
+        _save_panel_name(s, hk, name, skip_words=0, what=f"a {name} (tu personaje)")
+    _offer_active(s, "personaje", name)
+    return 0
+
+
+def _offer_active(s: Session, kind: str, name: str) -> None:
+    """Pregunta si dejar el perfil como activo en config.json (bloque profiles). Con --si no cambia nada."""
+    if s.yes:
+        s.say(f"Para usarlo: --{kind} \"{name}\" o el bloque profiles de config.json.")
+        return
+    if not s.confirm(f"Dejar a {name!r} como {kind} activo en config.json?"):
+        return
+    path = resolve_path(s.config_path)
+    new_raw = copy.deepcopy(_read_raw(path))
+    if not isinstance(new_raw.setdefault("profiles", {}), dict):
+        s.say("El bloque profiles de config.json no es un objeto: no se cambia nada.")
+        return
+    new_raw["profiles"][kind] = name
+    build_config(path, **{k: (name if k == kind else None) for k in KINDS},
+                 profiles_root_dir=s.profiles_root, warn=False)   # ConfigError si el resultado no valida
+    if path.exists():
+        shutil.copy2(path, path.with_name(path.name + ".bak"))
+    save_config(new_raw, path)
+    s.say(f"config.json: profiles.{kind} = {name!r} (copia anterior: {path.name}.bak).")
+
+
+# ----------------------------------------------------------------------------- perfiles
+
+def cmd_perfiles(s: Session, action: str) -> int:
+    """`listar` (perfiles disponibles y activos) o `migrar` (de config.json a los perfiles activos)."""
+    return _perfiles_listar(s) if action == "listar" else _perfiles_migrar(s)
+
+
+def _perfiles_listar(s: Session) -> int:
+    sel = _active_profiles(s)
+    if not sel:
+        s.say("No hay carpeta de perfiles: se usa DEFAULTS + config.json.")
+        return 0
+    for kind in KINDS:
+        s.say(f"Perfiles de {kind} (profiles/{KIND_DIRS[kind]}/):")
+        for n in list_profiles(kind, s.profiles_root):
+            s.say(f"  {'*' if n == sel[kind] else ' '} {n}" + ("   (activo)" if n == sel[kind] else ""))
+    ov = s.cfg["_profiles"].get("overrides", [])
+    if ov:
+        s.say("config.json pisa valores de los perfiles activos:")
+        for o in ov:
+            s.say(f"  {o['message']}")
+    return 0
+
+
+def _perfiles_migrar(s: Session) -> int:
+    path = resolve_path(s.config_path)
+    raw = _read_raw(path)
+    sel = _active_profiles(s)
+    if not sel:
+        s.say("No hay carpeta de perfiles: no hay a donde migrar.")
+        return 1
+    plan = plan_migration(raw, sel, s.profiles_root)
+    if not plan.moves:
+        s.say("No hay nada para migrar: config.json no tiene valores de servidor, personaje ni zona.")
+        return 0
+    s.say("Plan de migracion:")
+    for kind, p, value in plan.moves:
+        s.say(f"  {'.'.join(p)} = {json.dumps(value, ensure_ascii=False)}  ->  perfil de {kind} '{sel[kind]}'")
+    rest = [".".join(p) for p, _ in leaf_paths(raw_without_profiles(plan.new_raw))]
+    s.say("Queda en config.json: " + (", ".join(rest) if rest else "(nada general)") + "; se agrega el bloque profiles "
+          + json.dumps(sel, ensure_ascii=False))
+    datas = {k: load_profile(k, sel[k], s.profiles_root) for k in KINDS}
+    new_datas = {k: plan.profile_data.get(k, datas[k]) for k in KINDS}
+    before = merge_layers([datas[k] for k in KINDS] + [raw_without_profiles(raw)])
+    after = merge_layers([new_datas[k] for k in KINDS] + [raw_without_profiles(plan.new_raw)])
+    if before != after:
+        s.say("La migracion cambiaria la config resultante: no se hace nada.")
+        return 1
+    if not s.confirm("Migrar (se hace .bak de config.json y de cada perfil que cambia)?"):
+        s.say("No se migro nada.")
+        return 1
+    written = apply_migration(plan, s.config_path, s.profiles_root)
+    _refresh_cfg(s, sel)
+    s.say("Migrado. Archivos escritos: " + ", ".join(str(w) for w in written) + " (copias anteriores: .bak).")
     return 0
 
 

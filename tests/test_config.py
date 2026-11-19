@@ -50,7 +50,7 @@ def test_roundtrip_non_ascii(tmp_path):
     cfg["window_title"] = "Ñ"
     save_config(cfg, p)
     assert "Ñ" in p.read_text(encoding="utf-8")
-    assert load_config(p) == cfg
+    assert {k: v for k, v in load_config(p).items() if k != "_profiles"} == cfg   # _profiles lo agrega el armado con perfiles
 
 
 @pytest.mark.parametrize("override", [

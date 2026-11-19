@@ -47,6 +47,18 @@ DEFAULTS: dict[str, Any] = {
     "target_metin_names": ["Metin de Oscuridad", "Metin Negro"],
     # Zona de farmeo poligonal en coordenadas del juego (las que se leen debajo del minimapa).
     "farm_zone": {"polygon": [[439, 141], [753, 91], [702, 203], [436, 196]], "outside_tolerance": 30},
+    # --- Secciones de los perfiles (bot/profiles.py). El bot todavia NO las usa: son el lugar previsto de las fases 11 a 13. ---
+    # server: pickup_mode = "uno_por_uno" (cada Z junta un objeto, como en Guabina) o "todo_junto" (una Z junta todo);
+    # captcha_type = tipo de captcha del servidor (hoy solo existe "bot_verify_numerico").
+    "server": {"name": "", "pickup_mode": "uno_por_uno", "captcha_type": "bot_verify_numerico"},
+    # character: class = "guerrero", "sura", etc. (texto libre); potions = teclas de vida / mana y si el servidor las toma solas
+    # (auto = true: el bot no las gestiona); skills = lista de habilidades con temporizador, cada una con name, key, duration_s,
+    # requires_dismount, animation_s y enabled (ver config.example.jsonc).
+    "character": {"name": "", "class": "", "potions": {"hp_key": "f2", "mp_key": "f3", "auto": True}, "skills": []},
+    # zone: farm_mode = "metin" o "bichos"; metin_priority = nombres de metin en orden de prioridad (vacia = todos iguales,
+    # gana el mas cercano); bichos = tecla del item que atrae monstruos y cada cuantos segundos usarlo.
+    "zone": {"name": "", "farm_mode": "metin", "metin_priority": [],
+             "bichos": {"lure_key": "f4", "lure_every_s": 60}},
     # Filtro de coordenadas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
     # history: lecturas que se recuerdan para detectar trabas.
     "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0,
@@ -707,6 +719,72 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("navigation.shorten_factors debe ser una lista no vacia de numeros en (0, 1]")
 
 
+SERVER_PICKUP_MODES = ("uno_por_uno", "todo_junto")
+ZONE_FARM_MODES = ("metin", "bichos")
+
+
+def _num_ge0(value: Any, name: str) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"{name} debe ser un numero >= 0")
+
+
+def _check_game_key(spec: Any, name: str, reserved: set[str]) -> None:
+    """Tecla valida del juego que no choca con el panico ni la pausa del bot."""
+    _require_text(spec, name)
+    _check_key_spec(spec, name)
+    if reserved & set(parse_keys(spec)):
+        raise ConfigError(f"{name} ({spec!r}) usa la tecla de panico o de pausa")
+
+
+def _validate_profile_sections(cfg: dict) -> None:
+    """Secciones server, character y zone (todavia no las usa el bot)."""
+    safety = cfg.get("safety") or {}
+    reserved = {str(safety.get(k, "")).strip().lower() for k in ("panic_key", "pause_key")}
+    sv = _require_dict(cfg.get("server"), "server")
+    for k in ("name", "captcha_type"):
+        if not isinstance(sv.get(k), str):
+            raise ConfigError(f"server.{k} debe ser un texto")
+    if not sv["captcha_type"].strip():
+        raise ConfigError("server.captcha_type debe ser un texto no vacio (hoy solo existe 'bot_verify_numerico')")
+    if sv.get("pickup_mode") not in SERVER_PICKUP_MODES:
+        raise ConfigError(f"server.pickup_mode invalido {sv.get('pickup_mode')!r} (usa {' o '.join(SERVER_PICKUP_MODES)})")
+    ch = _require_dict(cfg.get("character"), "character")
+    for k in ("name", "class"):
+        if not isinstance(ch.get(k), str):
+            raise ConfigError(f"character.{k} debe ser un texto")
+    po = _require_dict(ch.get("potions"), "character.potions")
+    _check_game_key(po.get("hp_key"), "character.potions.hp_key", reserved)
+    _check_game_key(po.get("mp_key"), "character.potions.mp_key", reserved)
+    if not isinstance(po.get("auto"), bool):
+        raise ConfigError("character.potions.auto debe ser true o false")
+    skills = ch.get("skills")
+    if not isinstance(skills, list):
+        raise ConfigError("character.skills debe ser una lista")
+    for i, sk in enumerate(skills):
+        n = f"character.skills[{i}]"
+        _require_dict(sk, n)
+        _require_text(sk.get("name"), f"{n}.name")
+        _check_game_key(sk.get("key"), f"{n}.key", reserved)
+        for k in ("duration_s", "animation_s"):
+            _num_ge0(sk.get(k), f"{n}.{k}")
+        for k in ("requires_dismount", "enabled"):
+            if not isinstance(sk.get(k), bool):
+                raise ConfigError(f"{n}.{k} debe ser true o false")
+    zn = _require_dict(cfg.get("zone"), "zone")
+    if not isinstance(zn.get("name"), str):
+        raise ConfigError("zone.name debe ser un texto")
+    if zn.get("farm_mode") not in ZONE_FARM_MODES:
+        raise ConfigError(f"zone.farm_mode invalido {zn.get('farm_mode')!r} (usa {' o '.join(ZONE_FARM_MODES)})")
+    prio = zn.get("metin_priority")
+    if not isinstance(prio, list):
+        raise ConfigError("zone.metin_priority debe ser una lista de nombres de metin (vacia = todos iguales)")
+    for n in prio:
+        _require_text(n, "zone.metin_priority[]")
+    bi = _require_dict(zn.get("bichos"), "zone.bichos")
+    _check_game_key(bi.get("lure_key"), "zone.bichos.lure_key", reserved)
+    _num_ge0(bi.get("lure_every_s"), "zone.bichos.lure_every_s")
+
+
 def validate_config(cfg: dict) -> None:
     """Validacion minima; lanza ConfigError."""
     _require_text(cfg.get("window_title"), "window_title")
@@ -750,6 +828,7 @@ def validate_config(cfg: dict) -> None:
     _validate_controls_safety_input(cfg)
     _validate_tracking_navigation(cfg)
     _validate_vision(_require_dict(cfg.get("vision"), "vision"))
+    _validate_profile_sections(cfg)
 
 
 def save_config(cfg: dict, path: str | Path = "config.json") -> None:
@@ -758,14 +837,8 @@ def save_config(cfg: dict, path: str | Path = "config.json") -> None:
                                   encoding="utf-8")
 
 
-def load_config(path: str | Path = "config.json") -> dict:
-    """Lee config.json y lo mezcla sobre DEFAULTS. Si no existe, lo crea."""
-    p = resolve_path(path)
-    if not p.exists():
-        logger.warning("No existe %s: se crea con los valores por defecto", p)
-        cfg = copy.deepcopy(DEFAULTS)
-        save_config(cfg, p)
-        return cfg
+def read_raw_config(p: Path) -> dict:
+    """Lee el JSON de config.json (ya existente) y normaliza las claves obsoletas. Sin mezclar con nada."""
     try:
         data = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
@@ -781,6 +854,10 @@ def load_config(path: str | Path = "config.json") -> dict:
         if isinstance(data.get(sec), dict) and key in data[sec]:
             data[sec].pop(key)
             logger.warning("%s.%s esta obsoleta y se ignora (borrala de %s)", sec, key, p.name)
-    cfg = _merge(DEFAULTS, data)
-    validate_config(cfg)
-    return cfg
+    return data
+
+
+def load_config(path: str | Path = "config.json") -> dict:
+    """Arma la config: DEFAULTS <- perfiles (servidor, personaje, zona) <- config.json. Ver bot/profiles.py::build_config."""
+    from bot.profiles import build_config
+    return build_config(path)

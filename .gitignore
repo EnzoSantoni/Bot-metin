@@ -17,3 +17,6 @@ config.json
 # Capturas del juego (~35 MB; muestran el nombre del personaje y el chat de otros jugadores).
 # Fuera del repo hasta que Enzo decida. Para subirlas: borrar esta línea, `git add samples` y commit.
 samples/
+
+# Copias de seguridad de calibrate.py (config.json.bak, perfiles .bak)
+*.bak

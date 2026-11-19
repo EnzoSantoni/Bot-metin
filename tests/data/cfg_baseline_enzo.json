@@ -1,0 +1,652 @@
+{
+ "alarm": {
+  "beep_ms": 400,
+  "freq": 1000,
+  "max_seconds": 0,
+  "pause_ms": 300
+ },
+ "approach": {
+  "blind_player_radius": 25.0,
+  "blind_screen_px": 160,
+  "far_monsters_n": 2,
+  "far_monsters_px": 200,
+  "ignore_minutes": 10.0,
+  "ignore_radius": 10.0,
+  "label_exclude_down_px": 100,
+  "label_match_px": 100,
+  "lost_cycles": 6,
+  "match_px": 200,
+  "max_seconds": 40.0,
+  "max_tries_per_spot": 3
+ },
+ "attack": {
+  "blocked_s": 4.0,
+  "blocked_window_frac": 0.8,
+  "broken_confirm_cycles": 2,
+  "circle_min_path": 4.0,
+  "circle_ratio": 2.5,
+  "confirm_timeout_s": 6.0,
+  "discard_error_frac": 0.3,
+  "discard_minutes": 10.0,
+  "discard_radius": 8.0,
+  "hp_stall_s": 8.0,
+  "max_reclicks": 3,
+  "max_seconds": 120.0,
+  "max_wrong_selections": 3,
+  "wrong_monsters_min": 1
+ },
+ "captcha_wait": {
+  "clear_confirm": 2,
+  "poll_s": 0.5
+ },
+ "center": {
+  "arrive_dist": 8.0
+ },
+ "controls": {
+  "attack_forward": "space",
+  "buff": "f1",
+  "camera_left": "q",
+  "camera_right": "e",
+  "deselect": "esc",
+  "mount": "ctrl+g",
+  "move_down": "s",
+  "move_left": "a",
+  "move_right": "d",
+  "move_up": "w",
+  "pickup": "z"
+ },
+ "coords_filter": {
+  "accept_after": 3,
+  "consistency_dist": 3.0,
+  "history": 512,
+  "max_dt_s": 0.5,
+  "max_speed": 30.0,
+  "slack": 2.0
+ },
+ "debug": {
+  "dir": "debug",
+  "enabled": true,
+  "explore_every_s": 30.0,
+  "jpeg_quality": 80,
+  "max_images": 400,
+  "max_per_kind": {
+   "bloqueado": 20,
+   "descarte": 40,
+   "destrabe": 60,
+   "equivocada": 20,
+   "estado": 150,
+   "explorar": 40,
+   "ignorada": 20
+  },
+  "reason_memory_s": 60.0
+ },
+ "expected_client_size": [
+  1858,
+  1057
+ ],
+ "explore": {
+  "border_margin": 25.0,
+  "camera_step_s": 0.5,
+  "camera_steps": 12,
+  "leg_s": 10.0,
+  "leg_tiebreak_units": 3.0,
+  "leg_units": 45.0,
+  "max_without_metin_s": 90.0,
+  "min_leg_sep_deg": 60.0,
+  "recent_legs": 3,
+  "visited_keep": 8,
+  "walk_timeout_s": 20.0
+ },
+ "farm_zone": {
+  "outside_tolerance": 30,
+  "polygon": [
+   [
+    439,
+    141
+   ],
+   [
+    753,
+    91
+   ],
+   [
+    702,
+    203
+   ],
+   [
+    436,
+    196
+   ]
+  ]
+ },
+ "input": {
+  "backend": "pydirectinput",
+  "click_jitter_px": 4,
+  "delay_ms": [
+   60,
+   140
+  ],
+  "key_hold_ms": [
+   50,
+   110
+  ],
+  "move_settle_ms": [
+   30,
+   80
+  ]
+ },
+ "log": {
+  "dir": "logs",
+  "file": "bot.log",
+  "level": "INFO"
+ },
+ "loop": {
+  "captcha_full_search_every": 10,
+  "cycle_ms": 150,
+  "hold_chunk_s": 0.5
+ },
+ "navigation": {
+  "angle_step_deg": 15,
+  "arrive_dist": 5.0,
+  "avoid_metin_px": 70,
+  "brake_px": 12,
+  "click_radius_px": [
+   60,
+   120
+  ],
+  "explore_margin": 15.0,
+  "external_rotation_deg": 25.0,
+  "fit_segments": 8,
+  "heading_tolerance_deg": 30.0,
+  "max_angle_deg": 60,
+  "max_ratio_error": 0.35,
+  "max_walk_px": 120,
+  "min_segment_game": 8.0,
+  "min_segment_px": 20,
+  "min_sin": 0.3,
+  "phi_smooth_deg": 10.0,
+  "probe_measure_factor": 1.5,
+  "probe_radius_px": 150,
+  "probe_turn_jitter_deg": 17.0,
+  "relearn_after_rejects": 4,
+  "scale_hint": [
+   0.15,
+   0.4
+  ],
+  "segment_timeout_s": 8.0,
+  "settle_s": 1.0,
+  "shorten_factors": [
+   1.0,
+   0.75,
+   0.5
+  ],
+  "zone_guard_margin": 10.0
+ },
+ "pickup": {
+  "dismount": false,
+  "empty_confirm_cycles": 5,
+  "max_presses": 30,
+  "max_seconds": 20.0,
+  "mount_wait_s": 2.0,
+  "press_interval_ms": 350,
+  "presses_before_click": 3
+ },
+ "safety": {
+  "corner_poll_ms": 50,
+  "corner_px": 5,
+  "countdown_s": 5,
+  "hard_kill_after_s": 2.0,
+  "panic_key": "f12",
+  "pause_key": "f11"
+ },
+ "stuck": {
+  "back_key_s": 0.6,
+  "dir_step_deg": 30.0,
+  "episode_ttl_s": 120.0,
+  "forward_chunk_s": 0.3,
+  "forward_s": 1.0,
+  "look_step_s": 0.8,
+  "look_steps": 4,
+  "max_attempts": 4,
+  "memory_dirs": 5,
+  "min_dir_sep_deg": 60.0,
+  "min_move": 2.0,
+  "monsters_min": 2,
+  "progress_tol": 1.0,
+  "repeat_max": 3,
+  "repeat_window_s": 120.0,
+  "resolve_dist": 10.0,
+  "space_fail_max": 2,
+  "space_s": 2.0,
+  "unstuck_radius_px": 200,
+  "window_s": 3.0
+ },
+ "target_metin_names": [
+  "Metin de Oscuridad",
+  "Metin Negro"
+ ],
+ "vision": {
+  "captcha": {
+   "coarse_min_score": 0.5,
+   "coarse_scale": 0.25,
+   "footer": {
+    "offset": [
+     24,
+     146
+    ],
+    "template": "templates/captcha/pie.png"
+   },
+   "keypad": {
+    "offset": [
+     9,
+     49
+    ],
+    "template": "templates/captcha/teclado.png"
+   },
+   "min_score": 0.8,
+   "refine_margin": 4,
+   "search_region": {
+    "anchor": "center-right",
+    "dx": -400,
+    "dy": -180,
+    "h": 374,
+    "w": 400
+   },
+   "size": [
+    152,
+    194
+   ]
+  },
+  "coords": {
+   "line_h": [
+    9,
+    12
+   ],
+   "line_w": [
+    20,
+    90
+   ],
+   "min_score": 0.9,
+   "range": [
+    0,
+    4000
+   ],
+   "search": {
+    "anchor": "top-right",
+    "dx": -200,
+    "dy": 140,
+    "h": 110,
+    "w": 200
+   }
+  },
+  "death": {
+   "city_template": "templates/death/ciudad.png",
+   "coarse_min_score": 0.5,
+   "coarse_scale": 0.5,
+   "here_template": "templates/death/aqui.png",
+   "min_score": 0.8,
+   "refine_margin": 4,
+   "search": {
+    "h": 320,
+    "w": 420
+   }
+  },
+  "exclusion_zones": [
+   {
+    "anchor": "bottom-center",
+    "dx": -340,
+    "dy": -190,
+    "h": 190,
+    "name": "chat",
+    "w": 640
+   },
+   {
+    "anchor": "bottom-center",
+    "dx": 265,
+    "dy": -200,
+    "h": 200,
+    "name": "exp_log",
+    "w": 170
+   },
+   {
+    "anchor": "bottom-left",
+    "dx": 0,
+    "dy": -60,
+    "h": 60,
+    "name": "bottom_bar",
+    "w": 4000
+   },
+   {
+    "anchor": "top-left",
+    "dx": 0,
+    "dy": 0,
+    "h": 130,
+    "name": "buffs",
+    "w": 235
+   },
+   {
+    "anchor": "center-left",
+    "dx": 0,
+    "dy": -260,
+    "h": 170,
+    "name": "quests",
+    "w": 112
+   },
+   {
+    "anchor": "top-right",
+    "dx": -420,
+    "dy": 0,
+    "h": 240,
+    "name": "top_right",
+    "w": 420
+   },
+   {
+    "anchor": "top-center",
+    "dx": -400,
+    "dy": 0,
+    "h": 80,
+    "name": "top_center",
+    "w": 800
+   }
+  ],
+  "far_metin": {
+   "alt_bright_hi": [
+    24,
+    190,
+    255
+   ],
+   "alt_bright_lo": [
+    3,
+    30,
+    200
+   ],
+   "alt_bright_max_ratio": 1.6,
+   "alt_enabled": true,
+   "alt_min_bright_frac": 0.08,
+   "alt_min_bright_px": 100,
+   "alt_min_ground_frac": 0.3,
+   "center_y_frac": 0.85,
+   "core_h_max": 9,
+   "core_ref": 300,
+   "core_s": [
+    100,
+    205
+   ],
+   "core_v_min": 150,
+   "exclude_overlap": 0.3,
+   "group_kernel": [
+    9,
+    9
+   ],
+   "max_h": 160,
+   "max_w": 140,
+   "max_zone_overlap": 0.5,
+   "min_core_pixels": 60,
+   "min_h": 8,
+   "min_smoke_pixels": 40,
+   "min_w": 8,
+   "smoke_height_frac": 1.2,
+   "smoke_hsv_hi": [
+    45,
+    80,
+    230
+   ],
+   "smoke_hsv_lo": [
+    14,
+    8,
+    105
+   ],
+   "smoke_overlap_frac": 0.15,
+   "smoke_ref": 150,
+   "smoke_side_frac": 0.5,
+   "smoke_side_px": 8
+  },
+  "glyphs": {
+   "coords": {
+    "color": [
+     217,
+     217,
+     217
+    ],
+    "color_tol": 12,
+    "dir": "templates/glyphs/coords",
+    "max_gap": 3,
+    "max_gap_after_comma": 7,
+    "min_margin": 0.15,
+    "min_score": 0.9
+   },
+   "panel": {
+    "color": [
+     199,
+     199,
+     199
+    ],
+    "color_tol": 12,
+    "dir": "templates/glyphs/panel",
+    "max_gap": 3,
+    "max_gap_after_comma": 7,
+    "min_margin": 0.15,
+    "min_score": 0.9
+   }
+  },
+  "items": {
+   "border_color": [
+    0,
+    0,
+    0
+   ],
+   "border_min_frac": 0.7,
+   "box_dy": [
+    14,
+    30
+   ],
+   "box_dy_allowed": [
+    14,
+    30
+   ],
+   "box_dy_tol": 1,
+   "box_w": [
+    24,
+    260
+   ],
+   "edge_x_tol": 6,
+   "max_edges": 1500,
+   "max_zone_overlap": 0.5,
+   "min_edge_run": 21,
+   "min_white_px": 15,
+   "owner_min_score": 0.95,
+   "owner_size_tol": 2,
+   "owner_template": "templates/items/owner.png",
+   "text_rows": 13,
+   "white_min": 250,
+   "yang_min_score": 0.85,
+   "yang_template": "templates/items/yang.png",
+   "yellow_hi": [
+    30,
+    255,
+    255
+   ],
+   "yellow_lo": [
+    0,
+    230,
+    230
+   ],
+   "yellow_noise_px": 3
+  },
+  "metin": {
+   "click_dx": 0,
+   "click_dy": 65,
+   "group_kernel": [
+    9,
+    3
+   ],
+   "hsv_hi": [
+    17,
+    255,
+    255
+   ],
+   "hsv_lo": [
+    13,
+    220,
+    220
+   ],
+   "label_templates_dir": "templates/labels",
+   "max_text_h": 16,
+   "max_text_w": 160,
+   "max_zone_overlap": 0.5,
+   "min_margin": 0.1,
+   "min_pixels": 60,
+   "min_score": 0.85,
+   "min_text_h": 6,
+   "min_text_w": 40
+  },
+  "monsters": {
+   "color_tol": 6,
+   "green_bgr": [
+    51,
+    255,
+    152
+   ],
+   "green_kernel": [
+    9,
+    1
+   ],
+   "max_gap_px": 10,
+   "max_green_h": 16,
+   "max_green_w": 40,
+   "max_label_w": 260,
+   "max_zone_overlap": 0.5,
+   "min_green_h": 6,
+   "min_green_pixels": 10,
+   "min_green_w": 12,
+   "min_red_pixels": 15,
+   "near_radius_px": 120,
+   "probe_w": 30,
+   "red_bgr": [
+    9,
+    22,
+    235
+   ],
+   "word_gap_px": 8
+  },
+  "panel": {
+   "bar": {
+    "band": [
+     17,
+     24
+    ],
+    "cap_diff": 25,
+    "gold_gap": 4,
+    "red_max_gb": 110,
+    "red_min_r": 110,
+    "red_min_rg": 40,
+    "search_x": [
+     -200,
+     -24
+    ],
+    "width": 108,
+    "width_tol": 3
+   },
+   "frame_color": [
+    85,
+    85,
+    85
+   ],
+   "frame_edge_merge": 1,
+   "frame_h": [
+    30,
+    90
+   ],
+   "frame_min_w": 150,
+   "frame_x_tol": 2,
+   "hp_ratio_tol": 0.03,
+   "name_color": [
+    199,
+    199,
+    199
+   ],
+   "name_color_tol": 12,
+   "name_min_margin": 0.1,
+   "name_min_score": 0.85,
+   "name_region": {
+    "dy": 14,
+    "h": 16,
+    "x_from_left": 8,
+    "x_to_right": -176
+   },
+   "name_templates_dir": "templates/panel_names",
+   "number_region": {
+    "dx": -165,
+    "dy": 4,
+    "h": 13,
+    "w": 115
+   },
+   "search": {
+    "anchor": "top-center",
+    "dx": -450,
+    "dy": 0,
+    "h": 110,
+    "w": 900
+   }
+  },
+  "player_offset": [
+   0,
+   20
+  ],
+  "ui_windows": {
+   "coarse_min_score": 0.5,
+   "coarse_scale": 0.25,
+   "min_score": 0.8,
+   "refine_margin": 4,
+   "safety_margin": 30,
+   "windows": [
+    {
+     "anchor2": {
+      "offset": [
+       0,
+       268
+      ],
+      "template": "templates/ui/mapa_grande_base.png"
+     },
+     "name": "mapa_grande",
+     "size": [
+      214,
+      289
+     ],
+     "template": "templates/ui/mapa_grande.png"
+    },
+    {
+     "alt": [
+      {
+       "size": [
+        165,
+        575
+       ],
+       "template": "templates/ui/inventario_compacto.png"
+      }
+     ],
+     "anchor2": {
+      "offset": [
+       0,
+       539
+      ],
+      "template": "templates/ui/inventario_base.png"
+     },
+     "name": "inventario",
+     "size": [
+      295,
+      575
+     ],
+     "template": "templates/ui/inventario.png"
+    }
+   ]
+  }
+ },
+ "volver": {
+  "max_seconds": 120.0
+ },
+ "window": {
+  "settle_ms": 500,
+  "unobstructed_poll_ms": 50
+ },
+ "window_title": "Guabina"
+}

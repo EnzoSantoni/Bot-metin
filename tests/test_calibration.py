@@ -1,5 +1,6 @@
 """Tests de calibrate.py / bot/calibration.py. Todo simulado: ventana falsa, teclado falso, input() parcheado."""
 import json
+import shutil
 from types import SimpleNamespace
 
 import cv2
@@ -8,12 +9,14 @@ import pytest
 
 import calibrate
 from bot import calibration as cal
-from bot.config import load_config
+from bot.config import PROJECT_ROOT, load_config
+from bot.profiles import build_config
 from bot.geometry import Rect
 from bot.input.fake import FakeWindow
 from bot.vision.metin import find_label_candidates, find_metins
 from bot.vision.screen_mask import build_screen_mask
 
+PROFILES_DIR = PROJECT_ROOT / "profiles"
 CLIENT = Rect(8, 31, 1858, 1057)
 ORIGIN = (8, 31)   # esquina del cliente en pantalla
 
@@ -53,10 +56,18 @@ class ScriptedWindow(FakeWindow):
 
 @pytest.fixture
 def tmp_cfg(tmp_path):
-    """config.json temporal con una clave extra y plantillas/debug en carpetas temporales."""
+    """config.json temporal con una clave extra y plantillas/debug en carpetas temporales.
+
+    Define los valores que calibrate.py guarda (ventana, zona, velocidad, metin): config.json los pisa, asi que se guardan
+    ahi como antes de los perfiles. El destino en los perfiles se prueba en test_profiles.py.
+    """
     path = tmp_path / "config.json"
     path.write_text(json.dumps({
         "window_title": "Guabina",
+        "expected_client_size": [1858, 1057],
+        "target_metin_names": ["Metin de Oscuridad", "Metin Negro"],
+        "farm_zone": {"polygon": [[439, 141], [753, 91], [702, 203], [436, 196]], "outside_tolerance": 30},
+        "coords_filter": {"max_speed": 30.0},
         "mi_clave_extra": {"a": 1},
         "debug": {"dir": str(tmp_path / "debug")},
         "vision": {"metin": {"label_templates_dir": str(tmp_path / "labels")},
@@ -73,7 +84,11 @@ def make_session(tmp_cfg, images=(), keys=(), answers=(), yes=False, **kw):
         out.append(prompt)
         return answers.pop(0) if answers else "n"
 
-    s = cal.Session(cfg=load_config(tmp_cfg), config_path=str(tmp_cfg), yes=yes,
+    root = tmp_cfg.parent / "profiles"   # copia de los perfiles reales: ningun test escribe en profiles/ del proyecto
+    if not root.exists():
+        shutil.copytree(PROFILES_DIR, root)
+    s = cal.Session(cfg=build_config(tmp_cfg, profiles_root_dir=root, warn=False), config_path=str(tmp_cfg), yes=yes,
+                    profiles_root=root,
                     window=ScriptedWindow(list(images) or [np.zeros((10, 10, 3), np.uint8)]),
                     keyboard=FakeKeyboard(keys), say=out.append, ask=ask, **kw)
     s.out = out
@@ -101,7 +116,7 @@ def test_zona_arma_poligono_y_guarda_con_bak(tmp_cfg, imgs):
     saved = raw(tmp_cfg)
     assert saved["farm_zone"]["polygon"] == QUAD
     assert saved["mi_clave_extra"] == {"a": 1} and saved["window_title"] == "Guabina"
-    assert "outside_tolerance" not in saved.get("farm_zone", {})   # sin --tolerancia no se toca
+    assert saved["farm_zone"]["outside_tolerance"] == 30   # sin --tolerancia no se toca (queda el de antes)
     assert tmp_cfg.with_name("config.json.bak").read_text(encoding="utf-8") == original
     assert any("Vértice 3: (688, 194)" in line for line in s.out)
     assert (tmp_cfg.parent / "debug" / "calibrate_zona.png").exists()
@@ -287,7 +302,7 @@ def test_metin_rechazar_etiqueta_no_guarda(tmp_cfg, load_sample):
                      cursor_fn=lambda: (cx + ORIGIN[0], cy + ORIGIN[1]))
     assert cal.cmd_metin(s, "Metin de Prueba") == 1
     assert not (tmp_cfg.parent / "labels").exists()
-    assert raw(tmp_cfg).get("target_metin_names") is None
+    assert raw(tmp_cfg)["target_metin_names"] == ["Metin de Oscuridad", "Metin Negro"]
 
 
 def test_metin_sin_etiqueta_visible_sigue_esperando(tmp_cfg, load_sample):
@@ -299,7 +314,7 @@ def test_metin_sin_etiqueta_visible_sigue_esperando(tmp_cfg, load_sample):
     assert any("No se vio ninguna etiqueta" in line for line in s.out)
     assert (tmp_cfg.parent / "labels" / "metin_de_prueba.png").exists()
     assert not (tmp_cfg.parent / "panel_names").exists()
-    assert raw(tmp_cfg).get("target_metin_names") is None
+    assert raw(tmp_cfg)["target_metin_names"] == ["Metin de Oscuridad", "Metin Negro"]
 
 
 def test_metin_cancelado_con_f12(tmp_cfg, load_sample):
@@ -316,7 +331,7 @@ def test_metin_nombre_ya_en_la_lista_no_la_toca(tmp_cfg, load_sample):
     s = make_session(tmp_cfg, [img], keys=["f9", "f10"], answers=["s"], yes=True,
                      cursor_fn=lambda: (cx + ORIGIN[0], cy + ORIGIN[1]))
     assert cal.cmd_metin(s, "Metin Negro") == 0
-    assert raw(tmp_cfg).get("target_metin_names") is None
+    assert raw(tmp_cfg)["target_metin_names"] == ["Metin de Oscuridad", "Metin Negro"]
     assert (tmp_cfg.parent / "labels" / "metin_negro.png").exists()
 
 

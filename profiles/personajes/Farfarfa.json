@@ -1,0 +1,23 @@
+{
+  "character": {
+    "name": "Farfarfa",
+    "class": "",
+    "potions": {
+      "hp_key": "f2",
+      "mp_key": "f3",
+      "auto": true
+    },
+    "skills": []
+  },
+  "vision": {
+    "items": {
+      "owner_template": "templates/items/owner.png"
+    }
+  },
+  "pickup": {
+    "dismount": false
+  },
+  "coords_filter": {
+    "max_speed": 30.0
+  }
+}

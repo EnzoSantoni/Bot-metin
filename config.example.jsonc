@@ -462,5 +462,46 @@
       "number_region": {"dx": -165, "w": 115, "dy": 4, "h": 13},
       "hp_ratio_tol": 0.03           // diferencia maxima entre actual/maxima y la barra para validar el numero
     }
-  }
+  },
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // PERFILES (bot/profiles.py). El cfg se arma: valores por defecto <- perfil de servidor <- perfil de personaje <-
+  // perfil de zona <- este config.json (config.json GANA). Los perfiles son archivos JSON en profiles/:
+  //   profiles/servidores/<nombre>.json   window_title, expected_client_size, controls, vision.* (menos owner_template), server
+  //   profiles/personajes/<nombre>.json   character, vision.items.owner_template, pickup.dismount, coords_filter.max_speed
+  //   profiles/zonas/<nombre>.json        farm_zone, target_metin_names, zone
+  // Un perfil con una clave de otra categoria da error. Si este config.json define un valor que tambien esta en el
+  // perfil elegido, el log avisa "config.json pisa farm_zone del perfil de zona '...'": borralo de aca o corre
+  // `calibrate.py perfiles migrar` para pasarlo al perfil.
+  //
+  // Seleccion (opcional; sin este bloque se usan estos tres). Tambien: --servidor / --personaje / --zona.
+  "profiles": {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Guabina - Oscuridad y Negro"},
+
+  // Las tres secciones siguientes viven en los perfiles (aca se muestran con sus valores por defecto). Hoy el bot NO
+  // las usa: son el lugar previsto de las fases 11 (habilidades), 12 (prioridad de metin) y 13 (modo bichos).
+  //
+  // server (perfil de servidor)
+  //  pickup_mode: "uno_por_uno" (cada Z junta un objeto, como en Guabina) | "todo_junto" (una Z junta todo).
+  //  captcha_type: tipo de captcha del servidor; hoy solo existe "bot_verify_numerico".
+  "server": {"name": "Guabina", "pickup_mode": "uno_por_uno", "captcha_type": "bot_verify_numerico"},
+
+  // character (perfil de personaje)
+  //  class: texto libre ("guerrero", "sura", ...), "" si no se usa.
+  //  potions: teclas de vida y mana; auto = true si el servidor las toma solas (en Guabina: el bot no las gestiona).
+  //  skills: lista de habilidades con temporizador (vacia por defecto). Cada una necesita TODOS estos campos:
+  //    name, key (tecla valida, no la de panico/pausa), duration_s (cuanto dura el efecto), requires_dismount (hay que
+  //    bajarse del caballo), animation_s (cuanto dura la animacion), enabled.
+  //  Ejemplos (no se aplican, estan comentados):
+  //    guerrero: {"name": "Aura de Espada", "key": "f1", "duration_s": 60, "requires_dismount": true, "animation_s": 1.5, "enabled": true}
+  //    sura:     {"name": "Espada Espejo", "key": "f1", "duration_s": 60, "requires_dismount": true, "animation_s": 1.5, "enabled": true}
+  //    defensiva: {"name": "Defensiva", "key": "4", "duration_s": 120, "requires_dismount": false, "animation_s": 1.0, "enabled": true}
+  //  (Las duraciones de los ejemplos son orientativas: medilas en el juego.)
+  "character": {"name": "Farfarfa", "class": "", "potions": {"hp_key": "f2", "mp_key": "f3", "auto": true}, "skills": []},
+
+  // zone (perfil de zona)
+  //  farm_mode: "metin" | "bichos".
+  //  metin_priority: nombres de metin en orden de prioridad; vacia = todos iguales (gana el mas cercano).
+  //  bichos: lure_key = tecla del item que atrae monstruos; lure_every_s = cada cuantos segundos usarlo.
+  "zone": {"name": "Guabina - Oscuridad y Negro", "farm_mode": "metin", "metin_priority": [],
+           "bichos": {"lure_key": "f4", "lure_every_s": 60}}
 }

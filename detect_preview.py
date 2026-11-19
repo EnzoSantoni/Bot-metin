@@ -9,9 +9,10 @@ import time
 
 import cv2
 
-from bot.config import load_config, resolve_path
+from bot.config import resolve_path
 from bot.debug_draw import annotate, draw_alerts, draw_items, draw_panel_coords, items_line, panel_line  # noqa: F401
 from bot.log import setup_logging
+from bot.profiles import build_config
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
 from bot.vision.death import find_death
@@ -25,10 +26,18 @@ def main() -> None:
     ap.add_argument("--image", default=None, help="PNG a analizar; sin esto captura la ventana del juego")
     ap.add_argument("--out", default=None, help="PNG de salida (default: <debug.dir>/detect_preview.png)")
     ap.add_argument("--config", default="config.json")
+    ap.add_argument("--servidor", default=None, help="perfil de servidor")
+    ap.add_argument("--personaje", default=None, help="perfil de personaje")
+    ap.add_argument("--zona", default=None, help="perfil de zona")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = build_config(args.config, args.servidor, args.personaje, args.zona, warn=False)
     setup_logging(cfg)
+    prof = cfg["_profiles"]
+    if prof["servidor"]:
+        print(f"Perfiles: servidor={prof['servidor']}, personaje={prof['personaje']}, zona={prof['zona']}")
+    for o in prof["overrides"]:
+        print(f"Aviso: {o['message']}")
     if args.image:
         img = cv2.imread(str(resolve_path(args.image)), cv2.IMREAD_COLOR)
         if img is None:

@@ -1,0 +1,41 @@
+{
+  "window_title": "Guabina",
+  "expected_client_size": [
+    1858,
+    1057
+  ],
+  "log": {
+    "level": "INFO",
+    "dir": "logs",
+    "file": "bot.log"
+  },
+  "debug": {
+    "enabled": true,
+    "dir": "debug"
+  },
+  "target_metin_names": [
+    "Metin de Oscuridad",
+    "Metin Negro"
+  ],
+  "farm_zone": {
+    "polygon": [
+      [
+        439,
+        141
+      ],
+      [
+        753,
+        91
+      ],
+      [
+        702,
+        203
+      ],
+      [
+        436,
+        196
+      ]
+    ],
+    "outside_tolerance": 30
+  }
+}

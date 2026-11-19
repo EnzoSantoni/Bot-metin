@@ -74,7 +74,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 - [x] 6. Máquina de estados, zona de farmeo y destrabe. *Falta la prueba de Enzo en el juego.*
 - [x] 7. `calibrate.py`, modo debug y README. *Falta la prueba de Enzo de `calibrate.py` en el juego.*
 - [ ] 8. Opcional: buff F1 y auto-revivir. *(Quedan absorbidas por la 11 (habilidades con temporizador) y la 14 (revivir automáticamente).)*
-- [ ] 9. **Perfiles:** separar la configuración en perfil de servidor, de personaje y de mapa/zona, compatible con el `config.json` actual. Por defecto: servidor "Guabina", personaje "Farfarfa" y la zona actual, para que todo siga igual. Reorganiza la configuración, no la lógica del bot.
+- [x] 9. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* **Perfiles:** separar la configuración en perfil de servidor, de personaje y de mapa/zona, compatible con el `config.json` actual. Por defecto: servidor "Guabina", personaje "Farfarfa" y la zona actual, para que todo siga igual. Reorganiza la configuración, no la lógica del bot.
 - [ ] 10. **Interfaz base** (tkinter, pensada para el segundo monitor y sin minimizarse):
   - Elegir perfiles; iniciar, pausar y detener; tiempo máximo; interruptor de debug.
   - Estadísticas en vivo: estado, metin rotos, objetos, captchas, destrabes y tiempo.
@@ -131,6 +131,26 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Precedencia, validación por tipo, perfil faltante, selección por CLI, migración ida y vuelta (migrar y reconstruir da lo mismo) y que `calibrate` guarde en el perfil correcto.
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
+
+## Fase 9 — qué quedó (rama `desarrollo`)
+- **`bot/profiles.py`:**
+  - `KINDS`, `list_profiles`, `load_profile`, `save_profile` (valida categorías y hace `.bak`) y `profile_path` (rechaza nombres inválidos).
+  - `build_config(config_path, servidor, personaje, zona, warn=True)` deja `cfg["_profiles"] = {servidor, personaje, zona, overrides}`.
+  - `RULES` es la lista blanca de categorías. También `plan_migration` y `apply_migration`.
+- **Perfiles por defecto:**
+  - `profiles/servidores/Guabina.json`: ventana, tamaño, `controls` y `server` (`pickup_mode` "uno_por_uno", `captcha_type` "bot_verify_numerico").
+  - `profiles/personajes/Farfarfa.json`: `character` (nombre, clase vacía, pociones F2/F3 automáticas, `skills` vacío), `owner_template`, `pickup.dismount` y `coords_filter.max_speed`.
+  - `profiles/zonas/Guabina - Oscuridad y Negro.json`: `farm_zone`, `target_metin_names` y `zone` (`farm_mode` "metin", `metin_priority` vacía, `bichos` F4 cada 60 s).
+- **Secciones nuevas** `server`, `character` y `zone` en DEFAULTS, con validación. Por ahora solo son el lugar previsto: el bot no las usa (Fases 11–13).
+- **Armado:** DEFAULTS ← servidor ← personaje ← zona ← `config.json`, y gana `config.json`. Cada valor pisado se avisa en el log al arrancar. Con el `config.json` de Enzo hay 4 avisos, todos "con el mismo valor": `window_title`, `expected_client_size`, `target_metin_names` y `farm_zone`.
+- **Selección:** bloque `profiles` en `config.json`, o `--servidor` / `--personaje` / `--zona` en `run_bot.py`, `detect_preview.py` y `calibrate.py`. `run_bot.py` loguea los perfiles y los avisos en `bot.log`.
+- **`calibrate.py`:**
+  - `perfiles listar`.
+  - `perfiles migrar`: pasa los valores a los perfiles y los saca de `config.json`, con `.bak`.
+  - `personaje "Nombre" [--clase]`: crea el perfil y la plantilla del nombre amarillo (F9), más la plantilla del panel (opcional, segundo F9).
+  - Los subcomandos existentes guardan en el perfil que corresponde, salvo que `config.json` pise ese valor.
+- **Test de igualdad:** con el `config.json` de Enzo, el `cfg` es **idéntico** al de `main`, clave por clave, salvo `_profiles` y las tres secciones nuevas. Baselines en `tests/data/`. `tests/data/config_enzo.json` es una copia del `config.json` de Enzo (sin datos sensibles).
+- 1013 tests pasan (80 nuevos). `.gitignore` también ignora `*.bak`.
 
 ## Fase 1 — qué quedó
 - `.venv` con Python 3.14.2. `requirements.txt`: mss 10.2.0, numpy 2.5.5, opencv-python 5.1.0.95, pywin32 312, pydirectinput 1.0.4, keyboard 0.13.5, pytest 9.2.0.
@@ -452,6 +472,16 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
 - Datos nuevos del juego: en el mapa también hay **"Metin Negro"** (a ignorar), y a veces están abiertos el **inventario** y el **"Mapa grande"**: el bot tiene que ignorarlos en la detección y no clickear encima.
 
 ## A probar por Enzo
+### Rama `desarrollo` (después de probar `main`): Fase 9, perfiles
+Se prueba desde la carpeta **`D:\proyectos\metin-bot-desarrollo`**, con el Python de la carpeta principal: abrí la terminal en `D:\proyectos\metin-bot-desarrollo` y usá `D:\proyectos\metin-bot\.venv\Scripts\python.exe` en lugar de `.venv\Scripts\python.exe`. Esta carpeta tiene su propia copia de `config.json`: lo que hagas acá no afecta a `main`.
+1. `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py perfiles listar`: muestra los 3 perfiles activos y los 4 avisos de `config.json` pisando valores (con el mismo valor).
+2. `D:\proyectos\metin-bot\.venv\Scripts\python.exe run_bot.py --observar --max-minutos 1`: en `logs\bot.log` tiene que aparecer "Perfiles: servidor=Guabina, personaje=Farfarfa, zona=Guabina - Oscuridad y Negro" y los avisos. El bot tiene que comportarse igual que en `main`.
+3. `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py perfiles migrar`: revisá el plan que muestra, confirmá con `s` y verificá:
+   - que `config.json` quede sin `window_title`, `farm_zone`, etc., y con el bloque `profiles`;
+   - que haya copias `.bak`;
+   - que `perfiles listar` ya no muestre avisos.
+4. (Opcional, en el juego) `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py personaje "Prueba"`: con un objeto tuyo en el piso, poné el mouse sobre el "Farfarfa's" amarillo y apretá F9. Mirá el recorte en `debug\` y cancelá con F12 (o guardalo y después borrá `profiles\personajes\Prueba.json`).
+
 ### GitHub: decidir qué hacer con `samples/`
 El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.
 - **Para subirlas**, desde `D:\proyectos\metin-bot`:
