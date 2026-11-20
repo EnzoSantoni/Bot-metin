@@ -20,6 +20,7 @@ from typing import Any, Callable
 import numpy as np
 
 from bot.capture import WindowMinimizedError, WindowNotFoundError
+from bot.bichos import FIGHT, LURE, PICKUP, WALK, BichosCfg, BichosView, decide
 from bot.config import resolve_path
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
@@ -47,6 +48,7 @@ Transition = tuple["State", str] | None   # None = seguir en el mismo estado
 
 class State(Enum):
     BUSCAR = "BUSCAR"
+    BICHOS = "BICHOS"
     ATACAR = "ATACAR"
     RECOGER = "RECOGER"
     EXPLORAR = "EXPLORAR"
@@ -62,6 +64,7 @@ class State(Enum):
 # Partes de la percepcion que necesita cada estado (ventanas, mascara, captcha y muerte se calculan siempre).
 PARTS = {
     State.BUSCAR: {"metins", "coords", "far", "monsters"}, State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
+    State.BICHOS: {"coords", "monsters", "items"},
     State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters"},
     State.VOLVER: {"coords"}, State.CENTRO: {"coords"},   # volver al centro se guia solo por coordenadas
@@ -74,7 +77,7 @@ SCREEN_DIRS = {"up": (0.0, -1.0), "down": (0.0, 1.0)}   # direccion de pantalla 
 HOLD_EPS = 1e-9
 END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER sin lograrlo)
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
-WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
+WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE, State.BICHOS)   # DESTRABAR vuelve a ellos
 LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
 SCREEN_COMBO_VEC = {"W": (0.0, -1.0), "W+D": (1.0, -1.0), "D": (1.0, 0.0), "S+D": (1.0, 1.0), "S": (0.0, 1.0),
                     "S+A": (-1.0, 1.0), "A": (-1.0, 0.0), "W+A": (-1.0, -1.0)}   # direccion de pantalla de cada combinacion
@@ -104,6 +107,9 @@ class BotStats:
     skills_cast: int = 0         # habilidades lanzadas
     items_by_type: dict[str, int] = field(default_factory=dict)    # id del catalogo (o UNKNOWN_ID) -> objetos recogidos
     metins_by_type: dict[str, int] = field(default_factory=dict)   # slug del tipo confirmado en el panel -> metin rotos
+    lures: int = 0               # senuelos usados (modo bichos)
+    fight_s: float = 0.0         # segundos peleando con ESPACIO (modo bichos)
+    farm_mode: str = "metin"     # "metin" | "bichos"
     elapsed_s: float = 0.0
     time_by_state: dict[str, float] = field(default_factory=dict)
     end_reason: str = ""
@@ -111,9 +117,10 @@ class BotStats:
     def summary(self) -> str:
         per = ", ".join(f"{k} {v:.0f}s" for k, v in self.time_by_state.items() if v >= 0.5) or "-"
         skills = f" | habilidades lanzadas: {self.skills_cast}" if self.skills_cast > 0 else ""
+        bichos = (f" | senuelos: {self.lures} | peleando: {self.fight_s / 60:.1f} min" if self.farm_mode == "bichos" else "")
         return (f"Metin rotos: {self.metins} | objetos recogidos (estimado): {self.items} | captchas: {self.captchas} | "
                 f"destrabes: {self.unstucks} ({self.episodes} episodios, {self.episodes_resolved} resueltos, "
-                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
+                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills}{bichos} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
                 f"motivo de fin: {self.end_reason or '-'}")
 
 
@@ -275,8 +282,9 @@ class Bot:
         self.ex, self.cw, self.stuck, self.nav = cfg["explore"], cfg["captcha_wait"], cfg["stuck"], cfg["navigation"]
         self.vlv, self.apr, self.ctr = cfg["volver"], cfg["approach"], cfg["center"]
         self._stuck_segments = max(1, math.ceil(self.stuck["window_s"] / self.nav["settle_s"]))
-        self.state = State.BUSCAR
-        self.stats = BotStats()
+        self.bichos = BichosCfg.from_config(cfg)
+        self.state = self._home
+        self.stats = BotStats(farm_mode=self.farm_mode)
         self.debug = DebugRecorder(cfg)
         self.last_perception: Perception | None = None
         self.discarded: list[_Spot] = []   # metin descartados
@@ -325,8 +333,26 @@ class Bot:
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
         self._turn_frame = -10**9          # valor de `_frames` en ese giro (el primero no espera)
         self._new_sweep()
+        t0 = self.clock()
+        self._bi_lure_next = -math.inf     # el senuelo esta vencido al empezar
+        self._bi_calm_since = t0           # desde cuando no hay monstruos cerca
+        self._bi_walk_t = t0               # ultimo fin de caminata (o inicio): el reloj de `idle_s`
+        self._bi_last_pickup = t0          # ultima recogida (o inicio)
+        self._bi_blocked_until = -math.inf   # no recoger hasta aca (la ultima recogida no junto nada)
+        self._bi_items0 = 0
+        self._bi_target: Xy | None = None    # destino de la caminata corta sin monstruos
+        self._bi_walk_start = 0.0
 
     # ------------------------------------------------------------------ ciclo
+    @property
+    def farm_mode(self) -> str:
+        return str(self.cfg["zone"]["farm_mode"])
+
+    @property
+    def _home(self) -> State:
+        """Estado al que se vuelve cuando no hay nada especial: BICHOS en modo bichos, BUSCAR en modo metin."""
+        return State.BICHOS if self.farm_mode == "bichos" else State.BUSCAR
+
     @property
     def finished(self) -> bool:
         return self.state is State.FIN
@@ -445,16 +471,21 @@ class Bot:
             self._vl_since = None
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
+        if old is State.RECOGER and self.farm_mode == "bichos":
+            self._bi_after_pickup()
         self._walk = None
         if new not in WALKING_STATES and new is not State.DESTRABAR:
             self._leg = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
         if new not in (State.ACERCARSE, State.DESTRABAR):
             self._apr = None
+        if old is State.BICHOS:
+            self._bi_target = None
         if new is State.BUSCAR:
             self._atk = None
         elif new is State.RECOGER:
             self._close_episode("metin roto")
             self._start_pickup()
+            self._bi_items0 = self.stats.items
         elif new is State.EXPLORAR:
             self._new_sweep()
         elif new is State.ACERCARSE:
@@ -1133,6 +1164,8 @@ class Bot:
         ultimo clic. Nunca en los demas estados ni a mitad de una caminata."""
         if self.state is State.BUSCAR:
             return True
+        if self.state is State.BICHOS:   # entre ESPACIOS y sin caminata en curso (cada accion de BICHOS es sincronica)
+            return self._walk is None
         if self.state is State.EXPLORAR:
             return self._walk is None
         a = self._atk
@@ -1275,8 +1308,8 @@ class Bot:
     def _do_recoger(self, p: Perception, t: float) -> Transition:
         k = self._pk
         if k is None:
-            return State.BUSCAR, "sin recogida en curso"
-        back = State.VOLVER if self.pending_return else State.BUSCAR
+            return self._home, "sin recogida en curso"
+        back = State.VOLVER if self.pending_return else self._home
         valid = self._valid_items(p)
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
@@ -1572,7 +1605,7 @@ class Bot:
         pos = self.tracker.position
         if pos is None:
             self.pending_return = False
-            return State.BUSCAR, "sin coordenadas, no se puede volver"
+            return self._home, "sin coordenadas, no se puede volver"
         target = self.navigator.return_target(pos)
         self._dest = target
         if kind is State.VOLVER:
@@ -1610,7 +1643,9 @@ class Bot:
         self._close_episode("llego al destino")
         self._no_target_t = t   # el reloj de "sin objetivo" arranca de cero desde que se llega
         if kind is State.VOLVER:
-            return State.BUSCAR, "de vuelta en la zona"
+            return self._home, "de vuelta en la zona"
+        if self.farm_mode == "bichos":
+            return State.BICHOS, "en el centro"
         return State.EXPLORAR, "en el centro: barrido y exploracion"
 
     # ------------------------------------------------------------------ caminata
@@ -1927,7 +1962,7 @@ class Bot:
         return State.DESTRABAR, why
 
     def _start_unstuck(self, old: State, why: str) -> None:
-        back = old if old in WALKING_STATES else State.BUSCAR
+        back = old if old in WALKING_STATES else self._home
         self._us = _Unstuck(back=back, why=why)
         self._zero_streak = 0
         self.stats.unstucks += 1
@@ -1941,7 +1976,7 @@ class Bot:
     def _do_destrabar(self, p: Perception, t: float) -> Transition:
         u, ep = self._us, self._ep
         if u is None or ep is None:
-            return State.BUSCAR, "sin episodio de traba"
+            return self._home, "sin episodio de traba"
         if u.phase == "start":
             return self._unstuck_start(p, t, u, ep)
         if u.phase == "look":
@@ -2219,6 +2254,111 @@ class Bot:
         return self._hold_chunked(lambda s: self.gi.move_key(direction, s), seconds,
                                   float(self.stuck["forward_chunk_s"]), guard)
 
+    # ------------------------------------------------------------------ BICHOS
+    def _bi_view(self, p: Perception, t: float) -> BichosView:
+        """Foto del momento para `decide` (actualiza el reloj de "sin monstruos")."""
+        c = self.bichos
+        if p.monsters_near >= c.min_monsters:
+            self._bi_calm_since = t
+            calm = 0.0
+        else:
+            calm = t - self._bi_calm_since
+        return BichosView(p.monsters_near, len(self._valid_items(p)), t >= self._bi_lure_next, calm,
+                          t - max(self._bi_calm_since, self._bi_walk_t), t - self._bi_last_pickup,
+                          t < self._bi_blocked_until)
+
+    def _bi_after_pickup(self) -> None:
+        """Termino una recogida: reloj de recogida y de "sin monstruos" de cero; si no junto nada, no insistir."""
+        now = self.clock()
+        self._bi_last_pickup = self._bi_calm_since = self._bi_walk_t = now
+        if self.stats.items <= self._bi_items0:
+            self._bi_blocked_until = now + self.bichos.pickup_every_s
+            logger.info("Bichos: la recogida no junto nada; no vuelvo a recoger por %.0f s", self.bichos.pickup_every_s)
+
+    def _bi_edge(self, pos: tuple[int, int]) -> float:
+        """Distancia al borde por debajo de la cual se vuelve a la zona: `explore.edge_return_u` (nunca mas de la mitad de la
+        profundidad del centro, para no rebotar en zonas chicas)."""
+        return min(float(self.ex["edge_return_u"]), 0.5 * self.zone.signed_distance(self.navigator.return_target(pos)))
+
+    def _do_bichos(self, p: Perception, t: float) -> Transition:
+        """Una accion por ciclo: volver a la zona, usar el senuelo, pelear con ESPACIO, recoger o caminar a otro lugar."""
+        pos = self.tracker.position
+        if pos is not None:
+            st = self._zone_status()
+            sd = self.zone.signed_distance(pos)
+            if st is not ZoneStatus.INSIDE or sd < self._bi_edge(pos):
+                self._bi_cut_walk(p)
+                self._vl_margin = max(self._bi_edge(pos), float(self.nav["explore_margin"]))
+                return State.VOLVER, "bichos: fuera de la zona" if st is not ZoneStatus.INSIDE else "bichos: cerca del borde"
+        view = self._bi_view(p, t)
+        action = decide(self.bichos, view)
+        if action != WALK:
+            self._bi_cut_walk(p)
+        if self.debug.explore_due(t):
+            self._dbg("bichos", f"{action} monstruos={view.monsters} objetos={view.items}")
+        if action == LURE:
+            self._bi_lure()
+        elif action == FIGHT:
+            self._bi_fight()
+        elif action == PICKUP:
+            return State.RECOGER, f"bichos: {view.items} objeto(s) a la vista, {view.monsters} monstruo(s) cerca"
+        elif action == WALK:
+            return self._bi_walk(p, t)
+        return None
+
+    def _bi_lure(self) -> None:
+        """Aprieta la tecla del senuelo (si el juego no esta listo se reintenta en el proximo ciclo)."""
+        c = self.bichos
+        self.gi.release_all()
+        if not self.gi.press_key(c.lure_key, float(self.skill_cfg["press_hold_s"])):
+            logger.warning("Bichos: el juego no estaba listo, no se uso el senuelo")
+            return
+        now = self.clock()
+        self.stats.lures += 1
+        self._bi_lure_next = now + c.lure_every_s
+        self._bi_calm_since = self._bi_walk_t = now   # a esperar que lleguen los bichos
+        logger.info("Bichos: uso el senuelo (%s); proximo en %.0f s", c.lure_key.upper(), c.lure_every_s)
+
+    def _bi_fight(self) -> None:
+        """ESPACIO un tramo de `space_s` con chequeo de captcha (si aparece, `_hold_chunked` ya paso a CAPTCHA)."""
+        t0 = self.clock()
+        self._hold_space(self.bichos.space_s)
+        self.stats.fight_s += max(0.0, self.clock() - t0)
+
+    def _bi_cut_walk(self, p: Perception) -> None:
+        """Deja la caminata corta (frena si hay un clic en curso)."""
+        if self._bi_target is None and self._walk is None:
+            return
+        if self._walk is not None:
+            self._brake(p)
+            self._walk = None
+        self._bi_target = None
+
+    def _bi_walk(self, p: Perception, t: float) -> Transition:
+        """Un ciclo de la caminata corta a un punto al azar adentro de la zona (sin girar la camara)."""
+        pos = self.tracker.position
+        if pos is None:
+            return None
+        if self._bi_target is None:
+            recent = self._legs[-int(self.ex["recent_legs"]):] if int(self.ex["recent_legs"]) > 0 else []
+            target, heading = self.navigator.leg_target(pos, recent, math.radians(float(self.ex["min_leg_sep_deg"])),
+                                                        float(self.ex["leg_units"]), self._visited + [pos])
+            self._legs = (self._legs + [heading])[-max(1, int(self.ex["recent_legs"])):]
+            self._visited = (self._visited + [pos, target])[-int(self.ex["visited_keep"]):]
+            self._bi_target, self._bi_walk_start, self._dest = target, t, target
+            logger.info("Bichos: sin monstruos; camino hacia (%.0f, %.0f)", *target)
+        res = self._walk_toward(p, t, self._bi_target)
+        if res == "stuck":
+            return self._stuck_transition(State.BICHOS, t, "trabado caminando entre bichos")
+        timeout = t - self._bi_walk_start >= float(self.ex["leg_s"])
+        if res in ("arrived", "blocked", "nocoords") or timeout:
+            logger.info("Bichos: fin de la caminata (%s)", "tiempo" if timeout and res == "moving" else res)
+            if res == "arrived":
+                self._close_episode("llego al destino")
+            self._bi_cut_walk(p)
+            self._bi_walk_t = t
+        return None
+
     # ------------------------------------------------------------------ CAPTCHA
     def _do_captcha(self, p: Perception, t: float) -> Transition:
         """Espera pasiva: nada de input mientras el panel este. Lo resuelve una persona."""
@@ -2229,7 +2369,7 @@ class Bot:
                 self._clear = 0
                 self.alarm.start("captcha")
                 return None
-            return State.BUSCAR, "el panel desaparecio"
+            return self._home, "el panel desaparecio"
         return None
 
     # MUERTO y FIN no tienen handler: `_decide` termina la corrida apenas se detecta la muerte.

@@ -3,7 +3,7 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-20)
-**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades) y 12 (prioridad de metin, historial y conteo de objetos por tipo) hechas, con 1419 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: la 13 y la 14. `main` no se tocó.
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades), 12 (prioridad de metin, historial y conteo de objetos por tipo) y 13 (modo bichos) hechas, con 1482 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendiente: la 14. `main` no se tocó.
 
 - **main 0c66ec3 (Fase 6d) integrado en desarrollo:** elección del metin más cercano por perspectiva (`bot/ground.py`), ACERCARSE con hover + clic, ATACAR con caminata, barrido de cámara con pausa, RECOGER con W/A/S/D sin clics, `bot/keynav.py` reescrito y mapa de metin `bot/spawns.py`, todo junto con perfiles, interfaz, habilidades y prioridad. Prioridad + distancia de piso: con `zone.metin_priority` vacía el orden es el de main; con lista, las etiquetas van por rango de su tipo, las piedras sin etiqueta con el rango "no listado" y, a igual rango, la menor distancia de piso (`Bot._goals`, `bot/priority.py::order_by_priority`). Mapa de metin por zona: `spawns` es categoría de zona; sin `spawns.file` en el perfil de zona se deriva `profiles/zonas/<zona>.mapa.json` (ignorado por git, no se lista como perfil). Líneas de base regeneradas desde main (única diferencia con main: `spawns.file`, probada en `tests/test_profiles.py`).
 - **main b353ff2 (Fase 6c) integrado en desarrollo:** regla del metin a la vista sin cámara, "etiqueta dudosa" y movimiento solo con teclado (`navigation.mode`, `bot/keynav.py`) conviven con perfiles, habilidades y prioridad. Líneas de base de "sin cambios de comportamiento" regeneradas desde main.
@@ -18,6 +18,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 ## Decisiones tomadas sin Enzo (noche del 2026-11-20)
 - **Prioridad + distancia de piso:** con `zone.metin_priority` vacía se elige exactamente como en main (el más cercano por piso entre etiquetas objetivo y piedras). Con lista: rango de prioridad del tipo (piedra sin etiqueta = "no listado" = `len(lista)`) y, a igual rango, la menor distancia de piso. Se mantiene el log "Elegido X por prioridad (mas cerca habia Y)".
+- **Modo bichos (Fase 13):** las decisiones (señuelo primero, recogida periódica, bloqueo si no junta nada, caminata corta = tramo de EXPLORAR, valores estimados de `zone.bichos`) están en la sección "Fase 13 — modo bichos".
 - **Mapa de metin por zona:** el archivo va en el perfil de zona (`spawns.file`); si no lo define, se deriva `profiles/zonas/<zona>.mapa.json`. Cambiar de zona en la interfaz usa el mapa de esa zona. El mapa viejo `data/mapa_metin.json` de main no se migra solo (copiarlo a mano al archivo de la zona si se quiere conservar).
 
 ### Fase 6d: qué cambió (pedido de Enzo tras la prueba de las 01:15)
@@ -169,7 +170,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
   - Guarda las últimas opciones y tiene un `.bat` para abrirla con doble clic.
 - [x] 11. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Habilidades con temporizador (lista editable en la interfaz).
 - [x] 12. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin.
-- [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
+- [x] 13. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Modo bichos: F4 cada X segundos + barra espaciadora + recoger (estado BICHOS, `zone.farm_mode`, sección "Modo de farmeo" en la interfaz).
 - [ ] 14. Revivir automáticamente al morir.
 
 ## Ideas para después (de Enzo, 2026-11-19)
@@ -217,6 +218,18 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Precedencia, validación por tipo, perfil faltante, selección por CLI, migración ida y vuelta (migrar y reconstruir da lo mismo) y que `calibrate` guarde en el perfil correcto.
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
+
+## Fase 13 — modo bichos (rama `desarrollo`, 1482 tests)
+Con `zone.farm_mode: "bichos"` el bot no busca metins: entra al estado nuevo **BICHOS** (percepción: coords, monsters, items). Con `"metin"` todo es idéntico a antes (las líneas de base `tests/data/baseline_events_*.json` y `test_baseline_identico...` pasan sin regenerar).
+- **Qué hace BICHOS** (una acción por ciclo, decisión pura en `bot/bichos.py::decide`, ejecuta `Bot._do_bichos`): 1) señuelo (`lure_key`, al empezar y cada `lure_every_s`; log "Bichos: uso el señuelo (F4); proximo en 60 s"); 2) recoger "periódico" (pasaron `pickup_every_s`, hay objetos válidos y a lo sumo `pickup_max_monsters` monstruos cerca); 3) pelear: ESPACIO en tramos de `space_s` con chequeo de captcha (`_hold_space`) si `monsters_near >= min_monsters`; 4) recoger cuando no hay monstruos `clear_s` y hay objetos válidos; 5) caminar un tramo corto a un punto al azar adentro (`navigator.leg_target`, mismo largo/margen que EXPLORAR, W/A/S/D en modo teclado, sin girar la cámara) si no hay monstruos `idle_s`; 6) esperar.
+- **Zona:** afuera o a menos de `explore.edge_return_u` del borde (tope: la mitad de la profundidad del centro, para no rebotar en zonas chicas) -> VOLVER por coordenadas (termina a `max(edge_return_u, navigation.explore_margin)`) y de vuelta a BICHOS. CENTRO también vuelve a BICHOS (no a EXPLORAR). DESTRABAR, CAPTCHA y RECOGER vuelven a BICHOS (`Bot._home`).
+- **Habilidades:** se lanzan en BICHOS sin caminata en curso (`_skill_safe`); nunca en RECOGER. Captcha, muerte, pausa, F12, tope de tiempo y marca de a pie funcionan igual.
+- **Estadísticas:** `BotStats.lures`, `fight_s`, `farm_mode`. @@STATUS suma `farm_mode`, `lures`, `fight_s`; el historial (`history.jsonl`) suma `farm_mode` y `lures`; el resumen final suma "señuelos: N | peleando: X min" solo en modo bichos. La interfaz muestra "Señuelos usados" y el detalle de sesión del historial "Modo de farmeo: Bichos | señuelos usados".
+- **Interfaz** (pestaña Control, bajo "Prioridad de metin"): sección "Modo de farmeo" (Metin / Bichos, tecla del señuelo, cada cuántos segundos, Guardar). Lógica pura en `bot/ui/farm_mode_editor.py` (`validate_bichos`, `FarmModeEditor`): tecla válida y no reservada (F11/F12), segundos > 0; guarda en el perfil de zona conservando el resto (con .bak). Pregunta si hay cambios sin guardar al cambiar de zona y al Iniciar; se bloquea con el bot corriendo.
+- **Claves nuevas en `zone.bichos`** (perfil de zona; validadas en `bot/config.py`, DEFAULTS y `config.example.jsonc`): `min_monsters` 1, `space_s` 2.0, `clear_s` 3.0, `pickup_every_s` 60, `pickup_max_monsters` 1, `idle_s` 20. `lure_every_s` ahora debe ser > 0. Todos son valores estimados, a calibrar en el juego. Los perfiles viejos (solo `lure_key` y `lure_every_s`) toman el resto de DEFAULTS.
+- **Simulador:** `SimWorld.lure()` (el señuelo hace aparecer `lure_count` bichos pegados al personaje; con ESPACIO muere uno cada `bug_kill_s` y deja un objeto), `SimBackend` mapea `zone.bichos.lure_key`, `SimEnv.initial_state`. Tests: `tests/test_bichos_sim.py` (corridas de punta a punta, modo teclado y clic), `tests/test_bichos.py` (decisión, config, resumen, historial, @@STATUS), `tests/test_ui_farm_mode.py`.
+- **Decisiones tomadas sin Enzo:** (a) el señuelo manda sobre todo lo demás cuando vence (incluso peleando); (b) la recogida periódica va antes que pelear solo si hay a lo sumo `pickup_max_monsters` monstruos; (c) si una recogida no junta ningún objeto (ítems que no se pueden levantar) se bloquea recoger por `pickup_every_s` para no bajarse y subirse en bucle; (d) después de usar el señuelo, el reloj de "sin monstruos" y el de `idle_s` arrancan de cero (se espera a que lleguen); (e) "caminata corta" = el mismo tramo de `explore.leg_units`/`explore.leg_s` que EXPLORAR, sin clave nueva; (f) el tiempo "sin monstruos" para recoger cuenta desde la última vez que se los vio (un tramo de ESPACIO de 2 s es una sola observación), así que recoge ~`clear_s` después del último ciclo con monstruos; (g) la tecla del señuelo se aprieta con `press_key` y `skill_timing.press_hold_s`, sin esperar animación; no se baja del caballo para usarlo.
+- **Qué probar (Enzo):** ver "A probar por Enzo → Rama `desarrollo`: Fase 13".
 
 ## Fase 12 (parte 2) — historial y conteo de objetos
 **Hecha en `desarrollo`; falta la prueba de Enzo.**
@@ -686,6 +699,15 @@ En la interfaz, pestaña Control, sección "Prioridad de metin":
 2. Con un Oscuridad más cerca y un Negro más lejos a la vista (primero en modo Observar): tiene que elegir el Negro, y el log tiene que decir "Elegido metin_negro por prioridad (más cerca había metin_de_oscuridad)".
 3. Apagá el interruptor y guardá: tiene que volver a ir al más cercano.
 4. Cambiá de zona o tocá Iniciar con cambios sin guardar: tiene que preguntar.
+
+### Rama `desarrollo`: Fase 13, modo bichos
+1. En la pestaña Control, sección "Modo de farmeo": elegí "Bichos", tecla F4 (o la del ítem que atrae monstruos) y cada cuántos segundos, y Guardar. Probá guardar con una tecla F11/F12 o segundos 0: tiene que avisar y no guardar. Cambiá de zona o tocá Iniciar con cambios sin guardar: tiene que preguntar.
+2. Primero en modo Observar, después en serio, parado adentro de la zona: tras la cuenta regresiva el estado tiene que ser BICHOS (no BUSCAR), aprieta el señuelo enseguida y el log dice "Bichos: uso el señuelo (F4); proximo en N s".
+3. Con monstruos cerca: ESPACIO en tramos de ~2 s. Sin monstruos ~3 s y objetos a la vista: pasa a RECOGER (se baja, Z, se sube) y vuelve a BICHOS. Cada 60 s recoge también si queda a lo sumo 1 monstruo.
+4. Sin monstruos 20 s (y el señuelo todavía no vence): camina un tramo corto adentro de la zona, sin girar la cámara y sin clics.
+5. Arrancando afuera, o cerca del borde: VOLVER y de vuelta a BICHOS. Captcha en medio de la pelea: suelta todo y suena la alarma. Con habilidades configuradas se lanzan entre ESPACIOS.
+6. Calibrá `zone.bichos` (`min_monsters`, `space_s`, `clear_s`, `pickup_every_s`, `pickup_max_monsters`, `idle_s`) según cuántos bichos aparecen y cuánto tardan. Verificá que `monsters_near` (radio `vision.monsters.near_radius_px`) cuente bien los bichos que atrae el señuelo.
+7. En el historial de la interfaz, la sesión tiene que mostrar "Modo de farmeo: Bichos | señuelos usados: N".
 
 ### Rama `desarrollo`: Fase 12 (parte 2), historial y objetos por tipo
 En la interfaz (`abrir_interfaz.bat`), con el juego:

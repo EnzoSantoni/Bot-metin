@@ -15,6 +15,7 @@ from bot.item_catalog import ItemCatalog
 from bot.ui import controller as ctl
 from bot.ui import history_view as hv
 from bot.ui import skills_editor as se
+from bot.ui.farm_mode_editor import MODE_LABELS, MODES, FarmModeEditor
 from bot.ui.priority_editor import PriorityEditor
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,8 @@ class App:
         self._last_personaje = self.opts.personaje
         self.prio = PriorityEditor(profiles_root)
         self.prio.load(self.opts.zona)
+        self.farm = FarmModeEditor(profiles_root)
+        self.farm.load(self.opts.zona)
         self._last_zona = self.opts.zona
         self._build()
         self._apply_window_prefs()
@@ -113,6 +116,7 @@ class App:
         self.warn_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self._build_priority(main)
+        self._build_farm_mode(main)
 
         opt = ttk.LabelFrame(main, text="Opciones", padding=6)
         opt.pack(fill="x", pady=6)
@@ -145,7 +149,7 @@ class App:
         self.stat_vars: dict[str, tk.StringVar] = {}
         for i, (key, label) in enumerate((("state", "Estado"), ("metins", "Metin rotos"), ("items", "Objetos"),
                                           ("captchas", "Captchas"), ("unstucks", "Destrabes"), ("time", "Tiempo"),
-                                          ("skills_cast", "Habilidades lanzadas"))):
+                                          ("skills_cast", "Habilidades lanzadas"), ("lures", "Señuelos usados"))):
             ttk.Label(st, text=label + ":").grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=(0, 4))
             v = tk.StringVar(value="-")
             ttk.Label(st, textvariable=v, font=("Segoe UI", 10, "bold")).grid(row=i // 2, column=(i % 2) * 2 + 1,
@@ -389,6 +393,80 @@ class App:
             return False
         return self.save_priority() if ans else True
 
+    # ------------------------------------------------------------------ modo de farmeo
+    def _build_farm_mode(self, parent: ttk.Frame) -> None:
+        box = ttk.LabelFrame(parent, text="Modo de farmeo", padding=6)
+        box.pack(fill="x", pady=(6, 0))
+        ttk.Label(box, text="Modo:").grid(row=0, column=0, sticky="w")
+        self.farm_mode_var = tk.StringVar(value=MODE_LABELS[self.farm.mode])
+        self.farm_combo = ttk.Combobox(box, textvariable=self.farm_mode_var, values=[t for _, t in MODES], state="readonly",
+                                       width=10)
+        self.farm_combo.grid(row=0, column=1, sticky="w", padx=4)
+        ttk.Label(box, text="Tecla del señuelo:").grid(row=0, column=2, sticky="e", padx=(10, 0))
+        self.farm_key_var = tk.StringVar(value=self.farm.lure_key)
+        self.farm_key_entry = ttk.Entry(box, textvariable=self.farm_key_var, width=6)
+        self.farm_key_entry.grid(row=0, column=3, sticky="w", padx=4)
+        ttk.Label(box, text="Cada (s):").grid(row=0, column=4, sticky="e", padx=(10, 0))
+        self.farm_secs_var = tk.StringVar(value=self.farm.seconds)
+        self.farm_secs_entry = ttk.Entry(box, textvariable=self.farm_secs_var, width=6)
+        self.farm_secs_entry.grid(row=0, column=5, sticky="w", padx=4)
+        self.farm_save_btn = ttk.Button(box, text="Guardar", width=8, command=self.save_farm_mode)
+        self.farm_save_btn.grid(row=0, column=6, padx=(10, 0))
+        self.farm_state = tk.StringVar(value="")
+        tk.Label(box, textvariable=self.farm_state, anchor="w", fg=COLOR_WARN).grid(row=1, column=0, columnspan=7, sticky="ew")
+        for v in (self.farm_mode_var, self.farm_key_var, self.farm_secs_var):
+            v.trace_add("write", lambda *_a: self._on_farm_edit())
+
+    def _farm_mode_value(self) -> str:
+        text = self.farm_mode_var.get()
+        return next((k for k, t in MODES if t == text), "metin")
+
+    def _on_farm_edit(self) -> None:
+        if getattr(self, "_farm_syncing", False):
+            return
+        if self.farm.locked:
+            self.refresh_farm_mode()
+            return
+        self.farm.set_values(self._farm_mode_value(), self.farm_key_var.get(), self.farm_secs_var.get())
+        self.refresh_farm_mode()
+
+    def refresh_farm_mode(self) -> None:
+        """Vuelca el editor en los campos y redibuja el indicador de cambios sin guardar."""
+        self._farm_syncing = True
+        try:
+            for var, value in ((self.farm_mode_var, MODE_LABELS[self.farm.mode]), (self.farm_key_var, self.farm.lure_key),
+                               (self.farm_secs_var, self.farm.seconds)):
+                if var.get() != value:   # no pisar lo que se esta escribiendo (moveria el cursor)
+                    var.set(value)
+        finally:
+            self._farm_syncing = False
+        parts = []
+        if self.farm.dirty:
+            parts.append("sin guardar")
+        if self.farm.locked:
+            parts.append("bloqueado mientras el bot corre")
+        self.farm_state.set(" - ".join(parts))
+
+    def save_farm_mode(self) -> bool:
+        try:
+            self.farm.save()
+        except (ValueError, ConfigError, OSError) as e:
+            self._notify("No se pudo guardar el modo de farmeo", str(e))
+            return False
+        self.refresh_farm_mode()
+        return True
+
+    def _confirm_unsaved_farm(self, what: str) -> bool:
+        """Como `_confirm_unsaved_priority`, para el modo de farmeo de la zona. False = cancelar la accion."""
+        if not self.farm.dirty:
+            return True
+        ans = self._ask_save("Modo de farmeo sin guardar",
+                             f"Hay cambios sin guardar en el modo de farmeo de '{self.farm.zona}'.\n"
+                             f"Guardarlos antes de {what}?")
+        if ans is None:
+            return False
+        return self.save_farm_mode() if ans else True
+
     # ------------------------------------------------------------------ habilidades
     SKILL_COLS = (("enabled", "Activa", 50), ("name", "Nombre", 140), ("key", "Tecla", 60), ("duration_s", "Duracion (s)", 85),
                   ("requires_dismount", "Bajarse", 60), ("animation_s", "Animacion (s)", 95), ("remaining", "Restante", 70))
@@ -540,12 +618,14 @@ class App:
         if kind == "zona":
             new = self.vars["zona"].get()
             if new != self._last_zona:
-                if not self._confirm_unsaved_priority("cambiar de zona"):
+                if not (self._confirm_unsaved_priority("cambiar de zona") and self._confirm_unsaved_farm("cambiar de zona")):
                     self.vars["zona"].set(self._last_zona)
                     return
                 self._last_zona = new
                 self.prio.load(new)
                 self.refresh_priority()
+                self.farm.load(new)
+                self.refresh_farm_mode()
         self.refresh_overrides()
 
     # ------------------------------------------------------------------ ventana
@@ -636,6 +716,8 @@ class App:
             return
         if not self._confirm_unsaved_priority("iniciar (el bot usa el perfil guardado)"):
             return
+        if not self._confirm_unsaved_farm("iniciar (el bot usa el perfil guardado)"):
+            return
         self.opts = o
         ctl.save_settings(o, self.settings_path)
         try:
@@ -702,6 +784,10 @@ class App:
         for w in (self.prio_check, *self.prio_buttons):
             w.configure(state="normal" if b.options else "disabled")
         self.refresh_priority(select=self._selected_priority())
+        self.farm.locked = not b.options
+        for w in (self.farm_combo, self.farm_key_entry, self.farm_secs_entry, self.farm_save_btn):
+            w.configure(state=("readonly" if w is self.farm_combo else "normal") if b.options else "disabled")
+        self.refresh_farm_mode()
         self.refresh_skills(select=self._selected_skill())
         if hasattr(self, "btn_rename"):
             self._refresh_items_state()
@@ -738,6 +824,7 @@ class App:
         v["unstucks"].set(str(s.unstucks))
         v["time"].set(ctl.format_elapsed(s.elapsed_s))
         v["skills_cast"].set(str(s.skills_cast))
+        v["lures"].set(str(s.lures) if s.farm_mode == "bichos" else "-")
         self.live_tree.delete(*self.live_tree.get_children())
         for name, n in hv.live_item_rows(s.items_by_type):
             self.live_tree.insert("", "end", values=(name, n))

@@ -194,6 +194,13 @@ class SimWorld(SimGame):
         self.space_held, self.space_t, self.space_pushes = False, 0.0, 0
         self.space_up_t, self.space_gap_tol = -math.inf, 0.3   # el bot parte ESPACIO en tramos: una pausa corta no lo corta
         self.pushed: list[tuple[float, float]] = []
+        # Senuelo (modo bichos): `lure()` hace aparecer `lure_count` monstruos pegados al personaje (en anillo de radio
+        # `bug_ring_r`, lo siguen); con ESPACIO apretado muere uno cada `bug_kill_s` y deja un objeto donde estaba.
+        self.lure_count, self.bug_ring_r, self.bug_kill_s = 3, 6.0, 0.8
+        self.bugs: list[tuple[float, float]] = []   # desplazamiento (juego) de cada bicho respecto del personaje
+        self.bug_t = 0.0
+        self.lure_log: list[float] = []             # tiempos de cada uso del senuelo
+        self.bugs_killed = 0
         self.reach, self.pickup_radius, self.drop_radius = reach, pickup_radius, drop_radius
         self.drop_spec, self.label_dist, self.click_tol_px = tuple(drop_spec), label_dist, click_tol_px
         self.metins: list[SimMetin] = []
@@ -250,15 +257,36 @@ class SimWorld(SimGame):
         """Rodeado: con >= 2 monstruos pegados no se puede avanzar ni atacar."""
         return self.surround >= 2 and self.t >= self.free_until
 
+    def lure(self) -> None:
+        """Usar el senuelo: aparecen `lure_count` bichos alrededor del personaje."""
+        if self.frozen:
+            return
+        self.lure_log.append(self.t)
+        for k in range(self.lure_count):
+            a = 2 * math.pi * (k + 0.5) / self.lure_count
+            self.bugs.append((self.bug_ring_r * math.cos(a), self.bug_ring_r * math.sin(a)))
+
+    def _fight_bugs(self, h: float) -> None:
+        """Con ESPACIO apretado mueren los bichos de a uno y dejan un objeto."""
+        if not self.space_held or not self.bugs:
+            return
+        self.bug_t += h
+        if self.bug_t >= self.bug_kill_s:
+            self.bug_t = 0.0
+            dx, dy = self.bugs.pop(0)
+            self.bugs_killed += 1
+            self.items.append(SimItem((self.pos[0] + dx, self.pos[1] + dy), "item", False))
+
     def monster_positions(self) -> list[tuple[float, float]]:
         """Posicion (juego) de los monstruos: en anillo alrededor del personaje, o donde quedaron tras el empujon."""
+        bugs = [(self.pos[0] + dx, self.pos[1] + dy) for dx, dy in self.bugs]
         if self.surround <= 0:
-            return []
+            return bugs
         if self.t >= self.free_until:
-            return [(self.pos[0] + self.ring_r * math.cos(2 * math.pi * k / self.surround),
-                     self.pos[1] + self.ring_r * math.sin(2 * math.pi * k / self.surround))
-                    for k in range(self.surround)]
-        return list(self.pushed)
+            return bugs + [(self.pos[0] + self.ring_r * math.cos(2 * math.pi * k / self.surround),
+                            self.pos[1] + self.ring_r * math.sin(2 * math.pi * k / self.surround))
+                           for k in range(self.surround)]
+        return bugs + list(self.pushed)
 
     def _push_monsters(self) -> None:
         self.space_pushes += 1
@@ -399,6 +427,7 @@ class SimWorld(SimGame):
     def _physics(self, h: float) -> None:
         if self.rot_dir:
             self.rotate(h, self.rot_dir * self.rot_factor)
+        self._fight_bugs(h)
         if self.space_held:
             self.space_t += h
             if self.surrounded and self.space_t >= self.space_needed_s:

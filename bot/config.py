@@ -62,9 +62,13 @@ DEFAULTS: dict[str, Any] = {
     # requires_dismount, animation_s y enabled (ver config.example.jsonc).
     "character": {"name": "", "class": "", "potions": {"hp_key": "f2", "mp_key": "f3", "auto": True}, "skills": []},
     # zone: farm_mode = "metin" o "bichos"; metin_priority = nombres de metin en orden de prioridad (vacia = todos iguales,
-    # gana el mas cercano); bichos = tecla del item que atrae monstruos y cada cuantos segundos usarlo.
+    # gana el mas cercano); bichos = modo "F4 cada X segundos + ESPACIO + recoger": lure_key / lure_every_s = tecla del item que
+    # atrae monstruos y cada cuantos segundos usarlo; min_monsters = monstruos cerca para pelear; space_s = tramo de ESPACIO;
+    # clear_s = segundos sin monstruos para recoger; pickup_every_s / pickup_max_monsters = recoger cada tanto con a lo sumo
+    # esos monstruos cerca; idle_s = segundos sin monstruos (y sin senuelo listo) para caminar a otro lugar.
     "zone": {"name": "", "farm_mode": "metin", "metin_priority": [],
-             "bichos": {"lure_key": "f4", "lure_every_s": 60}},
+             "bichos": {"lure_key": "f4", "lure_every_s": 60, "min_monsters": 1, "space_s": 2.0, "clear_s": 3.0,
+                        "pickup_every_s": 60, "pickup_max_monsters": 1, "idle_s": 20}},
     # Filtro de coordenadas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
     # history: lecturas que se recuerdan para detectar trabas.
     "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0,
@@ -867,7 +871,14 @@ def _validate_profile_sections(cfg: dict) -> None:
             logger.warning("zone.metin_priority: %r no esta en target_metin_names (se ignora)", n)
     bi = _require_dict(zn.get("bichos"), "zone.bichos")
     _check_game_key(bi.get("lure_key"), "zone.bichos.lure_key", reserved)
-    _num_ge0(bi.get("lure_every_s"), "zone.bichos.lure_every_s")
+    for k in ("lure_every_s", "space_s", "clear_s", "pickup_every_s", "idle_s"):
+        v = bi.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"zone.bichos.{k} debe ser un numero > 0")
+    for k, lo in (("min_monsters", 1), ("pickup_max_monsters", 0)):
+        v = bi.get(k)
+        if not isinstance(v, int) or isinstance(v, bool) or v < lo:
+            raise ConfigError(f"zone.bichos.{k} debe ser un entero >= {lo}")
 
 
 def validate_config(cfg: dict) -> None:

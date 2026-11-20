@@ -84,6 +84,8 @@ def session_detail(session: dict, catalog: ItemCatalog) -> str:
         lines += _breakdown("Por tipo de objeto", items)
     lines.append(f"Captchas: {_num(session.get('captchas'))} | destrabes: {_num(session.get('destrabes'))} | "
                  f"acercamientos: {_num(session.get('acercamientos'))} | habilidades: {_num(session.get('habilidades'))}")
+    if session.get("farm_mode") == "bichos":
+        lines.append(f"Modo de farmeo: Bichos | señuelos usados: {_num(session.get('lures'))}")
     return "\n".join(lines)
 
 

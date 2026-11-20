@@ -113,6 +113,7 @@ class SimBackend(FakeBackend):
         self.k_mount = parse_keys(c["mount"])
         self.k_cam = {parse_keys(c["camera_left"])[0]: +1, parse_keys(c["camera_right"])[0]: -1}
         self.k_move = {parse_keys(c[f"move_{d}"])[0]: d for d in ("up", "down", "left", "right")}
+        self.k_lure = str(cfg["zone"]["bichos"]["lure_key"]).lower()
         self.k_skills = {str(sk["key"]).lower(): bool(sk["requires_dismount"]) for sk in cfg["character"]["skills"]}
         self.cursor = (0, 0)
         self._move_held: set[str] = set()   # direcciones de movimiento apretadas (varias a la vez: W+D, etc.)
@@ -143,6 +144,8 @@ class SimBackend(FakeBackend):
             w.deselect()
         elif key == self.k_mount[-1] and all(k in self._keys_down for k in self.k_mount):
             w.toggle_mount()
+        elif key == self.k_lure:
+            w.lure()
         elif key in self.k_skills:
             w.cast_skill(key, self.k_skills[key])
         elif key in self.k_cam:
@@ -227,6 +230,7 @@ class SimEnv:
             orig_enter(new, reason)
         self.bot._enter = rec
         self.panicked = False
+        self.initial_state = self.bot.state.name
 
     # --- lecturas rapidas entre tramos de una tecla sostenida (en vez de analizar la imagen negra) ---
     def _peek_captcha(self, img, cfg):
@@ -340,7 +344,7 @@ class SimEnv:
     def max_state_seconds(self, ignore=("CAPTCHA",)) -> dict[str, float]:
         """Mayor tiempo seguido en cada estado, segun las transiciones registradas (el ultimo tramo cuenta hasta ahora)."""
         out: dict[str, float] = {}
-        cur, since = "BUSCAR", 0.0
+        cur, since = self.initial_state, 0.0
         for tr in self.transitions + [Transition(self.world.t, cur, "FIN", "")]:
             if cur not in ignore:
                 out[cur] = max(out.get(cur, 0.0), tr.t - since)
@@ -349,7 +353,7 @@ class SimEnv:
 
     def state_at(self, t: float) -> str:
         """Estado del bot en el tiempo simulado `t`."""
-        cur = "BUSCAR"
+        cur = self.initial_state
         for tr in self.transitions:
             if tr.t > t:
                 break

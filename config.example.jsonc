@@ -581,7 +581,15 @@
   // zone (perfil de zona)
   //  farm_mode: "metin" | "bichos".
   //  metin_priority: nombres de metin en orden de prioridad; vacia = todos iguales (gana el mas cercano).
-  //  bichos: lure_key = tecla del item que atrae monstruos; lure_every_s = cada cuantos segundos usarlo.
+  //  bichos (modo "bichos": usar el senuelo, pelear con ESPACIO, recoger; no busca metins). Valores estimados, a calibrar:
+  //    lure_key = tecla del item que atrae monstruos (valida, no la de panico/pausa); lure_every_s = cada cuantos segundos usarlo (> 0).
+  //    min_monsters = monstruos cerca (monsters_near) para pelear con ESPACIO (>= 1).
+  //    space_s = segundos de cada tramo de ESPACIO (con chequeo de captcha entre tramos).
+  //    clear_s = segundos seguidos sin monstruos cerca antes de recoger los objetos del piso.
+  //    pickup_every_s = recoger tambien cada tanto aunque queden monstruos...
+  //    pickup_max_monsters = ...siempre que haya a lo sumo esta cantidad cerca (0 = ninguno).
+  //    idle_s = segundos sin monstruos (y con el senuelo todavia no listo) antes de caminar un tramo corto a otro punto de la zona.
   "zone": {"name": "Guabina - Oscuridad y Negro", "farm_mode": "metin", "metin_priority": [],
-           "bichos": {"lure_key": "f4", "lure_every_s": 60}}
+           "bichos": {"lure_key": "f4", "lure_every_s": 60, "min_monsters": 1, "space_s": 2.0, "clear_s": 3.0,
+                      "pickup_every_s": 60, "pickup_max_monsters": 1, "idle_s": 20}}
 }
