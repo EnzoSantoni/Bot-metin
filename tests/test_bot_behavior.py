@@ -87,7 +87,7 @@ def test_mirar_elige_direcciones_separadas_al_menos_60_grados():
 def test_mirar_con_camara_lista_apunta_hacia_el_interior():
     h = Harness(lambda h, n: perc(coords=(442, 168)))   # pegado al borde oeste
     h.train_camera()
-    h.bot.tracker.update(Coords(442, 168, 1.0), 0.0)
+    h.bot.tracker.update(Coords(442, 168, 1.0), h.clock())
     ep = StuckEpisode(1, (442, 168), 0.0, 0.0)
     for _ in range(4):
         a = h.bot._pick_direction(ep)
@@ -441,7 +441,7 @@ def test_log_descartado_hasta_y_fuera_de_zona(caplog):
     caplog.set_level(logging.INFO)
     h = Harness(lambda h, n: perc(metins=[label(OSC, True)]))
     h.train_camera()
-    h.bot.tracker.update(Coords(*INSIDE_XY, 1.0), 0.0)
+    h.bot.tracker.update(Coords(*INSIDE_XY, 1.0), h.clock())
     gp = h.bot._game_pos_of((1000, 500), perc())
     h.bot.discarded.append(_Spot(gp, h.clock() + 600))
     h.bot.step()

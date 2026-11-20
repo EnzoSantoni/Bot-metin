@@ -72,7 +72,7 @@ def _goals_of(real, hor=None):
     p = perceive(real, cfg)
     p.coords = Coords(INSIDE_XY[0], INSIDE_XY[1], 1.0)
     h = Harness(lambda h, n: p, cfg=_harness_cfg(cfg))
-    h.bot.tracker.update(p.coords, 0.0)
+    h.bot.tracker.update(p.coords, h.clock())
     return h, p
 
 

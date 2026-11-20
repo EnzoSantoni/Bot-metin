@@ -58,14 +58,14 @@ def test_b1_salir_de_la_zona_atacando_descarta_la_posicion():
     h = Harness(lambda h, n: perc_far())
     from test_bot_behavior import label
     from bot.bot import _Attack
-    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(415, 170, 1.0), 0.0)
+    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(415, 170, 1.0), h.clock())
     p = perc_far(metins=[label("metin_de_oscuridad", True, click=(1000, 500))])
     h.bot.last_perception = p
     h.bot._atk = _Attack(0.0, (1000, 500), None, 0.0, 0.0, (415, 170), start_pos=(415, 170))
     h.bot.state = State.ATACAR
-    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), 0.1)
+    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), h.clock())
     h.bot.tracker.forget_reference()
-    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), 0.2)
+    h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), h.clock())
     out = h.bot._do_atacar(p, 0.2)
     assert out is not None and out[0] is State.VOLVER and h.bot.discarded
 
@@ -74,8 +74,8 @@ def test_b1_tramo_cortado_por_la_guardia_alimenta_a_la_camara():
     h = Harness(lambda h, n: perc_far())
     from bot.bot import _Walk
     from bot.vision.coords import Coords
-    h.bot.tracker.update(Coords(550, 150, 1.0), 0.0)
-    h.bot.tracker.update(Coords(565, 150, 1.0), 0.5)
+    h.bot.tracker.update(Coords(550, 150, 1.0), h.clock())
+    h.bot.tracker.update(Coords(565, 150, 1.0), h.clock() + 0.5)
     w = _Walk((100.0, 0.0), (550, 150), 0.0, (565, 150), 0.0, None, 50.0, probe=True)
     assert not h.bot.camera.has_a0
     h.bot._cut_walk(h.bot._img and None or perc_far(), "zona", w)
@@ -194,7 +194,7 @@ def test_i2_tope_de_aproximaciones_por_posicion():
     from bot.bot import _FarCand
     p = perc_far(far=[far_at(1300, 548)])
     from bot.vision.coords import Coords
-    h.bot.tracker.update(Coords(550, 150, 1.0), 0.0)
+    h.bot.tracker.update(Coords(550, 150, 1.0), h.clock())
     c = _FarCand(p.far_metins[0], (580.0, 150.0))
     n = int(h.cfg["approach"]["max_tries_per_spot"])
     assert all(h.bot._register_approach(c, p, 0.0) is not None for _ in range(n))
@@ -275,7 +275,7 @@ def test_i6_config_por_defecto():
 # ---------------------------------------------------------------- I7
 def test_i7_piedra_sin_humo_rodeada_de_monstruos_se_ignora_pero_con_humo_no():
     h = Harness(lambda h, n: perc_far())
-    h.bot.tracker.update(__import__('bot.vision.coords', fromlist=['Coords']).Coords(550, 150, 1.0), 0.0)
+    h.bot.tracker.update(__import__('bot.vision.coords', fromlist=['Coords']).Coords(550, 150, 1.0), h.clock())
     p = perc_far(far=[FarMetin(Rect(1275, 488, 50, 70), (1300, 548), 0.9, True, smoke=False)])
     p.monsters = [MonsterLabel(Rect(1250, 500, 100, 12), (1300, 506)), MonsterLabel(Rect(1300, 560, 100, 12), (1350, 566))]
     far, why = h.bot._far_view(p, 0.0)
