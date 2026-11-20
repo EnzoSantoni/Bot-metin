@@ -29,8 +29,26 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 **Decisiones que tomé sin vos:** en "Decisiones tomadas sin Enzo", más abajo y en el PROGRESS.md de `desarrollo`.
 
+## Fase 6f (correcciones tras la prueba de las 11:34, 2026-11-20): `main` `260bf29`, 1293 tests
+**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1B). Para el ángulo vertical (punto 5), Enzo tiene que pasar las capturas de `CAPTURAS_CAMARA.md`.
+- **Qué pasó a las 11:34:**
+  - Eligió una "piedra" sin nombre antes que un metin con etiqueta. Después la tomó como metin en curso y no eligió otro en 25 s.
+  - Las piedras falsas eran cuerpos de monstruos (arqueras y soldados con ropa roja y marrón y su "Lv NN" arriba).
+- **1. Elección** (`bot/ground.py rank_goals`, `Bot._goals`):
+  - Las etiquetas objetivo van primero.
+  - Una piedra sin etiqueta gana solo si su distancia de piso es menor que `approach.unlabeled_closer_ratio` (0.5) × la de la etiqueta. En `real_tres_metin_hover.png` la piedra de adelante sigue ganando (proporción 0.41–0.48 con horizontes de 0.10 a 0.19).
+  - Las piedras sin etiqueta debajo de `near_unlabeled_y_frac` (0.55 del alto) van al final.
+  - Si el hover no muestra nombre, no hace clic: ignora la posición `no_label_ignore_s` (120 s) y pasa al siguiente candidato en el mismo ciclo. Lo mismo si el clic selecciona un monstruo.
+  - Reemplaza la decisión de la Fase 6d de hacer clic igual después de 2 hovers.
+- **2. Metin en curso** solo cuando el panel confirma un metin objetivo; antes vive en `_Attack.cm` y no bloquea nada. Si se pierde y hay otra etiqueta objetivo a la vista, se suelta a los `attack.keep_with_others_s` (8 s), con el log "Busco el metin en curso (N s)".
+- **3. Detector** (`bot/vision/far_metin.py`): descarta las piedras con una etiqueta de monstruo justo arriba, las formas altas (`max_aspect` 1.9) y las chicas para su altura en pantalla (`min_size_ratio` 0.08). Hay tests con dos capturas reales de la corrida en `tests/data/`.
+- **4. Rodeado sin avanzar** en EXPLORAR, VOLVER y CENTRO: ESPACIO `stuck.surrounded_space_s` y sigue. Si se repite `surrounded_max` veces, pasa a DESTRABAR.
+- **Extra:**
+  - El modo debug guarda también la captura cruda (`_raw.png`) para tener casos de test limpios.
+  - En `.gitignore`, `data/` pasó a `/data/` (antes ignoraba también `tests/data/`).
+- **5. Ángulo vertical:** medir el horizonte no sirve porque depende del terreno. Queda apagado (sin `ref_horizon_frac`) hasta rediseñarlo con un tope + arrastre fijo y las capturas de `CAPTURAS_CAMARA.md`.
+
 ## Fase 6e (correcciones tras la prueba de las 09:47, 2026-11-20): `main` `2288eab`, 1262 tests
-**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1A).
 - **0. Roto real** (`b2dfd5b`):
   - Un metin cuenta como roto solo si la última vida leída era ≤ `attack.broken_hp_ratio` (10%), la piedra ya no se ve en su lugar y pasaron ≥ `attack.min_break_s` (15 s) de ataque.
   - Si se pierde el panel con la vida alta, es una deselección: vuelve a clickear el mismo metin.
