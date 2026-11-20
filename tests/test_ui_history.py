@@ -47,7 +47,7 @@ def test_humo_pestanas_historial_objetos_y_en_vivo(tmp_path):
                   ask_name=lambda cur, msg: names.pop(0))
         _pump(root)
         tabs = [app.notebook.tab(i, "text") for i in range(len(app.notebook.tabs()))]
-        assert tabs[:2] == ["Control", "Habilidades"] and tabs[2:] == ["Historial", "Objetos"]
+        assert tabs == ["Control", "Metin", "Zona", "Modo bichos", "Personaje", "Habilidades", "Historial", "Objetos"]
         # historial: la mas nueva arriba, totales y detalle de la elegida
         assert app.hist_tree.get_children() == ("1", "0")
         assert "Hoy: 1 sesion" in app.hist_today.get() and "Total: 2 sesiones" in app.hist_total.get()

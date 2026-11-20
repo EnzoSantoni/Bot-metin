@@ -85,6 +85,7 @@ class Session:
     profiles_root: Any = None                  # carpeta de perfiles (None = profiles/ del proyecto)
     say: Callable[[str], None] = print
     ask: Callable[[str], str] = field(default=lambda prompt: input(prompt))
+    prefer_profile: bool = False               # guardar en el perfil activo aunque config.json defina ese valor (lo usa la interfaz)
 
     def confirm(self, question: str) -> bool:
         """s/n por consola; con --si responde que si sin preguntar."""
@@ -215,7 +216,7 @@ def apply_changes(s: Session, changes: list[Change]) -> bool:
     notes: list[str] = []
     for c in changes:
         kind = kind_of(c.path)
-        if kind in datas and not has_path(raw, c.path):
+        if kind in datas and (s.prefer_profile or not has_path(raw, c.path)):
             set_path(new_datas[kind], c.path, c.new)
             dests.append(f"perfil de {kind} '{sel[kind]}'")
         else:
@@ -548,6 +549,15 @@ def _save_panel_name(s: Session, hk: Hotkeys, name: str, skip_words: int | None 
         return
 
 
+def _profile_targets(s: Session) -> list[str] | None:
+    """target_metin_names del perfil de zona activo (None si no hay perfiles o no se puede leer)."""
+    zona = _active_profiles(s).get("zona")
+    try:
+        return list(load_profile("zona", zona, s.profiles_root).get("target_metin_names") or []) if zona else None
+    except ConfigError:
+        return None
+
+
 def cmd_metin(s: Session, name: str) -> int:
     """Agrega un tipo de metin: plantilla de la etiqueta, (opcional) del panel y target_metin_names."""
     if not slugify(name):
@@ -564,10 +574,13 @@ def cmd_metin(s: Session, name: str) -> int:
             return 1
         s.say(f"Plantilla de la etiqueta guardada ({slugify(name)}.png).")
         _save_panel_name(s, hk, name)
-    if slugify(name) in target_slugs(s.cfg):
+    base = (_profile_targets(s) if s.prefer_profile else None)
+    if base is None:
+        base = list(s.cfg["target_metin_names"])
+    if slugify(name) in {slugify(n) for n in base}:
         s.say(f"{name!r} ya esta en target_metin_names.")
         return 0
-    names = list(s.cfg["target_metin_names"]) + [name]
+    names = base + [name]
     apply_changes(s, [Change(("target_metin_names",), names)])   # la plantilla ya esta guardada: sigue siendo exito
     return 0
 

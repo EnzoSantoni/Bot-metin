@@ -172,8 +172,19 @@ class UiBridge:
             except (OSError, ValueError):
                 pass
 
+    def _position(self) -> tuple[list[float] | None, str | None]:
+        """([x, y], estado de la zona) del personaje, o (None, None) si no hay lectura. Nunca lanza."""
+        try:
+            pos = self.bot.tracker.position
+            zs = self.bot.zone.status(pos) if pos is not None else None
+            return (None if pos is None else [round(float(pos[0]), 1), round(float(pos[1]), 1)],
+                    None if zs is None else zs.value)
+        except Exception:  # noqa: BLE001 - un bot falso sin tracker no debe romper el estado
+            return None, None
+
     def status(self) -> dict:
         st, state = self.bot.stats, self.bot.state
+        pos, zone_status = self._position()
         prof = self.cfg.get("_profiles") or {}
         return {"state": getattr(state, "value", str(state)), "phase": self.phase, "countdown": self.countdown,
                 "metins": st.metins, "items": st.items, "captchas": st.captchas, "unstucks": st.unstucks,
@@ -181,7 +192,7 @@ class UiBridge:
                 "skills_cast": getattr(st, "skills_cast", 0), "farm_mode": getattr(st, "farm_mode", "metin"),
                 "deaths": getattr(st, "deaths", 0), "revives": getattr(st, "revives", 0),
                 "lures": getattr(st, "lures", 0), "fight_s": round(getattr(st, "fight_s", 0.0), 1),
-                "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
+                "pos": pos, "zone_status": zone_status, "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
                 "skills": self.bot.skills.snapshot() if hasattr(getattr(self.bot, "skills", None), "snapshot") else [],
                 "profiles": {k: prof.get(k) for k in ("servidor", "personaje", "zona")}}
 

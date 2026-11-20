@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 STATUS_TAG = "@@STATUS "
 END_TAG = "@@END "
+ASK_TAG = "@@ASK "                    # pregunta de calibrate.py --ui (se responde por stdin)
 CMD_PAUSE = "pause"
 CMD_STOP = "stop"
 STOP_GRACE_S = 5.0                    # tras `stop`, cuanto se espera antes de terminar el proceso a la fuerza
@@ -120,6 +121,8 @@ class Status:
     skills: list = field(default_factory=list)   # [{name, key, remaining_s}]
     items_by_type: list = field(default_factory=list)    # [{id, name, count}]
     metins_by_type: dict = field(default_factory=dict)   # {slug: cantidad}
+    pos: tuple[float, float] | None = None   # posicion del personaje en el juego (None = sin dato)
+    zone_status: str = ""             # "inside" | "tolerance" | "outside" | "" (sin dato)
 
 
 @dataclass
@@ -169,6 +172,23 @@ def parse_metins_status(raw: Any) -> dict[str, int]:
     return {str(k): _as_int(v) for k, v in (raw.items() if isinstance(raw, dict) else []) if _as_int(v) > 0}
 
 
+ZONE_STATUSES = ("inside", "tolerance", "outside")
+
+
+def parse_pos_status(raw: Any) -> tuple[float, float] | None:
+    """`pos` de @@STATUS -> (x, y) o None si no son dos numeros finitos."""
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return None
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or abs(v) == float("inf") for v in raw):
+        return None
+    return float(raw[0]), float(raw[1])
+
+
+def parse_zone_status(raw: Any) -> str:
+    """`zone_status` de @@STATUS -> uno de ZONE_STATUSES o '' si viene otra cosa."""
+    return raw if isinstance(raw, str) and raw in ZONE_STATUSES else ""
+
+
 def status_from_dict(d: dict) -> Status:
     prof = d.get("profiles")
     return Status(state=str(d.get("state", "")), phase=str(d.get("phase", "running")), countdown=_as_int(d.get("countdown")),
@@ -180,7 +200,8 @@ def status_from_dict(d: dict) -> Status:
                   revives=_as_int(d.get("revives")),
                   fight_s=_as_float(d.get("fight_s")), skills=parse_skills_status(d.get("skills")),
                   items_by_type=parse_items_status(d.get("items_by_type")),
-                  metins_by_type=parse_metins_status(d.get("metins_by_type")))
+                  metins_by_type=parse_metins_status(d.get("metins_by_type")),
+                  pos=parse_pos_status(d.get("pos")), zone_status=parse_zone_status(d.get("zone_status")))
 
 
 def log_level(text: str) -> str:
@@ -207,6 +228,11 @@ def parse_line(line: str) -> ParsedLine:
             return ParsedLine("status", text, status=status_from_dict(d)) if kind == "status" \
                 else ParsedLine("end", text, end=d)
     return ParsedLine("log", text, log_level(text))
+
+
+def tab_title(title: str, dirty: bool) -> str:
+    """Titulo de una pestana con '*' si tiene cambios sin guardar."""
+    return f"{title} *" if dirty else title
 
 
 def format_elapsed(seconds: float) -> str:
@@ -306,6 +332,16 @@ def data_paths(config_path: str | Path = "config.json", profiles_root_dir: str |
         cfg = DEFAULTS
     return (resolve_path(cfg["items_catalog"]["dir"]), resolve_path(cfg["history"]["file"]),
             float(cfg["items_catalog"]["match"]))
+
+
+def labels_dir(config_path: str | Path = "config.json", profiles_root_dir: str | Path | None = None) -> Path:
+    """Carpeta de plantillas de etiqueta de metin de la config (la de DEFAULTS si la config no se puede leer)."""
+    from bot.config import DEFAULTS, resolve_path
+    try:
+        cfg = build_config(config_path, profiles_root_dir=profiles_root_dir, warn=False)
+    except Exception:  # noqa: BLE001 - la ventana no debe romperse por esto
+        cfg = DEFAULTS
+    return resolve_path(cfg["vision"]["metin"]["label_templates_dir"])
 
 
 # ----------------------------------------------------------------------------- subproceso

@@ -12,20 +12,42 @@ from typing import Callable
 from bot.config import ConfigError
 from bot.history import load_history
 from bot.item_catalog import ItemCatalog
+from bot.ui import calibrate_runner as cr
 from bot.ui import controller as ctl
 from bot.ui import history_view as hv
 from bot.ui import skills_editor as se
+from bot.ui import validators as vd
+from bot.ui import zone_view
+from bot.ui.calibrate_dialog import CalibrateDialog
 from bot.ui.farm_mode_editor import MODE_LABELS, MODES, FarmModeEditor
-from bot.ui.priority_editor import PriorityEditor
+from bot.ui.metin_editor import MetinEditor
+from bot.ui.widgets import (COLOR_ERROR, COLOR_MUTED, COLOR_WARN, GAP, GAP_S, PAD, WRAP, Tooltip, ValidatedEntry, add_tooltip,
+                            apply_style, note, section, tab_frame)
 
 logger = logging.getLogger(__name__)
 
+_minutes_error = vd.non_negative_number
 POLL_MS = 100
 LOG_MAX_LINES = 200
 REMINDER = "F12 o mouse a la esquina sup. izq.: detener  |  F11: pausa"
 KIND_LABELS = (("servidor", "Servidor"), ("personaje", "Personaje"), ("zona", "Zona"))
-COLOR_WARN, COLOR_ERROR, COLOR_PAUSE = "#b36b00", "#c00000", "#c00000"
-MIN_SIZE = (460, 560)
+MIN_SIZE = (900, 640)
+DEFAULT_GEOMETRY = "1000x800"    # pensado para un segundo monitor; se pisa con la geometria guardada
+ZONE_CANVAS_SIZE = (640, 420)
+SPOT_R, PLAYER_R = 4, 6          # radios (px) de los puntos del mapa y del personaje en el dibujo de la zona
+ZONE_COLORS = {"zone": "#2e8b57", "zone_fill": "#e3f4e8", "tolerance": "#e08a00", "vertex": "#d4a900", "spot": "#1a73e8",
+               "trail": "#e6a1a1", "player": "#d93025"}
+TAB_TITLES = (("control", "Control"), ("metin", "Metin"), ("zona", "Zona"), ("bichos", "Modo bichos"),
+              ("personaje", "Personaje"), ("habilidades", "Habilidades"), ("historial", "Historial"), ("objetos", "Objetos"))
+PROFILE_TIPS = {"servidor": "Perfil del servidor: teclas del juego y particularidades del servidor.",
+                "personaje": "Perfil del personaje: habilidades y cómo se ve su nombre.",
+                "zona": "Perfil de la zona: polígono de farmeo, tipos de metin y modo de farmeo."}
+STAT_FIELDS = (("state", "Estado", "Qué está haciendo el bot ahora."), ("time", "Tiempo", "Tiempo de la corrida."),
+               ("metins", "Metin rotos", "Metin rotos en esta corrida."), ("items", "Objetos", "Objetos recogidos."),
+               ("captchas", "Captchas", "Captchas detectados."), ("unstucks", "Destrabes", "Veces que se destrabó."),
+               ("skills_cast", "Habilidades lanzadas", "Habilidades que el bot lanzó."),
+               ("lures", "Señuelos usados", "Señuelos usados (solo modo bichos)."),
+               ("deaths", "Muertes (revividas)", "Veces que murió el personaje y cuántas veces logró revivir."))
 WS_MINIMIZEBOX = 0x00020000
 GWL_STYLE = -16
 
@@ -69,11 +91,18 @@ class App:
         self.editor = se.SkillsEditor(profiles_root)
         self.editor.load(self.opts.personaje)
         self._last_personaje = self.opts.personaje
-        self.prio = PriorityEditor(profiles_root)
-        self.prio.load(self.opts.zona)
+        self.metin = MetinEditor(profiles_root)
+        self.metin.load(self.opts.zona, self._labels_dir())
         self.farm = FarmModeEditor(profiles_root)
         self.farm.load(self.opts.zona)
         self._last_zona = self.opts.zona
+        self._calib: CalibrateDialog | None = None
+        self._override_warnings: list[str] = []
+        self.trail = zone_view.Trail()
+        self.cur_pos: tuple[float, float] | None = None
+        self._zone_metins = -1
+        self._zone = zone_view.ZoneData()
+        self._spots_px: list[tuple[float, float]] = []
         self._build()
         self._apply_window_prefs()
         self.refresh_overrides()
@@ -83,84 +112,121 @@ class App:
     # ------------------------------------------------------------------ construccion
     def _build(self) -> None:
         r = self.root
+        apply_style(r)
         r.title("Metin Bot")
         r.minsize(*MIN_SIZE)
         r.protocol("WM_DELETE_WINDOW", self.on_close)
         self.notebook = ttk.Notebook(r)
-        self.notebook.pack(fill="both", expand=True)
-        main = ttk.Frame(self.notebook, padding=8)
-        skills_tab = ttk.Frame(self.notebook, padding=8)
-        self.notebook.add(main, text="Control")
-        self.notebook.add(skills_tab, text="Habilidades")
-        self._build_skills(skills_tab)
-        history_tab = ttk.Frame(self.notebook, padding=8)
-        items_tab = ttk.Frame(self.notebook, padding=8)
-        self.notebook.add(history_tab, text="Historial")
-        self.notebook.add(items_tab, text="Objetos")
-        self._build_history(history_tab)
-        self._build_items(items_tab)
+        self.notebook.pack(fill="both", expand=True, padx=GAP_S, pady=GAP_S)
+        self.tabs: dict[str, ttk.Frame] = {}
+        for key, title in TAB_TITLES:
+            self.tabs[key] = tab_frame(self.notebook, title)
+        self._build_control(self.tabs["control"])
+        self._build_metin(self.tabs["metin"])
+        self._build_zone(self.tabs["zona"])
+        self._build_bichos(self.tabs["bichos"])
+        self._build_character(self.tabs["personaje"])
+        self._build_skills(self.tabs["habilidades"])
+        self._build_history(self.tabs["historial"])
+        self._build_items(self.tabs["objetos"])
+        self._refresh_tab_titles()
 
-        prof = ttk.LabelFrame(main, text="Perfiles", padding=6)
+    def _refresh_tab_titles(self) -> None:
+        """Titulo de cada pestana que edita perfiles con '*' si tiene cambios sin guardar."""
+        dirty = {"metin": self.metin.dirty, "bichos": self.farm.dirty, "habilidades": self.editor.dirty}
+        for key, title in TAB_TITLES:
+            if key in self.tabs:
+                self.notebook.tab(self.tabs[key], text=ctl.tab_title(title, dirty.get(key, False)))
+
+    def _build_control(self, tab: ttk.Frame) -> None:
+        """Pestana Control en dos columnas: izquierda perfiles y comandos, derecha estadisticas y log."""
+        tab.columnconfigure(0, weight=1, uniform="cols")
+        tab.columnconfigure(1, weight=2, uniform="cols")
+        tab.rowconfigure(0, weight=1)
+        left, right = ttk.Frame(tab), ttk.Frame(tab)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, GAP))
+        right.grid(row=0, column=1, sticky="nsew")
+
+        prof = section(left, "Perfiles")
         prof.pack(fill="x")
         self.combos: dict[str, ttk.Combobox] = {}
         self.vars: dict[str, tk.StringVar] = {}
         for i, (kind, label) in enumerate(KIND_LABELS):
-            ttk.Label(prof, text=label).grid(row=i, column=0, sticky="w", padx=(0, 8), pady=2)
+            ttk.Label(prof, text=label).grid(row=i, column=0, sticky="w", padx=(0, GAP), pady=GAP_S)
             var = tk.StringVar(value=getattr(self.opts, kind))
-            cb = ttk.Combobox(prof, textvariable=var, values=self.profiles.get(kind, []), state="readonly", width=40)
-            cb.grid(row=i, column=1, sticky="ew", pady=2)
+            cb = ttk.Combobox(prof, textvariable=var, values=self.profiles.get(kind, []), state="readonly", width=34)
+            cb.grid(row=i, column=1, sticky="ew", pady=GAP_S)
             cb.bind("<<ComboboxSelected>>", lambda _e, k=kind: self._on_profile_selected(k))
+            add_tooltip(cb, PROFILE_TIPS[kind])
             self.vars[kind], self.combos[kind] = var, cb
         prof.columnconfigure(1, weight=1)
-        self.warn_label = tk.Label(prof, text="", fg=COLOR_WARN, justify="left", anchor="w", wraplength=420)
-        self.warn_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.warn_label = ttk.Label(prof, text="", style="Warn.TLabel", justify="left", wraplength=WRAP - 120)
+        self.warn_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(GAP_S, 0))
 
-        self._build_priority(main)
-        self._build_farm_mode(main)
+        farm = section(left, "Modo de farmeo")
+        farm.pack(fill="x", pady=(GAP, 0))
+        ttk.Label(farm, text="Modo:").grid(row=0, column=0, sticky="w", padx=(0, GAP))
+        self.quick_mode_var = tk.StringVar(value=MODE_LABELS[self.farm.mode])
+        self.quick_combo = ttk.Combobox(farm, textvariable=self.quick_mode_var, values=[t for _, t in MODES],
+                                        state="readonly", width=12)
+        self.quick_combo.grid(row=0, column=1, sticky="w")
+        self.quick_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_quick_mode())
+        add_tooltip(self.quick_combo, "Metin: rompe metin. Bichos: pelea con los monstruos que atrae con el señuelo. "
+                                      "Se guarda en el perfil de zona. Los detalles de bichos están en su pestaña.")
+        ttk.Label(farm, text="Los detalles de bichos están en la pestaña Modo bichos.", style="Muted.TLabel",
+                  wraplength=WRAP - 120).grid(row=1, column=0, columnspan=2, sticky="w", pady=(GAP_S, 0))
 
-        opt = ttk.LabelFrame(main, text="Opciones", padding=6)
-        opt.pack(fill="x", pady=6)
-        ttk.Label(opt, text="Tiempo maximo (min, 0 = sin limite)").grid(row=0, column=0, sticky="w")
-        self.minutes_var = tk.StringVar(value=f"{self.opts.max_minutes:g}")
-        self.minutes_entry = ttk.Entry(opt, textvariable=self.minutes_var, width=8)
-        self.minutes_entry.grid(row=0, column=1, sticky="w", padx=8)
+        opt = section(left, "Opciones")
+        opt.pack(fill="x", pady=(GAP, 0))
+        ttk.Label(opt, text="Tiempo máximo (min)").grid(row=0, column=0, sticky="nw", pady=GAP_S)
+        self.minutes_field = ValidatedEntry(opt, _minutes_error, value=f"{self.opts.max_minutes:g}", width=8,
+                                            tooltip="Minutos que corre el bot antes de detenerse solo. 0 = sin límite.")
+        self.minutes_field.grid(row=0, column=1, sticky="w", padx=GAP)
+        self.minutes_var, self.minutes_entry = self.minutes_field.var, self.minutes_field.entry
         self.debug_var = tk.BooleanVar(value=self.opts.debug)
         self.observe_var = tk.BooleanVar(value=self.opts.observar)
         self.top_var = tk.BooleanVar(value=self.opts.always_on_top)
         self.checks = [ttk.Checkbutton(opt, text="Debug", variable=self.debug_var),
                        ttk.Checkbutton(opt, text="Observar (sin input)", variable=self.observe_var)]
+        add_tooltip(self.checks[0], "Guarda imágenes de lo que ve el bot en la carpeta debug. Útil para revisar errores.")
+        add_tooltip(self.checks[1], "El bot mira y registra pero no manda teclas ni clics al juego. Sirve para probar la detección.")
         self.checks[0].grid(row=1, column=0, sticky="w")
-        self.checks[1].grid(row=1, column=1, columnspan=2, sticky="w")
-        ttk.Checkbutton(opt, text="Siempre encima", variable=self.top_var, command=self._apply_window_prefs).grid(
-            row=2, column=0, sticky="w")
+        self.checks[1].grid(row=1, column=1, columnspan=2, sticky="w", padx=GAP)
+        top_check = ttk.Checkbutton(opt, text="Siempre encima", variable=self.top_var, command=self._apply_window_prefs)
+        top_check.grid(row=2, column=0, sticky="w")
+        add_tooltip(top_check, "Mantiene esta ventana por encima de las demás.")
 
-        bar = ttk.Frame(main)
-        bar.pack(fill="x")
+        bar = ttk.Frame(left)
+        bar.pack(fill="x", pady=(GAP, 0))
         self.btn_start = ttk.Button(bar, text="Iniciar", command=self.start)
         self.btn_pause = ttk.Button(bar, text="Pausar", command=self.toggle_pause)
         self.btn_stop = ttk.Button(bar, text="Detener", command=self.stop)
-        for b in (self.btn_start, self.btn_pause, self.btn_stop):
-            b.pack(side="left", expand=True, fill="x", padx=2)
-
-        self.paused_label = tk.Label(main, text="", fg=COLOR_PAUSE, font=("Segoe UI", 16, "bold"))
+        for b, tip in ((self.btn_start, "Arranca el bot con los perfiles elegidos (cuenta regresiva para poner el juego al frente)."),
+                       (self.btn_pause, "Pausa o reanuda el bot. También con F11."),
+                       (self.btn_stop, "Detiene el bot. También con F12 o llevando el mouse a la esquina superior izquierda.")):
+            b.pack(side="left", expand=True, fill="x", padx=GAP_S)
+            add_tooltip(b, tip)
+        self.paused_label = ttk.Label(left, text="", style="Paused.TLabel", anchor="center")
         self.paused_label.pack(fill="x")
-        st = ttk.LabelFrame(main, text="Estadisticas", padding=6)
+        ttk.Label(left, text=REMINDER, style="Muted.TLabel", wraplength=WRAP - 120, justify="left").pack(fill="x", pady=(GAP_S, 0))
+
+        st = section(right, "Estadísticas en vivo")
         st.pack(fill="x")
         self.stat_vars: dict[str, tk.StringVar] = {}
-        for i, (key, label) in enumerate((("state", "Estado"), ("metins", "Metin rotos"), ("items", "Objetos"),
-                                          ("captchas", "Captchas"), ("unstucks", "Destrabes"), ("time", "Tiempo"),
-                                          ("skills_cast", "Habilidades lanzadas"), ("lures", "Señuelos usados"))):
-            ttk.Label(st, text=label + ":").grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=(0, 4))
+        for i, (key, label, tip) in enumerate(STAT_FIELDS):
+            lab = ttk.Label(st, text=label + ":")
+            lab.grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=(0, GAP_S), pady=1)
+            add_tooltip(lab, tip)
             v = tk.StringVar(value="-")
-            ttk.Label(st, textvariable=v, font=("Segoe UI", 10, "bold")).grid(row=i // 2, column=(i % 2) * 2 + 1,
-                                                                             sticky="w", padx=(0, 16))
+            ttk.Label(st, textvariable=v, style="Big.TLabel").grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="w",
+                                                                    padx=(0, PAD * 2))
             self.stat_vars[key] = v
         self.info_var = tk.StringVar(value="")
-        tk.Label(st, textvariable=self.info_var, anchor="w", justify="left", wraplength=420).grid(
-            row=4, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        ttk.Label(st, textvariable=self.info_var, justify="left", wraplength=WRAP + 40).grid(
+            row=(len(STAT_FIELDS) + 1) // 2, column=0, columnspan=4, sticky="ew", pady=(GAP_S, 0))
 
-        live = ttk.LabelFrame(main, text="Objetos de esta sesión", padding=4)
-        live.pack(fill="x", pady=(6, 0))
+        live = section(right, "Objetos de esta sesión")
+        live.pack(fill="x", pady=(GAP, 0))
         self.live_tree = ttk.Treeview(live, columns=("name", "count"), show="headings", height=3, selectmode="none")
         self.live_tree.heading("name", text="Objeto")
         self.live_tree.heading("count", text="Cantidad")
@@ -168,8 +234,8 @@ class App:
         self.live_tree.column("count", width=80, anchor="center", stretch=False)
         self.live_tree.pack(fill="x")
 
-        lf = ttk.LabelFrame(main, text="Log", padding=4)
-        lf.pack(fill="both", expand=True, pady=6)
+        lf = section(right, "Log")
+        lf.pack(fill="both", expand=True, pady=(GAP, 0))
         self.log = tk.Text(lf, height=10, wrap="word", state="disabled", font=("Consolas", 9))
         sb = ttk.Scrollbar(lf, command=self.log.yview)
         self.log.configure(yscrollcommand=sb.set)
@@ -178,7 +244,30 @@ class App:
         self.log.tag_configure("WARNING", foreground=COLOR_WARN)
         self.log.tag_configure("ERROR", foreground=COLOR_ERROR)
         self.log.tag_configure("CRITICAL", foreground=COLOR_ERROR)
-        ttk.Label(main, text=REMINDER, foreground="#444").pack(fill="x")
+
+    def _on_quick_mode(self) -> None:
+        """Selector rapido de Control: cambia el modo y lo guarda en el perfil de zona (con el resto de bichos como esta)."""
+        if self.farm.locked:
+            self.refresh_farm_mode()
+            return
+        mode = next((k for k, t in MODES if t == self.quick_mode_var.get()), "metin")
+        self.farm.set_values(mode, self.farm.lure_key, self.farm.seconds)
+        if not self.save_farm_mode():
+            self.refresh_farm_mode()
+
+    # ------------------------------------------------------------------ personaje (placeholder de la tanda 2)
+    def _build_character(self, tab: ttk.Frame) -> None:
+        box = section(tab, "Personaje")
+        box.pack(fill="x")
+        ttk.Label(box, text="Próximamente", style="Big.TLabel").pack(anchor="w")
+        note(box, "Acá vas a poder crear y duplicar perfiles de personaje y de zona, y configurar recoger a pie y revivir.").pack(
+            anchor="w", pady=(GAP_S, 0))
+
+    # ------------------------------------------------------------------ modo bichos
+    def _build_bichos(self, tab: ttk.Frame) -> None:
+        note(tab, "Modo bichos: el bot usa un señuelo cada cierto tiempo y pelea con los monstruos que llegan.").pack(
+            fill="x", pady=(0, GAP))
+        self._build_farm_mode(tab)
 
     # ------------------------------------------------------------------ historial
     HISTORY_COLS = (("date", "Fecha", 120), ("duration", "Duración", 90), ("metins", "Metin", 55), ("items", "Objetos", 60),
@@ -319,84 +408,275 @@ class App:
         self.refresh_history()
         return True
 
-    # ------------------------------------------------------------------ prioridad de metin
-    def _build_priority(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text="Prioridad de metin", padding=6)
-        box.pack(fill="x", pady=(6, 0))
-        self.prio_var = tk.BooleanVar(value=self.prio.enabled)
+    # ------------------------------------------------------------------ metin (tipos y prioridad)
+    METIN_COLS = (("prio", "Prioridad", 80), ("attack", "Atacar", 60), ("name", "Tipo de metin", 220), ("tpl", "Plantilla", 70))
+
+    def _build_metin(self, tab: ttk.Frame) -> None:
+        note(tab, "Tipos de metin de la zona elegida. Marcá los que el bot tiene que atacar (clic en la casilla). Con "
+                  "\"Elegir por prioridad\" el bot va primero por los de más arriba.", wrap=WRAP + 120).pack(fill="x")
+        self.metin_warn = ttk.Label(tab, text="", style="Warn.TLabel", justify="left", wraplength=WRAP + 120)
+        self.metin_warn.pack(fill="x", pady=(GAP_S, 0))
+        box = section(tab, "Tipos de metin")
+        box.pack(fill="both", expand=True, pady=(GAP, 0))
+        self.prio_var = tk.BooleanVar(value=self.metin.enabled)
         self.prio_check = ttk.Checkbutton(box, text="Elegir por prioridad (arriba = primero)", variable=self.prio_var,
                                           command=self._on_prio_toggle)
-        self.prio_check.grid(row=0, column=0, columnspan=4, sticky="w")
-        self.prio_list = tk.Listbox(box, height=3, exportselection=False, activestyle="none")
-        self.prio_list.grid(row=1, column=0, sticky="ew", pady=2)
-        box.columnconfigure(0, weight=1)
+        self.prio_check.pack(anchor="w")
+        add_tooltip(self.prio_check, "Si está apagado, el bot ataca el metin más cercano de cualquier tipo marcado.")
+        frame = ttk.Frame(box)
+        frame.pack(fill="both", expand=True, pady=GAP)
+        self.metin_tree = ttk.Treeview(frame, columns=[c[0] for c in self.METIN_COLS], show="headings", height=8,
+                                       selectmode="browse")
+        for cid, label, width in self.METIN_COLS:
+            self.metin_tree.heading(cid, text=label)
+            self.metin_tree.column(cid, width=width, anchor="w" if cid == "name" else "center", stretch=cid == "name")
+        sb = ttk.Scrollbar(frame, command=self.metin_tree.yview)
+        self.metin_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.metin_tree.pack(side="left", fill="both", expand=True)
+        self.metin_tree.bind("<Button-1>", self._on_metin_click)
+        self.metin_tree.bind("<space>", lambda _e: self.toggle_metin(self._selected_metin()))
+        add_tooltip(self.metin_tree, "Clic en la casilla de Atacar para marcar o desmarcar. Plantilla = el bot ya aprendió "
+                                     "cómo se ve la etiqueta de ese metin.")
+        bar = ttk.Frame(box)
+        bar.pack(fill="x")
         self.prio_buttons: list[ttk.Widget] = []
-        for col, (text, cmd, w) in enumerate((("↑", lambda: self.move_priority(-1), 3),
-                                              ("↓", lambda: self.move_priority(1), 3),
-                                              ("Guardar", self.save_priority, 8)), start=1):
-            b = ttk.Button(box, text=text, width=w, command=cmd)
-            b.grid(row=1, column=col, padx=2)
+        for text, cmd, w, tip in (("↑", lambda: self.move_priority(-1), 3, "Sube el tipo elegido en la prioridad."),
+                                  ("↓", lambda: self.move_priority(1), 3, "Baja el tipo elegido en la prioridad."),
+                                  ("Guardar", self.save_priority, 8, "Guarda en el perfil de zona (con copia .bak).")):
+            b = ttk.Button(bar, text=text, width=w, command=cmd)
+            b.pack(side="left", padx=GAP_S)
+            add_tooltip(b, tip)
             self.prio_buttons.append(b)
+        self.btn_add_metin = ttk.Button(bar, text="Agregar tipo nuevo", command=self.add_metin_type)
+        self.btn_add_metin.pack(side="right", padx=GAP_S)
+        add_tooltip(self.btn_add_metin, "Enseña al bot un tipo de metin nuevo (abre una guía paso a paso).")
         self.prio_state = tk.StringVar(value="")
-        tk.Label(box, textvariable=self.prio_state, anchor="w", fg=COLOR_WARN).grid(row=2, column=0, columnspan=4, sticky="ew")
+        ttk.Label(box, textvariable=self.prio_state, style="Warn.TLabel", wraplength=WRAP + 120, justify="left").pack(
+            fill="x", pady=(GAP_S, 0))
         self.refresh_priority()
 
     def refresh_priority(self, select: int | None = None) -> None:
-        """Redibuja la lista, el interruptor y el indicador de cambios sin guardar."""
-        self.prio_list.delete(0, "end")
-        for i, n in enumerate(self.prio.names):
-            self.prio_list.insert("end", f"{i + 1}. {n}" if self.prio.enabled else n)
-        if select is not None and 0 <= select < len(self.prio.names):
-            self.prio_list.selection_set(select)
-        self.prio_var.set(self.prio.enabled)
+        """Redibuja la tabla, el interruptor y el indicador de cambios sin guardar."""
+        self.metin_tree.delete(*self.metin_tree.get_children())
+        for i, row in enumerate(self.metin.rows()):
+            self.metin_tree.insert("", "end", iid=str(i), values=row)
+        if select is not None and 0 <= select < len(self.metin.types):
+            self.metin_tree.selection_set(str(select))
+        self.prio_var.set(self.metin.enabled)
         parts = []
-        if self.prio.dirty:
+        parts += self.metin.errors()
+        if self.metin.dirty:
             parts.append("sin guardar")
-        if self.prio.locked:
-            parts.append("bloqueada mientras el bot corre")
+        if self.metin.locked:
+            parts.append("bloqueado mientras el bot corre")
         self.prio_state.set(" - ".join(parts))
+        self.metin_warn.configure(text="\n".join(self.metin.warnings() + self._override_text("target_metin_names")))
+        if hasattr(self, "tabs"):
+            self._refresh_tab_titles()
 
-    def _selected_priority(self) -> int | None:
-        sel = self.prio_list.curselection()
+    def _override_text(self, key: str) -> list[str]:
+        """Avisos de config.json que pisan `key` (para que se vea por que guardar en el perfil no cambia nada)."""
+        return [w for w in getattr(self, "_override_warnings", []) if key in w]
+
+    def _selected_metin(self) -> int | None:
+        sel = self.metin_tree.selection()
         return int(sel[0]) if sel else None
 
-    def _on_prio_toggle(self) -> None:
-        if self.prio.locked:
-            self.prio_var.set(self.prio.enabled)
+    def _on_metin_click(self, event: tk.Event) -> None:
+        if self.metin_tree.identify_region(event.x, event.y) != "cell" or self.metin_tree.identify_column(event.x) != "#2":
             return
-        self.prio.set_enabled(self.prio_var.get())
-        self.refresh_priority(select=self._selected_priority())
+        row = self.metin_tree.identify_row(event.y)
+        if row:
+            self.metin_tree.selection_set(row)
+            self.toggle_metin(int(row))
+
+    def toggle_metin(self, index: int | None) -> None:
+        """Marca o desmarca "Atacar" del tipo `index`."""
+        if index is None or self.metin.locked or not 0 <= index < len(self.metin.types):
+            return
+        self.metin.set_attack(index, not self.metin.types[index].attack)
+        self.refresh_priority(select=index)
+
+    def _on_prio_toggle(self) -> None:
+        if self.metin.locked:
+            self.prio_var.set(self.metin.enabled)
+            return
+        self.metin.set_enabled(self.prio_var.get())
+        self.refresh_priority(select=self._selected_metin())
 
     def move_priority(self, delta: int) -> None:
-        i = self._selected_priority()
-        if i is None or self.prio.locked:
+        i = self._selected_metin()
+        if i is None or self.metin.locked:
             return
-        self.refresh_priority(select=self.prio.move(i, delta))
+        self.refresh_priority(select=self.metin.move(i, delta))
 
     def save_priority(self) -> bool:
+        """Guarda tipos y prioridad en el perfil de zona. False (y aviso) si no es valido."""
         try:
-            self.prio.save()
+            self.metin.save()
         except (ValueError, ConfigError, OSError) as e:
-            self._notify("No se pudo guardar la prioridad", str(e))
+            self._notify("No se pudieron guardar los tipos de metin", str(e))
             return False
-        self.refresh_priority(select=self._selected_priority())
+        self.refresh_priority(select=self._selected_metin())
         return True
 
     def _confirm_unsaved_priority(self, what: str) -> bool:
-        """Como `_confirm_unsaved`, para la prioridad de la zona. False = cancelar la accion."""
-        if not self.prio.dirty:
+        """Como `_confirm_unsaved`, para los tipos de metin de la zona. False = cancelar la accion."""
+        if not self.metin.dirty:
             return True
-        ans = self._ask_save("Prioridad sin guardar",
-                             f"Hay cambios sin guardar en la prioridad de metin de '{self.prio.zona}'.\n"
-                             f"Guardarlos antes de {what}?")
+        ans = self._ask_save("Tipos de metin sin guardar",
+                             f"Hay cambios sin guardar en los tipos de metin de '{self.metin.zona}'.\n"
+                             f"¿Guardarlos antes de {what}?")
         if ans is None:
             return False
         return self.save_priority() if ans else True
 
+    def _labels_dir(self) -> Path:
+        return ctl.labels_dir(self.config_path, self.profiles_root)
+
+    def reload_metin_types(self) -> None:
+        """Vuelve a leer los tipos (perfil de zona + plantillas) descartando lo no guardado."""
+        self.metin.reload_types(self._labels_dir())
+        self.refresh_priority()
+
+    def add_metin_type(self) -> None:
+        """Abre la guia de `calibrate.py metin` (subproceso con salida en vivo)."""
+        if self.metin.locked or self._calib is not None or not self._confirm_unsaved_priority("agregar un tipo nuevo"):
+            return
+        existing = self.metin.names
+        zona = self.vars["zona"].get()
+        self._open_calibrate(
+            cr.METIN_TITLE, cr.METIN_STEPS,
+            lambda name: cr.build_calibrate_command("metin", nombre=name, servidor=self.vars["servidor"].get(),
+                                                    personaje=self.vars["personaje"].get(), zona=zona,
+                                                    config=self._calib_config()),
+            self._after_metin_calibrate, name_label="Nombre del tipo:",
+            name_validator=lambda t: cr.validate_metin_name(t, existing))
+
+    def _after_metin_calibrate(self, rc: int | None) -> None:
+        self.reload_metin_types()
+        self.refresh_overrides()
+        self.refresh_zone()
+
+    # ------------------------------------------------------------------ calibrate (ventanas guiadas)
+    def _calib_config(self) -> str | None:
+        """`--config` para calibrate.py: solo si la ventana usa una config distinta de la del proyecto."""
+        return None if self.config_path == "config.json" else str(self.config_path)
+
+    def _open_calibrate(self, title: str, steps: tuple[str, ...], factory: Callable[[str], list[str]],
+                        on_done: Callable[[int | None], None], **kw) -> None:
+        def finish(rc: int | None) -> None:
+            self._calib = None
+            self.refresh_buttons()
+            on_done(rc)
+        self._calib = CalibrateDialog(self.root, title, steps, factory, finish, **kw)
+        self.refresh_buttons()
+
+    # ------------------------------------------------------------------ zona (dibujo)
+    def _build_zone(self, tab: ttk.Frame) -> None:
+        top = ttk.Frame(tab)
+        top.pack(fill="x")
+        self.btn_redo_zone = ttk.Button(top, text="Rehacer la zona", command=self.redo_zone)
+        self.btn_redo_zone.pack(side="left")
+        add_tooltip(self.btn_redo_zone, "Marcá de nuevo las esquinas de la zona de farmeo caminando por el juego (guía paso a paso).")
+        btn_refresh = ttk.Button(top, text="Actualizar", command=self.refresh_zone)
+        btn_refresh.pack(side="left", padx=GAP)
+        add_tooltip(btn_refresh, "Vuelve a leer la zona y el mapa de metin.")
+        self.zone_pos_var = tk.StringVar(value=zone_view.position_text(None, ""))
+        ttk.Label(top, textvariable=self.zone_pos_var, style="Big.TLabel").pack(side="right")
+        self.zone_note = ttk.Label(tab, text="", style="Warn.TLabel", justify="left", wraplength=WRAP * 2)
+        self.zone_note.pack(fill="x", pady=(GAP_S, 0))
+        box = section(tab, "Mapa de la zona")
+        box.pack(fill="both", expand=True, pady=(GAP, 0))
+        self.zone_canvas = tk.Canvas(box, background="#ffffff", highlightthickness=1, highlightbackground="#c4c7c5",
+                                     width=ZONE_CANVAS_SIZE[0], height=ZONE_CANVAS_SIZE[1])
+        self.zone_canvas.pack(fill="both", expand=True)
+        self._zone_tip = Tooltip(self.zone_canvas, "")
+        self._zone_tip_idx: int | None = None
+        self.zone_canvas.bind("<Configure>", lambda _e: self.draw_zone())
+        self.zone_canvas.bind("<Motion>", self._on_zone_motion)
+        self.zone_canvas.bind("<Leave>", lambda _e: self._hide_zone_tip())
+        note(box, "Verde: zona de farmeo. Naranja: franja de tolerancia. Puntos azules: donde se rompieron metin (pasá el mouse "
+                  "para ver cuántas veces y hace cuánto). Punto rojo: el personaje, con su rastro.", wrap=WRAP * 2).pack(
+            fill="x", pady=(GAP_S, 0))
+        self.refresh_zone()
+
+    def refresh_zone(self) -> None:
+        """Relee la zona y el mapa de metin de los perfiles elegidos y redibuja."""
+        self._zone = zone_view.load_zone_data(self.config_path, self.vars["servidor"].get(), self.vars["personaje"].get(),
+                                              self.vars["zona"].get(), self.profiles_root)
+        self.zone_note.configure(text=self._zone.error)
+        self.draw_zone()
+
+    def draw_zone(self) -> None:
+        c = self.zone_canvas
+        c.delete("all")
+        z = self._zone
+        w = max(c.winfo_width(), 50) if c.winfo_width() > 1 else ZONE_CANVAS_SIZE[0]
+        h = max(c.winfo_height(), 50) if c.winfo_height() > 1 else ZONE_CANVAS_SIZE[1]
+        if not z.polygon:
+            c.create_text(w / 2, h / 2, text="No hay zona para dibujar.", fill=COLOR_MUTED)
+            self._spots_px = []
+            return
+        tr = zone_view.fit_transform(z.polygon, z.tolerance, w, h)
+        poly = zone_view.polygon_to_canvas(z.polygon, tr)
+        for contour in zone_view.tolerance_outline(poly, z.tolerance * tr.scale, w, h):
+            c.create_polygon([v for p in contour for v in p], outline=ZONE_COLORS["tolerance"], fill="", width=2, dash=(6, 4))
+        c.create_polygon([v for p in poly for v in p], outline=ZONE_COLORS["zone"], fill=ZONE_COLORS["zone_fill"], width=2)
+        for i, ((px, py), (gx, gy)) in enumerate(zip(poly, z.polygon), 1):
+            c.create_oval(px - 4, py - 4, px + 4, py + 4, fill=ZONE_COLORS["vertex"], outline="")
+            c.create_text(px + 8, py - 8, text=f"{i} ({gx:.0f}, {gy:.0f})", anchor="w", fill=COLOR_MUTED)
+        self._spots_px = [tr.apply(s.x, s.y) for s in z.spots]
+        for sx, sy in self._spots_px:
+            c.create_oval(sx - SPOT_R, sy - SPOT_R, sx + SPOT_R, sy + SPOT_R, fill=ZONE_COLORS["spot"], outline="#ffffff")
+        trail = [tr.apply(x, y) for x, y in self.trail.points]
+        if len(trail) >= 2:
+            c.create_line([v for p in trail for v in p], fill=ZONE_COLORS["trail"], width=2)
+        if self.cur_pos is not None:
+            px, py = tr.apply(*self.cur_pos)
+            c.create_oval(px - PLAYER_R, py - PLAYER_R, px + PLAYER_R, py + PLAYER_R, fill=ZONE_COLORS["player"], outline="#ffffff", width=2)
+
+    def _on_zone_motion(self, event: tk.Event) -> None:
+        idx = zone_view.nearest_spot(self._spots_px, event.x, event.y)
+        if idx == self._zone_tip_idx:
+            return
+        self._zone_tip_idx = idx
+        if idx is None or idx >= len(self._zone.spots):
+            self._zone_tip.hide()
+        else:
+            self._zone_tip.show(event.x_root + 14, event.y_root + 14, zone_view.spot_tooltip(self._zone.spots[idx]))
+
+    def _hide_zone_tip(self) -> None:
+        self._zone_tip_idx = None
+        self._zone_tip.hide()
+
+    def update_zone_position(self, s: ctl.Status) -> None:
+        """Posicion y rastro del personaje de un @@STATUS (redibuja solo si cambio algo)."""
+        changed = self.trail.add(s.pos) or s.pos != self.cur_pos
+        self.cur_pos = s.pos
+        self.zone_pos_var.set(zone_view.position_text(s.pos, s.zone_status))
+        if s.metins != self._zone_metins:   # se rompio un metin: el mapa tiene un punto nuevo o uno actualizado
+            self._zone_metins = s.metins
+            self.refresh_zone()
+        elif changed:
+            self.draw_zone()
+
+    def redo_zone(self) -> None:
+        """Abre la guia de `calibrate.py zona` (subproceso con salida en vivo)."""
+        if self.metin.locked or self._calib is not None:
+            return
+        self._open_calibrate(
+            cr.ZONA_TITLE, cr.ZONA_STEPS,
+            lambda _n: cr.build_calibrate_command("zona", servidor=self.vars["servidor"].get(),
+                                                  personaje=self.vars["personaje"].get(), zona=self.vars["zona"].get(),
+                                                  config=self._calib_config()),
+            lambda rc: (self.refresh_overrides(), self.refresh_zone()))
+
     # ------------------------------------------------------------------ modo de farmeo
     def _build_farm_mode(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text="Modo de farmeo", padding=6)
-        box.pack(fill="x", pady=(6, 0))
+        box = section(parent, "Modo de farmeo y señuelo")
+        box.pack(fill="x")
         ttk.Label(box, text="Modo:").grid(row=0, column=0, sticky="w")
         self.farm_mode_var = tk.StringVar(value=MODE_LABELS[self.farm.mode])
         self.farm_combo = ttk.Combobox(box, textvariable=self.farm_mode_var, values=[t for _, t in MODES], state="readonly",
@@ -412,8 +692,13 @@ class App:
         self.farm_secs_entry.grid(row=0, column=5, sticky="w", padx=4)
         self.farm_save_btn = ttk.Button(box, text="Guardar", width=8, command=self.save_farm_mode)
         self.farm_save_btn.grid(row=0, column=6, padx=(10, 0))
+        for w, tip in ((self.farm_combo, "Metin: rompe metin. Bichos: pelea con los monstruos que atrae con el señuelo."),
+                       (self.farm_key_entry, "Tecla del juego que usa el señuelo (ej. f4). No puede ser F11 ni F12."),
+                       (self.farm_secs_entry, "Cada cuántos segundos usa el señuelo. Tiene que ser mayor que 0."),
+                       (self.farm_save_btn, "Guarda el modo y el señuelo en el perfil de zona (con copia .bak).")):
+            add_tooltip(w, tip)
         self.farm_state = tk.StringVar(value="")
-        tk.Label(box, textvariable=self.farm_state, anchor="w", fg=COLOR_WARN).grid(row=1, column=0, columnspan=7, sticky="ew")
+        ttk.Label(box, textvariable=self.farm_state, style="Warn.TLabel").grid(row=1, column=0, columnspan=7, sticky="ew")
         for v in (self.farm_mode_var, self.farm_key_var, self.farm_secs_var):
             v.trace_add("write", lambda *_a: self._on_farm_edit())
 
@@ -435,7 +720,7 @@ class App:
         self._farm_syncing = True
         try:
             for var, value in ((self.farm_mode_var, MODE_LABELS[self.farm.mode]), (self.farm_key_var, self.farm.lure_key),
-                               (self.farm_secs_var, self.farm.seconds)):
+                               (self.farm_secs_var, self.farm.seconds), (self.quick_mode_var, MODE_LABELS[self.farm.mode])):
                 if var.get() != value:   # no pisar lo que se esta escribiendo (moveria el cursor)
                     var.set(value)
         finally:
@@ -446,6 +731,8 @@ class App:
         if self.farm.locked:
             parts.append("bloqueado mientras el bot corre")
         self.farm_state.set(" - ".join(parts))
+        if hasattr(self, "tabs"):
+            self._refresh_tab_titles()
 
     def save_farm_mode(self) -> bool:
         try:
@@ -532,7 +819,8 @@ class App:
         if self.editor.locked:
             parts.append("bloqueada mientras el bot corre: los cambios aplican a la proxima sesion")
         self.skills_state.set(" - ".join(parts))
-        self.notebook.tab(1, text="Habilidades *" if self.editor.dirty else "Habilidades")
+        if hasattr(self, "tabs"):
+            self._refresh_tab_titles()
 
     def _selected_skill(self) -> int | None:
         sel = self.tree.selection()
@@ -622,19 +910,21 @@ class App:
                     self.vars["zona"].set(self._last_zona)
                     return
                 self._last_zona = new
-                self.prio.load(new)
+                self.metin.load(new, self._labels_dir())
                 self.refresh_priority()
                 self.farm.load(new)
                 self.refresh_farm_mode()
         self.refresh_overrides()
+        self.trail.clear()
+        self.refresh_zone()
 
     # ------------------------------------------------------------------ ventana
     def _apply_window_prefs(self) -> None:
         """Posicion/tamano guardados, siempre encima y sin minimizar."""
         r = self.root
-        if self.opts.geometry and not getattr(self, "_geometry_applied", False):
+        if not getattr(self, "_geometry_applied", False):
             try:
-                r.geometry(self.opts.geometry)
+                r.geometry(self.opts.geometry or DEFAULT_GEOMETRY)
             except tk.TclError:
                 logger.warning("Geometria guardada invalida: %s", self.opts.geometry)
             self._geometry_applied = True
@@ -697,7 +987,10 @@ class App:
     def refresh_overrides(self) -> None:
         o = ctl.UiOptions(**{**self.opts.__dict__, **{k: self.vars[k].get() for k, _ in KIND_LABELS}})
         warnings = ctl.override_warnings(o, self.config_path, self.profiles_root)
+        self._override_warnings = warnings
         self.warn_label.configure(text="\n".join(warnings))
+        if hasattr(self, "metin_warn"):
+            self.refresh_priority(select=self._selected_metin())
 
     # ------------------------------------------------------------------ acciones
     def start(self) -> None:
@@ -727,6 +1020,10 @@ class App:
             return
         self._got_end, self.paused, self._last_log_error = False, False, ""
         self._last_status = None
+        self.trail.clear()
+        self.cur_pos, self._zone_metins = None, -1
+        self.zone_pos_var.set(zone_view.position_text(None, ""))
+        self.draw_zone()
         self.info_var.set("")
         for v in self.stat_vars.values():
             v.set("-")
@@ -757,6 +1054,8 @@ class App:
                 return
             self.proc.stop(ctl.STOP_GRACE_S)
         self.save_settings()
+        if self._calib is not None:
+            self._calib.kill()
         if self._after_id is not None:
             self.root.after_cancel(self._after_id)
             self._after_id = None
@@ -780,10 +1079,14 @@ class App:
         self.editor.locked = not b.options
         for w in self.skill_buttons:
             w.configure(state="normal" if b.options else "disabled")
-        self.prio.locked = not b.options
+        self.metin.locked = not b.options
         for w in (self.prio_check, *self.prio_buttons):
             w.configure(state="normal" if b.options else "disabled")
-        self.refresh_priority(select=self._selected_priority())
+        idle = b.options and self._calib is None   # las guias de calibracion necesitan el bot detenido y de a una
+        for w in (self.btn_add_metin, self.btn_redo_zone):
+            w.configure(state="normal" if idle else "disabled")
+        self.quick_combo.configure(state="readonly" if b.options else "disabled")
+        self.refresh_priority(select=self._selected_metin())
         self.farm.locked = not b.options
         for w in (self.farm_combo, self.farm_key_entry, self.farm_secs_entry, self.farm_save_btn):
             w.configure(state=("readonly" if w is self.farm_combo else "normal") if b.options else "disabled")
@@ -825,6 +1128,8 @@ class App:
         v["time"].set(ctl.format_elapsed(s.elapsed_s))
         v["skills_cast"].set(str(s.skills_cast))
         v["lures"].set(str(s.lures) if s.farm_mode == "bichos" else "-")
+        v["deaths"].set(f"{s.deaths} ({s.revives})")
+        self.update_zone_position(s)
         self.live_tree.delete(*self.live_tree.get_children())
         for name, n in hv.live_item_rows(s.items_by_type):
             self.live_tree.insert("", "end", values=(name, n))

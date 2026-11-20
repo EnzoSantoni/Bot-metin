@@ -4,6 +4,10 @@ Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|perso
 Cada valor se guarda en el perfil activo que le corresponde (ventana -> servidor, zona -> zona, velocidad -> personaje,
 metin -> plantillas + zona), o en config.json si ese valor esta definido ahi (lo pisa). Los que escriben piden confirmacion (s/n, o --si), hacen config.json.bak y validan antes de guardar.
 F12 o Ctrl+C cancelan sin guardar.
+
+Opciones para la interfaz grafica (la consola no las necesita):
+  --ui          las preguntas salen como una linea "@@ASK <pregunta>" y la respuesta se lee de stdin (una linea).
+  --en-perfil   guarda en el perfil activo (p. ej. zona -> perfil de zona, con .bak) aunque config.json defina ese valor.
 """
 import argparse
 import sys
@@ -11,6 +15,7 @@ import sys
 from bot import calibration as cal
 from bot.config import ConfigError
 from bot.profiles import build_config
+from bot.ui.controller import ASK_TAG
 
 NEEDS_GAME = {"zona", "velocidad", "metin", "personaje", "zonas"}   # subcomandos que capturan el juego
 
@@ -22,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
     common.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
     common.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Guabina - Oscuridad y Negro)")
+    common.add_argument("--ui", action="store_true", help="modo interfaz: preguntas como '@@ASK ...' y respuesta por stdin")
+    common.add_argument("--en-perfil", action="store_true",
+                        help="guardar en el perfil activo aunque config.json defina ese valor (lo usa la interfaz)")
     ap = argparse.ArgumentParser(description="Calibracion pasiva de metin-bot (no manda input al juego).")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("ventana", parents=[common], help="elegir la ventana del juego y medir su cliente")
@@ -42,8 +50,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def ui_ask(prompt: str) -> str:
+    """Pregunta para la interfaz: una linea @@ASK con la pregunta y la respuesta en la proxima linea de stdin."""
+    print(ASK_TAG + prompt.strip(), flush=True)
+    line = sys.stdin.readline()
+    if not line:
+        raise EOFError
+    return line
+
+
 def make_session(args: argparse.Namespace, cfg: dict) -> cal.Session:
-    s = cal.Session(cfg=cfg, config_path=args.config, yes=args.si)
+    s = cal.Session(cfg=cfg, config_path=args.config, yes=args.si, prefer_profile=args.en_perfil)
+    if args.ui:
+        s.ask = ui_ask
     if args.cmd == "ventana":
         from bot.capture import enable_dpi_awareness, list_windows
         enable_dpi_awareness()
