@@ -120,7 +120,9 @@ def test_bot_guarda_el_punto_al_romper_un_metin(tmp_path, caplog):
             return perc(metins=[metin()])
         if st is State.ATACAR:
             w["atk"] += 1
-            return perc(panel=target_panel([0.9, 0.6, 0.3][w["atk"] - 1]) if w["atk"] <= 3 else None)
+            if w["atk"] == 4:
+                h.clock.t += 20.0   # un metin real tarda mas de attack.min_break_s en romperse
+            return perc(panel=target_panel([0.9, 0.5, 0.05][w["atk"] - 1]) if w["atk"] <= 3 else None)
         return perc()
 
     h, sm, _ = spawn_harness(tmp_path, script)

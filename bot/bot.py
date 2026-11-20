@@ -73,6 +73,9 @@ END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
 LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
+# Pasos al costado para destrabar yendo al metin: (nombre, acciones de `controls`), alternando izquierda / derecha
+SIDESTEPS = (("A", ["move_left"]), ("D", ["move_right"]), ("W+A", ["move_up", "move_left"]),
+             ("W+D", ["move_up", "move_right"]))
 SCREEN_COMBO_VEC = {"W": (0.0, -1.0), "W+D": (1.0, -1.0), "D": (1.0, 0.0), "S+D": (1.0, 1.0), "S": (0.0, 1.0),
                     "S+A": (-1.0, 1.0), "A": (-1.0, 0.0), "W+A": (-1.0, -1.0)}   # direccion de pantalla de cada combinacion
 
@@ -138,6 +141,29 @@ class _Attack:
     walk_s: float = 0.0                         # segundos acumulados caminando hacia el metin (tope `attack.walk_max_s`)
     seen_t: float | None = None                 # hora del ciclo anterior (para acumular `walk_s`)
     spot: _Spot | None = None                   # aproximaciones a esta piedra: se borran recien al confirmar el metin
+    confirm_t: float | None = None              # hora en que el panel confirmo el metin
+    last_hp: float | None = None                # ultima vida leida en el panel (0..1)
+    hp_down_t: float = -math.inf                # ultima vez que la vida BAJO (pegando)
+    gone: int = 0                               # ciclos seguidos con vida baja, sin panel y sin piedra a la vista
+    wait_t: float | None = None                 # desde cuando la vida esta baja pero la piedra sigue a la vista
+    reclick_t: float = -math.inf                # hora del ultimo reclic
+
+
+@dataclass
+class _CurrentMetin:
+    """Metin en curso: clickeado/seleccionado o atacado y todavia no roto. Mientras existe no se elige otro."""
+    screen: tuple[int, int]            # ultimo punto de pantalla
+    gp: Xy | None                      # posicion estimada en el juego (None sin camara)
+    name: str | None                   # tipo (slug del panel o de la etiqueta)
+    since_t: float
+    last_seen_t: float                 # ultima vez que se lo vio (panel o piedra en pantalla)
+    rot: int                           # giros de la camara cuando se fijo `screen` (otro valor = camara girada)
+    last_hp: float | None = None
+    confirmed_t: float | None = None
+    deselects: int = 0                 # reclics por deseleccion en esta ronda
+    rounds: int = 0                    # veces que se agotaron los reclics por deseleccion
+    unstick_n: int = 0                 # intentos de destrabe yendo al metin (escalera ESPACIO / costado)
+    ladders: int = 0                   # veces que se agoto esa escalera (y se paso a DESTRABAR)
 
 
 @dataclass
@@ -273,6 +299,7 @@ class Bot:
         self._t_start = self._last_t = self.clock()
         self._img: Any = None
         self._atk: _Attack | None = None
+        self._cur: _CurrentMetin | None = None    # metin en curso (sobrevive a BUSCAR/EXPLORAR/DESTRABAR)
         self._apr: _Approach | None = None
         self._walk: _Walk | None = None
         self._pk: _Pickup | None = None
@@ -424,6 +451,8 @@ class Bot:
         if old in (State.VOLVER, State.CENTRO) and self._vl_since is not None:
             self._vl_acc += self.clock() - self._vl_since
             self._vl_since = None
+        if old is State.CAPTCHA and self._cur is not None:
+            self._cur.last_seen_t = self.clock()   # el tiempo del captcha no cuenta para soltar el metin en curso
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
         if self.state is not new:
@@ -728,7 +757,7 @@ class Bot:
     def _discard(self, a: _Attack, reason: str, p: Perception, t: float) -> Transition:
         self._add_discard(a, t)
         self.gi.press("deselect")
-        self._atk = None
+        self._atk = self._cur = None
         self._dbg("descarte", f"metin descartado ({reason})")
         return State.BUSCAR, f"metin descartado ({reason})"
 
@@ -792,6 +821,10 @@ class Bot:
         far, why_far = self._far_view(p, t)
         self._log_reasons(why + why_far)
         ranked = self._goals(cands, far, p)
+        if self._cur is not None:
+            out = self._pick_current(ranked, p, t, attack_why)
+            if out is not None or self._cur is not None:
+                return out   # con un metin en curso no se elige otro
         for i, (g, _) in enumerate(ranked):
             if g.kind == "etiqueta":
                 c: _Cand = g.ref
@@ -810,6 +843,108 @@ class Bot:
             est = "" if fc.gp is None else f", est. ({fc.gp[0]:.0f}, {fc.gp[1]:.0f})"
             return State.ACERCARSE, f"piedra lejana en {fc.far.center}{est}"
         return None
+
+    # ------------------------------------------------------------------ metin en curso
+    def _current_dist(self, screen: tuple[int, int], gp: Xy | None) -> float | None:
+        """Distancia al metin en curso de algo visto en `screen` (estimado en `gp`) si es el mismo metin: en pantalla (a <=
+        `attack.relocate_px`) si la camara no giro desde que se fijo su ultimo punto, o por posicion estimada en el juego
+        (a <= radio de descarte). None si no es el metin en curso."""
+        c = self._cur
+        if c is None:
+            return None
+        if self.camera.rotations == c.rot and (d := math.dist(screen, c.screen)) <= float(self.atk["relocate_px"]):
+            return d
+        if gp is not None and c.gp is not None and (d := math.dist(gp, c.gp)) <= self._discard_radius(c.gp):
+            return d
+        return None
+
+    def _is_current(self, screen: tuple[int, int], gp: Xy | None) -> bool:
+        return self._current_dist(screen, gp) is not None
+
+    def _pick_current(self, ranked: list[tuple[Goal, float]], p: Perception, t: float, attack_why: str) -> Transition:
+        """Con un metin en curso: solo ese (el candidato mas cercano a su ultimo punto). Lo retoma con un clic (a un punto sin
+        monstruos encima); si no se ve y pasaron `attack.target_keep_s` desde la ultima vez que se lo vio, lo suelta (y
+        sigue la eleccion normal: `_cur` queda None)."""
+        c = self._cur
+        found: list[tuple[float, tuple[int, int], Xy | None]] = []
+        for g, _ in ranked:
+            if g.kind == "etiqueta":
+                cand: _Cand = g.ref
+                screen, gp, point = cand.det.click_point, cand.gp, cand.det.click_point
+            else:
+                fc: _FarCand = g.ref
+                screen, gp, point = fc.far.center, fc.gp, fc.far.rect.center
+            d = self._current_dist(screen, gp)
+            if d is not None:
+                found.append((d, point, gp))
+        for _, point, gp in sorted(found, key=lambda e: e[0]):
+            point = self._clear_point(point, p)
+            if not self._click_attack(point, gp, p, t):
+                continue
+            logger.info("Retomo el metin en curso en (%d, %d)", point[0], point[1])
+            self._no_target_t = t
+            return State.ATACAR, attack_why + " (en curso)"
+        lost = t - c.last_seen_t
+        if lost >= float(self.atk["target_keep_s"]):
+            logger.info("Abandono el metin en curso: no lo encuentro hace %.0f s", lost)
+            self._cur = None
+        return None
+
+    def _set_current(self, point: tuple[int, int], gp: Xy | None, p: Perception, t: float) -> None:
+        """Clic en un metin: si es el que ya estaba en curso se lo conserva (con sus contadores); si no, es uno nuevo."""
+        c = self._cur
+        if c is not None and self._is_current(point, gp):
+            c.screen, c.rot, c.last_seen_t = point, self.camera.rotations, t
+            if gp is not None:
+                c.gp = gp
+            return
+        lab = self._label_of(point, p)
+        self._cur = _CurrentMetin(point, gp, lab.name if lab is not None else None, t, t, self.camera.rotations)
+
+    def _touch_current(self, a: _Attack, p: Perception, t: float) -> None:
+        """Durante ATACAR: sigue el punto de pantalla y la posicion del metin en curso y anota cuando se lo vio."""
+        c = self._cur
+        if c is None:
+            return
+        c.screen, c.rot = a.click, self.camera.rotations
+        gp = self._game_pos_of(a.click, p)
+        if gp is not None:
+            c.gp = gp
+        if (p.panel is not None and p.panel.present and p.panel.kind == "target_metin") or                 self._stone_visible(a.click, p, float(self.atk["relocate_px"])):
+            c.last_seen_t = t
+
+    def _stone_visible(self, pt: tuple[int, int], p: Perception, radius: float) -> bool:
+        """Hay una etiqueta de metin (cualquier tipo) o una piedra lejana a <= `radius` px de `pt`."""
+        return (any(math.dist(d.click_point, pt) <= radius for d in p.metins)
+                or any(min(math.dist(f.center, pt), math.dist(f.rect.center, pt)) <= radius for f in p.far_metins))
+
+    def _clear_point(self, point: tuple[int, int], p: Perception) -> tuple[int, int]:
+        """Punto de clic sobre el cuerpo de la piedra sin nombres de monstruos encima. Si `point` ya queda a mas de
+        `attack.monster_clear_px` de toda etiqueta de monstruo, se usa tal cual; si no, el mas alejado de las etiquetas
+        entre varios candidatos (centro y partes de la piedra lejana de abajo, y `point` con `attack.clear_offsets_px`)."""
+        if not p.monsters:
+            return point
+        rects = [m.rect for m in p.monsters]
+
+        def gap(pt: tuple[int, int]) -> float:
+            return min(math.hypot(max(r.x - pt[0], 0, pt[0] - r.right), max(r.y - pt[1], 0, pt[1] - r.bottom))
+                       for r in rects)
+        clr = float(self.atk["monster_clear_px"])
+        if gap(point) > clr:
+            return point
+        lim = float(self.apr["label_match_px"])
+        under = [f for f in p.far_metins if min(math.dist(f.center, point), math.dist(f.rect.center, point)) <= lim]
+        cands = [point]
+        if under:
+            r = min(under, key=lambda f: math.dist(f.rect.center, point)).rect
+            cx, cy = r.center
+            cands += [(cx, cy), (cx, r.y + r.h // 4), (r.x + r.w // 4, cy), (r.x + 3 * r.w // 4, cy),
+                      (cx, r.y + 3 * r.h // 4)]
+        cands += [(point[0] + int(dx), point[1] + int(dy)) for dx, dy in self.atk["clear_offsets_px"]]
+        cands = [c for c in cands if p.mask.allows(*c)]
+        best = max(cands, key=gap, default=point)
+        logger.info("Punto de clic %s con monstruos encima (a %.0f px): uso %s (a %.0f px)", point, gap(point), best, gap(best))
+        return best
 
     def _do_buscar(self, p: Perception, t: float) -> Transition:
         if self._zone_status() is ZoneStatus.OUTSIDE:
@@ -835,6 +970,7 @@ class Bot:
         pos = self.tracker.position
         self._atk = _Attack(t, point, gp, t, t, pos, last_drop_t=t, trail=[] if pos is None else [(t, pos)],
                             start_pos=pos, ref=pos)
+        self._set_current(point, gp, p, t)
         return True
 
     def _try_attack(self, cands: list[_Cand], p: Perception, t: float) -> bool:
@@ -912,20 +1048,26 @@ class Bot:
         a = self._atk
         if a is None:
             return State.BUSCAR, "sin ataque en curso"
+        if self._cur is None:
+            self._set_current(a.click, a.gp, p, t)
         pos = self.tracker.position
         if pos != a.last_pos:
             a.progress_t, a.last_pos = t, pos
         if pos is not None:
             win = float(self.atk["blocked_s"])
             a.trail = [e for e in a.trail if t - e[0] <= win] + [(t, pos)]
-        walking = self._update_walk(a, pos, t)
-        self._track_click(a, p)
-        if a.pending is not None:   # ESPACIO ya hecho en el ciclo anterior: ahora el reclic, con una captura fresca
+        self._update_walk(a, pos, t)
+        panel = p.panel
+        kind = panel.kind if panel is not None and panel.present else None
+        if kind == "target_metin" or not a.confirmed:   # sin panel el punto queda quieto (no saltar a un metin vecino)
+            self._track_click(a, p)
+        self._touch_current(a, p, t)
+        if kind == "target_metin":
+            self._read_panel(a, panel, t)
+        if a.pending is not None:   # ESPACIO / paso al costado ya hecho en el ciclo anterior: ahora el reclic, con captura fresca
             why, count = a.pending
             a.pending = None
             return self._reclick(a, why, p, t, count)
-        panel = p.panel
-        kind = panel.kind if panel is not None and panel.present else None
         if kind in WRONG_PANEL_KINDS:
             what = panel.name or kind
             if self._count_wrong(a) >= int(self.atk["max_wrong_selections"]):
@@ -944,54 +1086,40 @@ class Bot:
             self._atk = None
             return State.BUSCAR, f"se selecciono otra cosa ({what})"
         need = int(self.atk["broken_confirm_cycles"])
-        broken = False
+        ended = False
         if kind == "target_metin":
-            a.missing = 0
-            if not a.confirmed:
-                a.confirmed, a.last_drop_t = True, t
-                self._forget_wrong(a)
-                self._close_episode("metin confirmado")
-                logger.info("Metin confirmado en el panel (%s)", panel.name)
-                if a.spot is not None and a.spot in self._tries:
-                    self._tries.remove(a.spot)
-            hp = panel.hp_ratio
-            if hp is not None:
-                if a.min_hp is None or hp < a.min_hp:
-                    a.min_hp, a.last_drop_t = hp, t
-            a.zero = a.zero + 1 if hp is not None and hp <= 0 else 0
-            broken = a.zero >= need
-        elif a.confirmed:
+            ended = a.zero >= need
+        elif a.confirmed and t - a.reclick_t >= float(self.atk["reclick_wait_s"]):
             a.missing += 1
-            broken = a.missing >= need
-        if broken:
-            self.stats.metins += 1
-            self._atk = None
-            self._record_spawn()
-            if self._zone_status() is ZoneStatus.TOLERANCE:
-                self.pending_return = True
-            return State.RECOGER, "metin roto"
+            ended = a.missing >= need
+        if ended:
+            handled, out = self._attack_ended(a, p, t, kind is not None)
+            if handled:
+                return out
         if self._zone_status() is ZoneStatus.OUTSIDE:
             self.gi.press("deselect")
             self._atk = None
             if a.gp is None or not self.zone.accepts(a.gp):   # su posicion queda afuera (o no se sabe): no volver a caer
                 self._add_discard(a, t)
+                self._cur = None
                 logger.info("Metin descartado: salio de la zona atacandolo (posicion %s)",
                             "desconocida, sin camara" if a.gp is None else f"est. ({a.gp[0]:.0f}, {a.gp[1]:.0f})")
                 self._dbg("descarte", "salio de la zona atacando: metin descartado")
             return State.VOLVER, "salio de la zona atacando"
         if t - a.start_t > float(self.atk["max_seconds"]):
             return self._discard(a, "tiempo maximo de ataque", p, t)
+        if kind == "target_metin" and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
+            return None   # esta pegando (la vida baja): no se reclickea por ningun motivo
+        if kind == "target_metin" or not a.confirmed:
+            quiet = t - max(a.move_t, a.last_click_t)
+            if quiet >= float(self.atk["walk_stuck_s"]) and t - a.hp_down_t >= float(self.atk["walk_stuck_s"]):
+                return self._unstick_ladder(a, quiet, p, t)
         if a.confirmed:
             if kind == "target_metin":
                 stalled = t - a.last_drop_t
-                if (not walking and a.walk_s > 0 and stalled >= float(self.stuck["window_s"])
-                        and p.monsters_near >= int(self.stuck["monsters_min"])):
-                    return self._unstick_walk(a, stalled, p)
-                if stalled >= float(self.atk["blocked_s"]):
-                    blocked = self._blocked_why(a, t)
-                    if blocked is not None:
-                        return self._unblock(a, blocked, stalled, p)
-                if stalled >= float(self.atk["hp_stall_s"]):
+                if stalled >= float(self.atk["blocked_s"]) and self._blocked_why(a, t) == "girando en circulo":
+                    return self._unblock(a, "girando en circulo", stalled, p)
+                if stalled >= float(self.atk["reclick_stall_s"]):
                     return self._reclick(a, "la vida no baja", p, t)
         elif t - max(a.last_click_t, a.progress_t) >= float(self.atk["confirm_timeout_s"]):
             if a.reclicks >= 1 and self.tracker.is_stuck(t):   # ya se reintento una vez y no avanza
@@ -999,6 +1127,96 @@ class Bot:
                 return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
             return self._reclick(a, "sin confirmar", p, t)
         return None
+
+    def _read_panel(self, a: _Attack, panel: Any, t: float) -> None:
+        """Panel con el metin objetivo: confirma el ataque y sigue la vida (cuando BAJA es que esta pegando)."""
+        c = self._cur
+        hp = panel.hp_ratio
+        a.missing, a.wait_t = 0, None
+        if hp is None or hp > 0:
+            a.gone = 0   # con la vida en 0 y el panel todavia puesto, los ciclos sin piedra a la vista siguen contando
+        if not a.confirmed:
+            a.confirmed, a.last_drop_t, a.confirm_t = True, t, t
+            self._forget_wrong(a)
+            self._close_episode("metin confirmado")
+            logger.info("Metin confirmado en el panel (%s)", panel.name)
+            if a.spot is not None and a.spot in self._tries:
+                self._tries.remove(a.spot)
+            if c is not None:
+                c.confirmed_t, c.name = t, panel.name
+        if hp is not None:
+            a.last_hp = hp
+            if c is not None:
+                c.last_hp = hp
+            if a.min_hp is None:
+                a.min_hp, a.last_drop_t = hp, t
+            elif hp < a.min_hp:
+                a.min_hp, a.last_drop_t, a.hp_down_t = hp, t, t
+                if c is not None:
+                    c.unstick_n = c.deselects = 0   # avanza: las escaleras de destrabe y de reclics vuelven a empezar
+        a.zero = a.zero + 1 if hp is not None and hp <= 0 else 0
+
+    def _attack_ended(self, a: _Attack, p: Perception, t: float, panel_present: bool) -> tuple[bool, Transition]:
+        """El panel dejo de mostrar el metin (o la vida llego a 0). (True, transicion) si se resolvio; (False, None) para
+        seguir con el ataque. ROTO solo con vida baja (`broken_hp_ratio`), piedra que ya no se ve y `min_break_s` de ataque;
+        si no es una deseleccion (reclic en el mismo metin)."""
+        hp = a.last_hp
+        low = hp is not None and hp <= float(self.atk["broken_hp_ratio"])
+        if not low:
+            return True, self._deselected(a, p, t, hp)
+        if self._stone_visible(a.click, p, float(self.atk["broken_gone_px"])):
+            a.gone = 0
+            if panel_present:
+                return False, None
+            if a.wait_t is None:
+                a.wait_t = t
+            if t - a.wait_t < float(self.atk["broken_wait_s"]):
+                return True, None
+            logger.info("Vida %.0f%% y la piedra sigue a la vista %.0f s despues de perder el panel", hp * 100, t - a.wait_t)
+            a.wait_t = None
+            return True, self._deselected(a, p, t, hp)
+        a.wait_t = None
+        a.gone += 1
+        if a.gone < int(self.atk["broken_confirm_cycles"]):
+            return True, None
+        elapsed = t - (a.confirm_t if a.confirm_t is not None else a.start_t)
+        if elapsed >= float(self.atk["min_break_s"]):
+            return True, self._broken(a, hp, elapsed)
+        logger.info("Panel perdido con vida %.0f%% a los %.0f s de ataque (menos de %.0f s): no cuenta como roto", hp * 100,
+                    elapsed, float(self.atk["min_break_s"]))
+        return True, self._deselected(a, p, t, hp, announce=False)
+
+    def _broken(self, a: _Attack, hp: float | None, elapsed: float) -> Transition:
+        """Roto de verdad: cuenta, guarda la posicion en el mapa de metin y va a RECOGER."""
+        self.stats.metins += 1
+        logger.info("Metin roto (vida %.0f%%, %.0f s de ataque)", (hp or 0.0) * 100, elapsed)
+        self._atk = self._cur = None
+        self._record_spawn()
+        if self._zone_status() is ZoneStatus.TOLERANCE:
+            self.pending_return = True
+        return State.RECOGER, "metin roto"
+
+    def _deselected(self, a: _Attack, p: Perception, t: float, hp: float | None, announce: bool = True) -> Transition:
+        """El panel se perdio sin romperse el metin (deseleccion por un clic en un bicho, p. ej.): reclic en el MISMO metin
+        (relocalizado, sin pasar por BUSCAR). Con `attack.max_deselect_reclicks` agotados va a BUSCAR (el metin sigue en
+        curso); la segunda vez que se agotan lo descarta."""
+        c = self._cur
+        if c is not None:
+            c.deselects += 1
+            if c.deselects > int(self.atk["max_deselect_reclicks"]):
+                c.deselects, c.rounds = 0, c.rounds + 1
+                if c.rounds >= 2:
+                    return self._discard(a, "deseleccionado muchas veces", p, t)
+                logger.info("Panel perdido %d veces seguidas: dejo de reclickear y vuelvo a BUSCAR con el metin en curso",
+                            int(self.atk["max_deselect_reclicks"]))
+                self.gi.press("deselect")
+                self._atk = None
+                return State.BUSCAR, "reclics por deseleccion agotados"
+        if announce:
+            logger.info("Panel perdido con vida %s: deseleccion, reclic en el mismo metin",
+                        "?" if hp is None else f"{hp * 100:.0f}%")
+        a.missing = a.gone = 0
+        return self._reclick(a, "deseleccion", p, t, count=False)
 
     def _update_walk(self, a: _Attack, pos: tuple[int, int] | None, t: float) -> bool:
         """True si el personaje camina hacia el metin (sus coordenadas cambiaron hace menos de `stuck.window_s`), con tope
@@ -1024,17 +1242,39 @@ class Bot:
         if near:
             a.click = min(near, key=lambda d: math.dist(d.click_point, a.click)).click_point
 
-    def _unstick_walk(self, a: _Attack, stalled: float, p: Perception) -> Transition:
-        """Trabado en el camino al metin (quieto, vida sin bajar, monstruos cerca): ESPACIO `attack.unstick_space_s` y reclic."""
-        logger.info("Bloqueado atacando (trabado yendo al metin, vida sin bajar %.0f s, monstruos cerca: %d): ESPACIO y reclic",
-                    stalled, p.monsters_near)
-        self._dbg("bloqueado", "trabado en el camino: ESPACIO + reclic")
+    def _unstick_ladder(self, a: _Attack, quiet: float, p: Perception, t: float) -> Transition:
+        """Trabado yendo al metin (quieto `attack.walk_stuck_s`, vida sin bajar, haya o no monstruos): 1) ESPACIO y reclic en
+        el MISMO metin; 2) un paso al costado (A, D, W+A, W+D) y reclic; tras `attack.max_unstick` intentos, DESTRABAR
+        (sin soltar el metin en curso)."""
+        c = self._cur
+        c.unstick_n += 1
+        n, mx = c.unstick_n, int(self.atk["max_unstick"])
+        if n > mx:
+            c.unstick_n, c.ladders = 0, c.ladders + 1
+            if c.ladders >= 2:   # ya paso por DESTRABAR una vez y sigue sin poder llegar: inalcanzable
+                logger.info("Metin en curso inalcanzable: segunda escalera de destrabe agotada, lo descarto")
+                return self._discard(a, "inalcanzable", p, t)
+            logger.info("Trabado yendo al metin: %d intentos (ESPACIO y pasos al costado) sin salir: DESTRABAR "
+                        "(sigo con el mismo metin despues)", mx)
+            self._atk = None
+            return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
         a.trail = []
-        if not self._hold_space(float(self.atk["unstick_space_s"])):
-            return None
+        if n == 1:
+            logger.info("Trabado yendo al metin (quieto %.0f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
+                        "ESPACIO y reclic en el mismo metin", quiet, p.monsters_near, n, mx)
+            self._dbg("bloqueado", "trabado yendo al metin: ESPACIO + reclic")
+            if not self._hold_space(float(self.atk["unstick_space_s"])):
+                return None
+        else:
+            name, actions = SIDESTEPS[(n - 2) % len(SIDESTEPS)]
+            logger.info("Trabado yendo al metin (quieto %.0f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
+                        "paso al costado (%s) y reclic en el mismo metin", quiet, p.monsters_near, n, mx, name)
+            self._dbg("bloqueado", f"trabado yendo al metin: paso al costado {name} + reclic")
+            if self._hold_chunked(lambda sec: self.gi.hold_keys(actions, sec), float(self.atk["sidestep_s"])) == "captcha":
+                return None
         self.tracker.forget_reference()
         a.last_click_t = a.last_drop_t = self.clock()
-        a.pending = ("bloqueado (trabado en el camino)", True)
+        a.pending = (f"trabado, intento {n}", False)
         return None
 
     def _blocked_why(self, a: _Attack, t: float) -> str | None:
@@ -1053,7 +1293,7 @@ class Bot:
         return None
 
     def _unblock(self, a: _Attack, why: str, stalled: float, p: Perception) -> Transition:
-        """Regla B: confirmado, la vida no baja y no avanza -> ESPACIO (empuja a los bichos) y reclic en el metin."""
+        """Confirmado, la vida no baja y gira en circulo -> ESPACIO (empuja a los bichos) y reclic en el metin."""
         logger.info("Bloqueado atacando (%s, vida sin bajar %.0f s, monstruos cerca: %d): ESPACIO y reclic",
                     why, stalled, p.monsters_near)
         self._dbg("bloqueado", f"{why}: ESPACIO + reclic")
@@ -1066,6 +1306,10 @@ class Bot:
         return None
 
     def _reclick(self, a: _Attack, why: str, p: Perception, t: float, count: bool = True) -> Transition:
+        if p.panel is not None and p.panel.present and p.panel.kind == "target_metin" \
+                and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
+            logger.info("Sin reclic (%s): la vida del metin esta bajando", why)   # pegando no se reclickea
+            return None
         if count:
             a.reclicks += 1
         if a.reclicks > int(self.atk["max_reclicks"]):
@@ -1077,10 +1321,11 @@ class Bot:
                 self._atk = None
                 return State.BUSCAR, "se perdio el metin de vista"   # sin ignorarlo: solo se perdio de vista
             point = a.click
-        logger.info("Reclic en %s (%s, intento %d)", point, why, a.reclicks)
+        point = self._clear_point(point, p)   # sin nombres de monstruos encima
+        logger.info("Reclic en %s (%s%s)", point, why, f", intento {a.reclicks}" if count else "")
         self.gi.click_at(*point, p.mask)   # sin mark_moving: el reclic no reinicia la ventana de trabado
         self._planned = a.click = point
-        a.last_click_t = a.last_drop_t = self.clock()
+        a.last_click_t = a.last_drop_t = a.reclick_t = self.clock()
         return None
 
     def _relocate(self, a: _Attack, p: Perception, cands: list[_Cand]) -> tuple[int, int] | None:

@@ -89,7 +89,25 @@ DEFAULTS: dict[str, Any] = {
                "blocked_window_frac": 0.8,
                # Ir a un metin lejano con clic: el personaje camina solo. Mientras se mueve no cuenta el estancamiento de
                # vida (tope walk_max_s). Trabado en el camino con monstruos cerca: ESPACIO unstick_space_s y reclic.
-               "walk_max_s": 25.0, "unstick_space_s": 1.5},
+               "walk_max_s": 25.0, "unstick_space_s": 1.5,
+               # Roto REAL: el panel desaparece con la ultima vida leida <= broken_hp_ratio, la piedra ya no se ve a
+               # <= broken_gone_px de su ultimo punto y pasaron >= min_break_s desde que se confirmo el ataque. Vida baja
+               # pero piedra visible: espera broken_wait_s y reclic. Panel perdido con vida alta = deseleccion: reclic en el
+               # mismo metin (max_deselect_reclicks; reclick_wait_s de gracia tras cada reclic antes de juzgar de nuevo).
+               "broken_hp_ratio": 0.10, "broken_gone_px": 90, "min_break_s": 15.0, "broken_wait_s": 3.0,
+               "max_deselect_reclicks": 6, "reclick_wait_s": 1.0,
+               # Pegando (la vida bajo en los ultimos hp_progress_s) no se reclickea. Vida quieta reclick_stall_s -> reclic.
+               # El reclic apunta al punto del cuerpo de la piedra mas alejado de las etiquetas de monstruos (descarta los
+               # a <= monster_clear_px; clear_offsets_px = desplazamientos candidatos respecto del punto de clic).
+               "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
+               "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
+                                     [15, -15]],
+               # Trabado yendo al metin: quieto walk_stuck_s con la vida sin bajar -> ESPACIO + reclic en el mismo metin;
+               # despues un paso al costado (A/D/W+A/W+D) de sidestep_s + reclic; max_unstick intentos y recien ahi DESTRABAR.
+               "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+               # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
+               # se elige otro; si no aparece en target_keep_s se lo suelta.
+               "relocate_px": 150, "target_keep_s": 25.0},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero),
     # caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z. Cada tramo dura step_s (menos si el objeto esta cerca:
     # proporcional a su distancia hasta full_step_px, minimo min_step_s); el punto del objeto es el centro inferior de su
@@ -721,9 +739,20 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("attack", ("confirm_timeout_s", "hp_stall_s", "max_reclicks", "max_seconds", "broken_confirm_cycles",
                     "discard_minutes", "discard_radius", "discard_error_frac", "max_wrong_selections", "blocked_s",
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
-                    "unstick_space_s"),
+                    "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
+                    "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
+                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
-          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s"))
+          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
+          "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
+          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s"))
+    a = cfg["attack"]
+    if not 0 < a["broken_hp_ratio"] <= 1:
+        raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
+    offs = a["clear_offsets_px"]
+    if not isinstance(offs, list) or not all(isinstance(o, list) and len(o) == 2 and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in o) for o in offs):
+        raise ConfigError("attack.clear_offsets_px debe ser una lista de pares [dx, dy]")
     nums("pickup", ("press_interval_ms", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "stall_steps",
                     "stall_gain_px", "track_px", "tries_per_item", "same_spot_u"),
