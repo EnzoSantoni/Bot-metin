@@ -44,7 +44,7 @@ def clean_debug_drawings(img: np.ndarray) -> np.ndarray:
 @pytest.fixture(scope="module")
 def cfg():
     c = copy.deepcopy(load_config())
-    c["vision"]["far_metin"].update(min_core_pixels=25, min_smoke_pixels=20)   # el JPG degrada el nucleo
+    c["vision"]["far_metin"].update(mode="color", min_core_pixels=25, min_smoke_pixels=20)   # el JPG degrada el nucleo
     return c
 
 

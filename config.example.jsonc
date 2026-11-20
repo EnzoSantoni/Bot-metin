@@ -480,7 +480,43 @@
       // min_size_ratio: sqrt(ancho*alto) del cuerpo / distancia de la base al horizonte (perspectiva). Medido: piedras reales
       //  0.11-0.31 (la mas chica 0.113); cuerpos de monstruos abajo de la pantalla 0.045-0.05. Menos que esto se descarta.
       // max_aspect: alto/ancho maximo (piedras reales <= 1.31; un personaje de pie mide ~2.2).
-      "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9
+      "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9,
+
+      // --- Detector por ESTRUCTURA (bot/vision/far_structure.py): piedra + aura + humo, sin depender del color. ---
+      // En otros mapas el metin puede ser verde/azul/violeta, pero siempre es una piedra con brillo saturado y humo palido arriba.
+      // "mode": "color" = solo el nucleo rojo de arriba; "estructura" = solo el nuevo; "ambos" = union sin duplicados (default:
+      //  el nuevo no esta probado en el juego; en las capturas reales encuentra todo lo que encuentra el de color y mas).
+      "mode": "ambos",
+      // Pista OPCIONAL de tono por tipo de metin ({slug: [h_min, h_max]}, OpenCV 0-179, puede envolver: [172, 18]). Si el tono del
+      // blob cae en algun rango suma "hue_bonus" al puntaje. Nunca es requisito. La escribe `calibrate.py metin` / `calibrate.py tono`.
+      "hue_hints": {},
+      "structure": {
+        // Fondo local = mediana de S y V sobre la imagen reducida (bg_scale) con ventana bg_kernel (px reducidos).
+        "bg_scale": 4, "bg_kernel": 21,
+        // Nucleo+aura: pixeles con saturacion >= core_ds sobre el fondo, brillo >= core_dv sobre el fondo y S >= core_s_min
+        // (cualquier matiz). Medido: fondo S~45 V~72; piedra+aura S 100-190, V 100-255. Bajar si el metin nuevo es menos vivo
+        // (cuesta falsos positivos: con ds=45, dv=25, s_min=75 aparecen ~7 en las capturas reales).
+        "core_ds": 55, "core_dv": 35, "core_s_min": 90,
+        "group_kernel": [9, 9],                  // dilatacion [ancho, alto] que une los trozos del blob
+        "min_core_pixels": 120, "min_w": 12, "max_w": 140, "min_h": 12, "max_h": 160,  // tamano valido del blob (px)
+        // Forma: alto/ancho >= min_aspect (el maximo es far_metin.max_aspect); relleno = pixeles / (ancho*alto) >= min_fill;
+        // aislamiento (calm) = fraccion del anillo de ring_margin px que se parece al fondo (|dS|,|dV| < calm_d) >= min_calm.
+        "min_aspect": 0.45, "min_fill": 0.38, "min_calm": 0.3,
+        "max_zone_overlap": 0.7,                 // el blob incluye el aura: es mas grande que el nucleo rojo
+        "ring_margin": 6, "calm_d": 25,
+        // Humo: pixeles con S <= smoke_s_max y brillo >= smoke_dv sobre el fondo, en la zona de arriba (misma geometria que el
+        // detector de color), al menos min_smoke_pixels repartidos en >= min_smoke_rows filas (con >= smoke_row_px cada una).
+        "smoke_s_max": 75, "smoke_dv": 20, "smoke_row_px": 3, "min_smoke_pixels": 40, "min_smoke_rows": 5,
+        "smoke_height_frac": 1.2, "smoke_side_frac": 0.5, "smoke_side_px": 8, "smoke_overlap_frac": 0.15,
+        // Sin humo (Metin Negro): se acepta solo si es grande, compacto y MUY aislado; sale con smoke=false (mas dudoso).
+        "nosmoke_enabled": true, "nosmoke_min_core": 500, "nosmoke_min_calm": 0.8, "nosmoke_min_fill": 0.5,
+        "nosmoke_aspect": [0.6, 1.5],
+        // Puntaje 0..1 = promedio ponderado de tamano del blob, humo, aura (fraccion con S >= glow_ds sobre el fondo) y
+        // aislamiento. Medido: piedras reales >= 0.53; un cuerpo de monstruo dudoso 0.45. Se exige >= min_score.
+        "glow_ds": 110, "glow_ref": 0.3, "core_ref": 700, "smoke_ref": 300,
+        "weights": {"core": 0.3, "smoke": 0.3, "aura": 0.2, "calm": 0.2},
+        "hue_bonus": 0.1, "hue_margin": 8, "min_score": 0.5
+      }
     },
 
     // Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano pegado a la izquierda de un nombre

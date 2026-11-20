@@ -1,6 +1,6 @@
 """Herramienta de calibracion (pasiva: lee la pantalla y escucha hotkeys, NUNCA manda teclas ni clics al juego).
 
-Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|zonas|camara|resumen> [opciones]
+Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|tono|zonas|camara|resumen> [opciones]
 Los que escriben config.json piden confirmacion (s/n, o --si), hacen config.json.bak y validan antes de guardar.
 F12 o Ctrl+C cancelan sin guardar.
 """
@@ -10,7 +10,7 @@ import sys
 from bot import calibration as cal
 from bot.config import ConfigError, load_config
 
-NEEDS_GAME = {"zona", "velocidad", "metin", "zonas", "camara"}   # subcomandos que capturan el juego
+NEEDS_GAME = {"zona", "velocidad", "metin", "tono", "zonas", "camara"}   # subcomandos que capturan el juego
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--segundos", type=float, default=10.0, help="duracion de la medicion (default: 10)")
     p = sub.add_parser("metin", parents=[common], help="agregar un tipo de metin (plantillas de etiqueta y panel)")
     p.add_argument("nombre", help='nombre del metin, ej. "Metin de Oscuridad"')
+    p = sub.add_parser("tono", parents=[common], help="medir el tono de la piedra de un metin (pista opcional far_metin.hue_hints)")
+    p.add_argument("nombre", help='nombre del metin, ej. "Metin de Oscuridad"')
+    p.add_argument("--capturas", type=int, default=3, help="maximo de capturas (default: 3)")
     sub.add_parser("zonas", parents=[common], help="guardar debug/calibrate_zonas.png para revisar las zonas excluidas")
     sub.add_parser("camara", parents=[common], help="medir el angulo vertical de la camara (horizonte) y guardarlo como referencia")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
@@ -55,6 +58,8 @@ def run(args: argparse.Namespace, s: cal.Session) -> int:
         return cal.cmd_velocidad(s, args.segundos)
     if args.cmd == "metin":
         return cal.cmd_metin(s, args.nombre)
+    if args.cmd == "tono":
+        return cal.cmd_tono(s, args.nombre, args.capturas)
     if args.cmd == "zonas":
         return cal.cmd_zonas(s)
     if args.cmd == "camara":
