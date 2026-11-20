@@ -2,7 +2,17 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
-## PARA ENZO AL LEVANTARSE (resumen de la noche del 2026-11-20)
+## PARA ENZO AL VOLVER (2026-11-20, tarde)
+- **`desarrollo` (`3f6ef9c`, 1964 tests):**
+  - Tiene toda la Fase 6g de `main`: clic al centro de la piedra, trabado en 1,8 s, una sola vuelta con candidatos en el mapa (cono del minimapa) y detector por estructura. El detalle está arriba del PROGRESS.md de `main`.
+  - El perfil de zona se llama **"Ciudad 1"**. El nombre viejo "Guabina - Oscuridad y Negro" sigue funcionando como alias.
+  - Su mapa de metin migra solo a `profiles\zonas\Ciudad 1.mapa.json`.
+- **Interfaz:**
+  - La pestaña Zona dibuja los candidatos de la vuelta.
+  - La pestaña Metin tiene "Piedras lejanas": Color / Estructura / Ambos.
+- **Qué probar primero:** `main` (PRUEBAS, punto 1C). Después, en esta carpeta, que la zona aparezca como "Ciudad 1" y que el mapa de metin se haya migrado.
+
+## Resumen de la noche del 2026-11-20 (anterior)
 **Qué terminé** (todo con tests, commit y push; 1722 tests pasan en `desarrollo`):
 - **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)** en `103aae8`, `04fea11` y `0c66ec3`, más el resumen en `2a48cb7`. Pasados a `desarrollo` en `eb77fbc`.
   - Elige el metin más cercano por perspectiva.
