@@ -29,6 +29,31 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 **Decisiones que tomé sin vos:** en "Decisiones tomadas sin Enzo", más abajo y en el PROGRESS.md de `desarrollo`.
 
+## Fase 6e (correcciones tras la prueba de las 09:47, 2026-11-20): `main` `2288eab`, 1262 tests
+**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1A).
+- **0. Roto real** (`b2dfd5b`):
+  - Un metin cuenta como roto solo si la última vida leída era ≤ `attack.broken_hp_ratio` (10%), la piedra ya no se ve en su lugar y pasaron ≥ `attack.min_break_s` (15 s) de ataque.
+  - Si se pierde el panel con la vida alta, es una deselección: vuelve a clickear el mismo metin.
+  - El mapa de metin y el resumen cuentan solo roturas reales. En `data/mapa_metin.json` les borré la hora de rotura a (681, 148) y (725, 113), que venían de roturas falsas; hay copia en `.bak`.
+- **1. Recoger** (`1af16e2`, merge en `e966f51`):
+  - Toma un objeto y no lo cambia: aprieta Z cada `pickup.z_interval_s` (0.4 s) hasta que la etiqueta desaparece.
+  - A los `reposition_s` (3 s) se reacomoda; se rinde a los `item_max_s` (15 s).
+  - Se sube al caballo recién cuando no queda ningún objeto válido.
+- **2. Sin reclics mientras pega:**
+  - Con la vida bajando (`hp_progress_s`) no reclickea.
+  - Reclickea solo si se pierde el panel o si la vida no baja durante `reclick_stall_s`.
+  - El reclic va al punto de la piedra más alejado de los nombres de monstruos (`monster_clear_px`).
+- **3. Trabado yendo al metin**, con o sin monstruos: a los `walk_stuck_s` (5 s) quieto, espacio y reclic; después un paso al costado (`sidestep_s`) y reclic, siempre al mismo metin. Son hasta `max_unstick` intentos y después pasa a DESTRABAR, sin perder el metin.
+- **4. Metin en curso** (`_CurrentMetin`): no elige otro hasta romperlo. Si lo pierde, lo busca en la misma zona de la pantalla o por su posición estimada, y lo suelta a los `target_keep_s` (25 s).
+- **5 y 6** (`8cff1b9`): ver la sección siguiente.
+- **7. Coordenadas** (`0bb7462`, merge en `2288eab`):
+  - Descarta lecturas con poca confianza (`coords_filter.min_score`) y saltos imposibles. El límite de salto sale de la velocidad medida por el propio tracker, con tope en `max_speed`.
+  - Una posición con más de `stale_s` (3 s) sin lectura buena cuenta como "sin coordenadas".
+  - El resumen final cuenta las lecturas fallidas y descartadas, y hay un WARNING si pasan 5 s sin lectura buena.
+  - Con debug activo, guarda recortes de las lecturas fallidas en `debug/run_*/coordenadas/`.
+  - Las 17 capturas reales de `samples/` se leen con confianza 1.0.
+- **No hecho:** distinguir la animación de ataque del personaje. La vida que baja es la prueba de que está atacando.
+
 ## Angulo vertical de la camara y busqueda mientras se ataca (2026-11-20)
 - **Angulo vertical** (`bot/vision/pitch.py`, `bot/camera_pitch.py`, `calibrate.py camara`): se mide la fila del horizonte (donde termina el piso) en una franja central; `camera_pitch.ref_horizon_frac` (null = no corrige) es el angulo que Enzo quiere. Corrige con arrastres del clic derecho (`GameInput.drag`) despues de romper y recoger, cada `camera_pitch.every_s` explorando, al final de cada barrido y durante la busqueda mientras ataca. El sentido y la ganancia del arrastre se aprenden solos. Para calibrar: dejar la camara como le gusta y correr `.venv\Scripts\python.exe calibrate.py camara`.
 - **Buscar el proximo metin mientras ataca** (`Bot._scan_*`, `Bot._go_next`, claves `attack.scan_*` / `next_keep_s`): con la vida bajando desde hace 5 s gira Q/E de a un paso, recuerda el primer metin objetivo que ve (sin ningun clic), vuelve la camara y, al terminar RECOGER, gira hacia el y va directo. Si girar corta el ataque (la vida deja de bajar), vuelve la camara y no busca mas mientras ataca en esa corrida (WARNING en el log).
