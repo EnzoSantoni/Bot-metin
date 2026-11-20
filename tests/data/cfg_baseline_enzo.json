@@ -19,7 +19,10 @@
   "lost_cycles": 6,
   "match_px": 200,
   "max_seconds": 40.0,
-  "max_tries_per_spot": 3
+  "max_tries_per_spot": 3,
+  "near_unlabeled_y_frac": 0.55,
+  "no_label_ignore_s": 120.0,
+  "unlabeled_closer_ratio": 0.5
  },
  "attack": {
   "blocked_s": 4.0,
@@ -82,6 +85,7 @@
   "discard_radius": 8.0,
   "hp_progress_s": 4.0,
   "hp_stall_s": 8.0,
+  "keep_with_others_s": 8.0,
   "max_deselect_reclicks": 6,
   "max_reclicks": 3,
   "max_seconds": 120.0,
@@ -192,7 +196,8 @@
    "explorar": 40,
    "ignorada": 20
   },
-  "reason_memory_s": 60.0
+  "reason_memory_s": 60.0,
+  "save_raw": true
  },
  "expected_client_size": [
   1858,
@@ -368,6 +373,9 @@
   "resolve_dist": 10.0,
   "space_fail_max": 2,
   "space_s": 2.0,
+  "surrounded_max": 3,
+  "surrounded_s": 2.0,
+  "surrounded_space_s": 1.5,
   "unstuck_radius_px": 200,
   "window_s": 3.0
  },
@@ -528,13 +536,17 @@
     9,
     9
    ],
+   "max_aspect": 1.9,
    "max_h": 160,
    "max_w": 140,
    "max_zone_overlap": 0.5,
    "min_core_pixels": 60,
    "min_h": 8,
+   "min_size_ratio": 0.08,
    "min_smoke_pixels": 40,
    "min_w": 8,
+   "monster_label_above_px": 150,
+   "monster_label_dx_px": 60,
    "smoke_height_frac": 1.2,
    "smoke_hsv_hi": [
     45,

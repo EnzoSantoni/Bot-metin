@@ -40,7 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "debug": {"enabled": False, "dir": "debug", "explore_every_s": 30.0, "max_images": 400, "jpeg_quality": 80,
               "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                                "bloqueado": 20, "explorar": 40},
-              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0},
+              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0, "save_raw": True},
     # Alarma sonora (bot/alarm.py): beep de `freq` Hz y `beep_ms` ms, pausa `pause_ms`, en bucle.
     # max_seconds: corta sola a los N segundos (0 = suena hasta stop()).
     "alarm": {"freq": 1000, "beep_ms": 400, "pause_ms": 300, "max_seconds": 0},
@@ -119,7 +119,10 @@ DEFAULTS: dict[str, Any] = {
               "min_dir_sep_deg": 60.0, "dir_step_deg": 30.0, "episode_ttl_s": 120.0,
               "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
               # Modo teclado (navigation.mode): back_s = S de ATRAS; look_walk_s = W despues de girar la vista en MIRAR.
-              "back_s": 1.0, "look_walk_s": 1.2},
+              "back_s": 1.0, "look_walk_s": 1.2,
+              # Rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO/ACERCARSE): monsters_min monstruos cerca y movimiento < min_move
+              # en surrounded_s -> ESPACIO surrounded_space_s y seguir; surrounded_max veces seguidas sin avanzar -> DESTRABAR.
+              "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -160,7 +163,7 @@ DEFAULTS: dict[str, Any] = {
                "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
-               "relocate_px": 150, "target_keep_s": 25.0,
+               "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
                # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
                # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
                "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
@@ -215,7 +218,8 @@ DEFAULTS: dict[str, Any] = {
                  "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
                  "blind_player_radius": 25.0, "max_tries_per_spot": 3,
                  "far_monsters_n": 2, "far_monsters_px": 200,
-                 "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2},
+                 "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+                 "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
     # CENTRO: llega al centro del poligono a <= arrive_dist unidades (el tope de tiempo es volver.max_seconds).
     "center": {"arrive_dist": 8.0},
     # VOLVER: tiempo acumulado maximo de una "vuelta" (s); lo comparte CENTRO.
@@ -304,6 +308,9 @@ DEFAULTS: dict[str, Any] = {
             "alt_bright_lo": [3, 30, 200], "alt_bright_hi": [24, 190, 255],
             "alt_min_bright_px": 100, "alt_min_bright_frac": 0.08, "alt_bright_max_ratio": 1.6,
             "alt_min_ground_frac": 0.3,
+            # Filtros contra cuerpos de monstruos: etiqueta de monstruo justo arriba (<= above_px por encima, centro a <=
+            # dx_px), cuerpo mas alto que max_aspect x ancho, o mas chico que min_size_ratio x distancia al horizonte.
+            "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9,
         },
         # Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano + nombre rojo plano.
         "monsters": {
@@ -525,7 +532,8 @@ def _validate_far_monsters(vision: dict) -> None:
                            "min_w", "max_w", "min_h", "max_h", "smoke_height_frac", "smoke_side_frac",
                            "smoke_side_px", "smoke_overlap_frac", "center_y_frac", "max_zone_overlap",
                            "exclude_overlap", "core_ref", "smoke_ref", "alt_min_bright_px", "alt_min_bright_frac",
-                           "alt_bright_max_ratio", "alt_min_ground_frac"), ("min_core_pixels",))
+                           "alt_bright_max_ratio", "alt_min_ground_frac", "monster_label_above_px",
+                           "monster_label_dx_px", "min_size_ratio", "max_aspect"), ("min_core_pixels", "max_aspect"))
     if not isinstance(fm.get("alt_enabled"), bool):
         raise ConfigError("vision.far_metin.alt_enabled debe ser true o false")
     for k in ("alt_bright_lo", "alt_bright_hi"):
@@ -841,13 +849,15 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
-                   "progress_tol", "memory_dirs", "back_s", "look_walk_s"),
+                   "progress_tol", "memory_dirs", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s",
+                   "surrounded_max"),
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
-          "forward_chunk_s", "back_s", "look_walk_s"))
+          "forward_chunk_s", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s", "surrounded_max"))
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
-                      "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries"),
+                      "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
+                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s"),
          ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
           "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries"))
     nums("center", ("arrive_dist",), ("arrive_dist",))
@@ -858,12 +868,12 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
                     "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
-                    "next_keep_s", "scan_hp_margin_s"),
+                    "next_keep_s", "scan_hp_margin_s", "keep_with_others_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
           "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s"))
+          "next_keep_s", "keep_with_others_s"))
     a = cfg["attack"]
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")
@@ -1089,6 +1099,8 @@ def validate_config(cfg: dict) -> None:
         v = debug.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
             raise ConfigError(f"debug.{k} debe ser un numero >= 0")
+    if not isinstance(debug.get("save_raw"), bool):
+        raise ConfigError("debug.save_raw debe ser true o false")
     per = _require_dict(debug.get("max_per_kind"), "debug.max_per_kind")
     for k, v in per.items():
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:

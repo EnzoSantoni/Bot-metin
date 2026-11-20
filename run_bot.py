@@ -230,6 +230,7 @@ class UiBridge:
                 "elapsed_s": round(st.elapsed_s, 1), "paused": self.control.is_paused,
                 "auto_paused": bool(getattr(self.control, "auto_paused", False)),
                 "skills_cast": getattr(st, "skills_cast", 0), "farm_mode": getattr(st, "farm_mode", "metin"),
+                "surrounded": getattr(st, "surrounded", 0),
                 "deaths": getattr(st, "deaths", 0), "revives": getattr(st, "revives", 0),
                 "coords_total": getattr(getattr(st, "coords", None), "total", 0),
                 "coords_failed": getattr(getattr(st, "coords", None), "failed", 0),

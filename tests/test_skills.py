@@ -182,7 +182,7 @@ def test_estadisticas_y_estado_para_la_interfaz():
 # ---------------------------------------------------------------- momentos seguros
 def test_nunca_en_recoger_ni_a_mitad_de_caminata_y_atacando_solo_confirmado_y_con_reposo():
     env = skill_env([sk("A", "f1", dur=8.0, rd=False, anim=0.5), sk("B", "f2", dur=11.0, rd=False, anim=0.5)],
-                    metins=[(500, 160), (600, 150), (680, 165), (470, 180)])
+                    metins=[(500, 160), (600, 150), (680, 165), (470, 180)], real_pickup=True)
     casts = spy_casts(env)
     settle = env.cfg["skill_timing"]["attack_settle_s"]
     targets = list(env.world.metins)
@@ -253,12 +253,13 @@ def test_muerte_durante_el_lanzamiento_termina_la_corrida_sin_input_nuevo():
 
 
 # ---------------------------------------------------------------- junto con pickup.dismount
-# semillas 1 y 3 dejan objetos sin recoger con el recoger nuevo de main (el bot cree llegar a ~17 u del objeto en el simulador: pendiente)
-@pytest.mark.parametrize("seed", [2, 4])
+# real_pickup: el simulador recoge debajo de los pies (como el bot supone), no en el punto del personaje; con la geometria vieja
+# las semillas 1 y 3 dejaban objetos sin recoger (el bot se paraba a ~17 u del objeto)
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
 def test_con_pickup_dismount_ctrl_g_nunca_se_desparea(seed):
     env = skill_env([sk("A", "f1", dur=9.0, rd=True, anim=1.0), sk("B", "f2", dur=13.0, rd=False, anim=0.5)], seed=seed,
                     pickup={"dismount": True, "mount_wait_s": 1.0}, timing={"mount_wait_s": 1.0},
-                    metins=[(500, 160), (600, 150), (680, 165), (470, 180)])
+                    metins=[(500, 160), (600, 150), (680, 165), (470, 180)], real_pickup=True)
     targets = list(env.world.metins)
     assert env.run_until(lambda: all(not m.alive for m in targets) and not any(
         i.kind == "item" and not i.reserved_other for i in env.world.items), max_s=900) == "cond"

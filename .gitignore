@@ -9,7 +9,7 @@ logs/
 debug/
 
 # Datos del usuario (mapa de metin aprendido)
-data/
+/data/
 
 # Configuración personal: se crea a partir de config.example.jsonc (ver README)
 config.json

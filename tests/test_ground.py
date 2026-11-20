@@ -83,26 +83,43 @@ def _harness_cfg(cfg):
     return out
 
 
-@pytest.mark.parametrize("hor", [None, 0.10, 0.12, 0.16, 0.19])
-def test_captura_real_elige_la_piedra_mas_cercana(real, hor):
+@pytest.mark.parametrize("hor", [None, 0.10, 0.12, 0.14, 0.16, 0.19])
+def test_captura_real_la_piedra_de_adelante_gana_a_la_etiqueta_de_atras(real, hor):
+    """Pedido de Enzo (prueba de las 01:15): en esta captura tiene que ir a la piedra de adelante (1407, 374), que esta
+    claramente mas cerca que la etiqueta de atras (1236, 265): su distancia de piso es < unlabeled_closer_ratio (0.5) x la
+    de la etiqueta con cualquier horizonte razonable (0.10-0.19). Las piedras sin etiqueta van por cercania entre si."""
     h, p = _goals_of(real, hor)
     cands, _ = h.bot._label_view(p, 0.0)
     far, _ = h.bot._far_view(p, 0.0)
     ranked = h.bot._goals(cands, far, p)
     assert len(ranked) == 3
-    best, d = ranked[0]
-    assert best.kind == "piedra" and abs(best.point[0] - 1407) <= 60 and abs(best.point[1] - 374) <= 60
-    assert ranked[1][1] > 1.5 * d and ranked[2][1] > 1.5 * d   # la mas cercana gana por bastante
+    label = next(e for e in ranked if e[0].kind == "etiqueta")
+    stones = [e for e in ranked if e[0].kind == "piedra"]
+    assert label[0].name == "metin_de_oscuridad"
+    assert abs(stones[0][0].point[0] - 1407) <= 60 and abs(stones[0][0].point[1] - 374) <= 60
+    assert stones[0][1] < stones[1][1]
+    assert ranked[0][0].kind == "piedra"
+    assert stones[0][1] < 0.5 * label[1]
 
 
-def test_captura_real_pick_goal_va_a_la_piedra_de_adelante(real, caplog):
+def test_captura_real_pick_goal_va_a_la_piedra_de_adelante_con_hover(real, caplog, monkeypatch):
     caplog.set_level(logging.INFO)
     h, p = _goals_of(real)
+    clicked = []
+    monkeypatch.setattr(h.bot, "_click_attack", lambda point, gp, p, t: clicked.append(point) or True)
     out = h.bot._pick_goal(p, 0.0, "x")
-    assert out is not None and out[0] is State.ACERCARSE
-    assert abs(h.bot._apr.last_screen[0] - 1407) <= 60 and abs(h.bot._apr.last_screen[1] - 374) <= 60
+    assert out is not None and out[0] is State.ACERCARSE and not clicked   # piedra sin etiqueta: primero el hover
     msg = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Elegido"))
-    assert "piedra" in msg and "el mas cercano (piso" in msg and "tambien:" in msg and "metin_de_oscuridad" in msg
+    assert msg.startswith("Elegido piedra") and "metin_de_oscuridad" in msg and "tambien:" in msg
+
+
+def test_captura_real_con_ratio_bajo_gana_la_etiqueta(real, monkeypatch):
+    """Con un umbral mas exigente (0.4) la etiqueta de atras le gana a la piedra (la regla de prioridad funciona)."""
+    h, p = _goals_of(real)
+    h.bot.cfg["approach"]["unlabeled_closer_ratio"] = 0.4
+    cands, _ = h.bot._label_view(p, 0.0)
+    far, _ = h.bot._far_view(p, 0.0)
+    assert h.bot._goals(cands, far, p)[0][0].kind == "etiqueta"
 
 
 # ---------------------------------------------------------------- eleccion (unitarios)

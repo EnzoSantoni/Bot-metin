@@ -201,13 +201,18 @@ class SimEnv:
     """Mundo + Bot completo. `world` se llena desde el test; `run_until` corre el bot ciclo a ciclo."""
 
     def __init__(self, seed: int = 0, *, phi: float | None = None, a0=None, start=(550.0, 150.0),
-                 cfg: dict | None = None, coords_noise: float = 0.0, **world_kw) -> None:
+                 cfg: dict | None = None, coords_noise: float = 0.0, real_pickup: bool = False, **world_kw) -> None:
         self.rng = random.Random(seed)
         self.cfg = cfg or make_cfg()
         self.zone = FarmZone.from_config(self.cfg)
         phi = self.rng.uniform(-math.pi, math.pi) if phi is None else phi
         self.world = SimWorld(make_a0(0.2, 0.7) if a0 is None else a0, phi, start,
                               rng=random.Random(seed + 1), **world_kw)
+        if real_pickup:   # geometria de recogida del juego real (ver SimWorld.pickup_feet_px), medida con la cfg del bot
+            pk = self.cfg["pickup"]
+            self.world.pickup_feet_px = (0.0, float(self.cfg["vision"]["ground"]["feet_dy_px"]))
+            self.world.pickup_radius_px = float(pk["arrive_px"]) * float(pk["reposition_frac"]) + 5.0   # alcanza tras reacomodarse
+            self.world.item_label_dy_px = 8.0 + float(pk["item_below_label_px"])   # media etiqueta + hueco hasta el objeto
         self.window = FakeWindow(CLIENT)
         self.backend = SimBackend(self.world, self.window, self.cfg)
         self.control = SimControl(self.world)
@@ -269,7 +274,7 @@ class SimEnv:
             metins.append(MetinDetection(label, m.name, 1.0, m.name in self.slugs, cp, self.mask.allows(*cp)))
         items: list[ItemLabel] = []
         for it in w.items:
-            off = w.visible_offset(it.pos)
+            off = w.item_label_offset(it)
             if off is None:
                 continue
             cp = (round(player[0] + off[0]), round(player[1] + off[1]))

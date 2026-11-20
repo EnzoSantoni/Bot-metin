@@ -7,12 +7,15 @@ monstruos) y, justo encima, el humo (gris palido tirando a calido). No sabe el t
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 from bot.geometry import Rect
+from bot.ground import depth_px
+from bot.vision.monsters import MonsterLabel
 from bot.vision.screen_mask import ScreenMask
 
 logger = logging.getLogger(__name__)
@@ -84,9 +87,30 @@ def _excluded(r: Rect, center: tuple[int, int], exclude: list[Rect] | None, frac
     return False
 
 
+def _monster_above(r: Rect, center: tuple[int, int], monsters: list[MonsterLabel] | None, m: dict) -> bool:
+    """True si una etiqueta de monstruo queda justo arriba del candidato (a <= `monster_label_above_px` por encima de su
+    base y con el centro a <= `monster_label_dx_px` en horizontal): es el cuerpo de ese monstruo, no una piedra."""
+    for lb in monsters or []:
+        up = center[1] - lb.rect.bottom
+        if 0 <= up <= m["monster_label_above_px"] and abs(lb.center[0] - center[0]) <= m["monster_label_dx_px"]:
+            return True
+    return False
+
+
+def _bad_shape(r: Rect, center: tuple[int, int], shape: tuple[int, ...], cfg: dict, m: dict) -> str | None:
+    """Motivo por el que el cuerpo no parece una piedra: mucho mas alto que ancho (un personaje), o mucho mas chico de lo
+    que mide una piedra a esa altura de pantalla (perspectiva: el tamano es proporcional a la distancia al horizonte)."""
+    if r.h > m["max_aspect"] * r.w:
+        return "alargado"
+    if math.sqrt(r.w * r.h) < m["min_size_ratio"] * depth_px(center[1], shape, cfg):
+        return "muy chico para esa altura"
+    return None
+
+
 def find_far_metins(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = None,
-                    exclude: list[Rect] | None = None) -> list[FarMetin]:
-    """Piedras sin etiqueta: nucleo rojo con humo encima, fuera de zonas excluidas, ventanas y `exclude`."""
+                    exclude: list[Rect] | None = None, monsters: list[MonsterLabel] | None = None) -> list[FarMetin]:
+    """Piedras sin etiqueta: nucleo rojo con humo encima, fuera de zonas excluidas, ventanas y `exclude`. Con `monsters`
+    descarta los cuerpos con etiqueta de monstruo arriba; ademas filtra por forma y tamano esperado (perspectiva)."""
     h, w = img_bgr.shape[:2]
     if h == 0 or w == 0:
         return []
@@ -108,11 +132,17 @@ def find_far_metins(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = No
             continue
         if mask is not None and mask.overlap_fraction(r) > m["max_zone_overlap"]:
             continue
+        center = (r.x + r.w // 2, r.y + int(r.h * m["center_y_frac"]))
+        if _monster_above(r, center, monsters, m):
+            logger.debug("Candidato %s descartado: etiqueta de monstruo arriba", center)
+            continue
+        if (why := _bad_shape(r, center, img_bgr.shape, cfg, m)) is not None:
+            logger.debug("Candidato %s descartado: %s (%dx%d)", center, why, r.w, r.h)
+            continue
         smoke_px = _smoke_pixels(hsv, r, m)
         has_smoke = smoke_px >= m["min_smoke_pixels"]
         if not has_smoke and not _bright_body(hsv, r, m):
             continue
-        center = (r.x + r.w // 2, r.y + int(r.h * m["center_y_frac"]))
         if _excluded(r, center, exclude, m["exclude_overlap"]):
             continue
         score = 0.5 * min(1.0, len(xs) / m["core_ref"]) + 0.5 * min(1.0, max(smoke_px, m["min_smoke_pixels"] // 2) / m["smoke_ref"])

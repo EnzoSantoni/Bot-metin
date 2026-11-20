@@ -69,7 +69,10 @@
     // Lecturas de coordenadas fallidas o descartadas: recorte x4 de la zona en <run>/coordenadas/NNNN_<motivo>.png
     // (motivo: sin_lectura, confianza, salto). max_coord_crops: tope por corrida; coord_crop_every_s: separacion minima.
     "max_coord_crops": 60,
-    "coord_crop_every_s": 1.0
+    "coord_crop_every_s": 1.0,
+    // save_raw: junto a cada imagen anotada guarda la captura CRUDA (sin dibujos) como NNNN_..._raw.png (cuenta para
+    // max_images): sirve de caso de prueba limpio.
+    "save_raw": true
   },
 
   // Alarma sonora (captcha o muerte): winsound.Beep en un hilo hasta que se la para.
@@ -187,7 +190,11 @@
             "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
             // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = mirar con Q/E y caminar hacia la
             // direccion elegida con la combinacion de W/A/S/D mas cercana (sin girar) durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
-            "back_s": 1.0, "look_walk_s": 1.2},
+            "back_s": 1.0, "look_walk_s": 1.2,
+            // Rodeado sin avanzar (en EXPLORAR, VOLVER, CENTRO y ACERCARSE): con >= monsters_min monstruos cerca y menos de
+            // min_move de movimiento en surrounded_s segundos, ESPACIO surrounded_space_s (montado empuja) y sigue en el mismo
+            // estado. Tras surrounded_max veces seguidas sin avanzar, el DESTRABAR de siempre.
+            "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -248,6 +255,9 @@
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
              "relocate_px": 150, "target_keep_s": 25.0,
+             //  keep_with_others_s: si el metin en curso no se ve y hay OTRO metin objetivo con etiqueta a la vista, se lo
+             //  suelta a los keep_with_others_s en vez de target_keep_s. Solo hay metin en curso si el panel lo confirmo.
+             "keep_with_others_s": 8.0,
              //  Buscar el proximo metin MIENTRAS se ataca: con scan_enabled, la vida del metin bajando desde hace scan_after_s y el
              //  panel confirmado, la camara gira de a un paso de Q/E (explore.camera_step_s) hasta scan_steps pasos o hasta ver un
              //  metin objetivo (distinto del que se ataca) y vuelve la misma cantidad de pasos a su posicion original. Entre paso y
@@ -342,7 +352,13 @@
                "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
                "blind_player_radius": 25.0, "max_tries_per_spot": 3,
                "far_monsters_n": 2, "far_monsters_px": 200,
-               "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2},
+               "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+               //  ELECCION: una etiqueta objetivo va antes que una piedra sin etiqueta, salvo que la distancia de piso de la
+               //  piedra sea < unlabeled_closer_ratio x la de la etiqueta. Las piedras sin etiqueta con la base por debajo de
+               //  near_unlabeled_y_frac del alto (cerca del personaje: de cerca los metin siempre muestran su nombre, asi que
+               //  casi seguro es un monstruo) van al final y solo se consideran si no hay otro candidato.
+               //  HOVER sin nombre tras hover_tries (ya NO hay clic): se ignora esa posicion no_label_ignore_s segundos.
+               "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
 
   // CENTRO (regla D / E): como VOLVER pero el destino es el centro del poligono; termina a <= arrive_dist unidades y
   //  sigue con barrido + EXPLORAR. Su tope de tiempo y sus episodios de traba son los de VOLVER (volver.max_seconds).
@@ -477,7 +493,14 @@
       "alt_bright_lo": [3, 30, 200], "alt_bright_hi": [24, 190, 255],  // HSV de los pixeles claros del cuerpo
       "alt_min_bright_px": 100, "alt_min_bright_frac": 0.08,  // minimo de pixeles claros y fraccion de la ventana
       "alt_bright_max_ratio": 1.6,               // maximo de claros / nucleo (un efecto de habilidad es mucho mayor)
-      "alt_min_ground_frac": 0.3                 // fraccion minima de suelo oscuro azulado alrededor
+      "alt_min_ground_frac": 0.3,                // fraccion minima de suelo oscuro azulado alrededor
+      // Filtros contra cuerpos de monstruos (en la prueba real, soldados/arqueras con ropa roja se tomaban por piedras):
+      // monster_label_above_px / monster_label_dx_px: con una etiqueta de monstruo a <= above_px por encima de la base del
+      //  candidato y con el centro a <= dx_px en horizontal, es el cuerpo de ese monstruo y se descarta.
+      // min_size_ratio: sqrt(ancho*alto) del cuerpo / distancia de la base al horizonte (perspectiva). Medido: piedras reales
+      //  0.11-0.31 (la mas chica 0.113); cuerpos de monstruos abajo de la pantalla 0.045-0.05. Menos que esto se descarta.
+      // max_aspect: alto/ancho maximo (piedras reales <= 1.31; un personaje de pie mide ~2.2).
+      "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9
     },
 
     // Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano pegado a la izquierda de un nombre

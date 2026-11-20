@@ -126,3 +126,37 @@ def test_nombre_que_no_es_objetivo_avisa(caplog):
         validate_config(_cfg(["Metin Raro", "Metin Negro"]))
     assert any("Metin Raro" in r.getMessage() and "se ignora" in r.getMessage() for r in caplog.records)
     assert not any("Metin Negro" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------- prioridad + regla de etiquetas primero (rank_goals)
+def _goals_order(goals, prio, cfg):
+    """Misma composicion que `Bot._goals`: `rank_goals` y despues `order_by_priority`."""
+    from bot.ground import rank_goals
+    ranked = rank_goals(goals, (929, 560), (1057, 1858, 3), cfg)
+    return [e[0] for e in (order_by_priority(ranked, prio, lambda e: e[0].name if e[0].kind == "etiqueta" else None)
+                           if prio else ranked)]
+
+
+def test_prioridad_etiqueta_listada_le_gana_a_piedra_sin_etiqueta_y_vacia_es_main():
+    from bot.ground import Goal
+    cfg = make_cfg()
+    near_stone = Goal("piedra", "piedra", (929, 500))      # muy cerca, sin etiqueta
+    osc = Goal("etiqueta", OSC, (929, 400))
+    neg = Goal("etiqueta", NEG, (929, 250))                # la mas lejos
+    goals = [near_stone, osc, neg]
+    sin = _goals_order(goals, [], cfg)
+    assert sin[0] is near_stone                            # regla de main (ratio) con prioridad vacia
+    con = _goals_order(goals, ["Metin Negro"], cfg)
+    assert con[0] is neg                                   # listado primero
+    assert con.index(near_stone) > con.index(neg)
+    assert {id(g) for g in con} == {id(g) for g in goals}
+
+
+def test_prioridad_no_listado_conserva_la_regla_de_main_entre_etiqueta_y_piedra():
+    from bot.ground import Goal
+    cfg = make_cfg()
+    stone = Goal("piedra", "piedra", (929, 500))           # mucho mas cerca que osc: gana por ratio
+    osc = Goal("etiqueta", OSC, (929, 300))
+    neg = Goal("etiqueta", NEG, (929, 200))
+    out = _goals_order([stone, osc, neg], ["Metin Negro"], cfg)
+    assert out[0] is neg and out[1] is stone and out[2] is osc   # listada, luego (piedra gana a osc no listada), luego osc

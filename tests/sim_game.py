@@ -202,6 +202,12 @@ class SimWorld(SimGame):
         self.lure_log: list[float] = []             # tiempos de cada uso del senuelo
         self.bugs_killed = 0
         self.reach, self.pickup_radius, self.drop_radius = reach, pickup_radius, drop_radius
+        # Geometria "como el juego" (opt-in, `SimEnv(real_pickup=True)`): se recoge debajo de los pies del personaje (a
+        # `pickup_feet_px` px debajo de su punto de pantalla) y la etiqueta de un objeto se dibuja `item_label_dy_px` px encima
+        # del objeto. Por defecto (None / 0) el objeto y su etiqueta estan en el mismo punto y se recoge en el personaje.
+        self.pickup_feet_px: tuple[float, float] | None = None
+        self.pickup_radius_px = 0.0
+        self.item_label_dy_px = 0.0
         self.drop_spec, self.label_dist, self.click_tol_px = tuple(drop_spec), label_dist, click_tol_px
         self.metins: list[SimMetin] = []
         self.items: list[SimItem] = []
@@ -315,6 +321,11 @@ class SimWorld(SimGame):
             return None
         return self.screen_offset_of(pt)
 
+    def item_label_offset(self, it) -> tuple[float, float] | None:
+        """Vector de pantalla del centro de la etiqueta de un objeto (None si no esta a distancia de etiqueta)."""
+        off = self.visible_offset(it.pos)
+        return None if off is None else (off[0], off[1] - self.item_label_dy_px)
+
     # --- acciones del jugador ---
     def click_screen(self, vec) -> str:
         """Clic a `vec` px del personaje. Devuelve 'metin' | 'item' | 'ground' | 'ignored'."""
@@ -332,7 +343,7 @@ class SimWorld(SimGame):
             return "metin"
         near = []
         for it in self.items:
-            if (off := self.visible_offset(it.pos)) is not None:
+            if (off := self.item_label_offset(it)) is not None:
                 d = math.hypot(off[0] - vec[0], off[1] - vec[1])
                 if abs(off[0] - vec[0]) <= ITEM_HALF_W and abs(off[1] - vec[1]) <= ITEM_HALF_H:   # sobre su etiqueta
                     near.append((d, it))
@@ -360,12 +371,20 @@ class SimWorld(SimGame):
         self.selected, self.chase = ("metin", m), m
         self.selected_log.append((self.t, "metin", m.name))
 
+    def _in_pickup_range(self, it: SimItem) -> bool:
+        """Alcance de Z. Por defecto, radio en unidades de juego alrededor del personaje. Con `pickup_feet_px` el alcance se
+        mide en PANTALLA (como lo ve el bot): el objeto a menos de `pickup_radius_px` px de los pies; sin ese chequeo la
+        perspectiva (un px vertical vale menos unidades que uno horizontal) hace que el mismo radio sea mas chico a los lados."""
+        if self.pickup_feet_px is None:
+            return math.dist(it.pos, self.pos) <= self.pickup_radius
+        ox, oy = self.screen_offset_of(it.pos)
+        return math.hypot(ox - self.pickup_feet_px[0], oy - self.pickup_feet_px[1]) <= self.pickup_radius_px
+
     def press_pickup(self) -> None:
         self.z_presses += 1
         if self.frozen:
             return
-        near = [i for i in self.items if i.kind == "item" and not i.reserved_other
-                and math.dist(i.pos, self.pos) <= self.pickup_radius]
+        near = [i for i in self.items if i.kind == "item" and not i.reserved_other and self._in_pickup_range(i)]
         if not near:
             self._z_streak = {}
         if near:

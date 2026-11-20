@@ -72,7 +72,7 @@ PARTS = {
     State.BICHOS: {"coords", "monsters", "items"},
     State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters"},
-    State.VOLVER: {"coords"}, State.CENTRO: {"coords"},   # volver al centro se guia solo por coordenadas
+    State.VOLVER: {"coords", "monsters"}, State.CENTRO: {"coords", "monsters"},   # van por coordenadas (monstruos: rodeado)
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
     State.REVIVIR: set(), State.MUERTO: set(), State.FIN: set(),
 }
@@ -120,6 +120,7 @@ class BotStats:
     deaths: int = 0              # veces que se vio la pantalla de muerte
     revives: int = 0             # revives logrados (Fase 14)
     farm_mode: str = "metin"     # "metin" | "bichos"
+    surrounded: int = 0          # ESPACIO por estar rodeado de monstruos sin avanzar (caminando)
     elapsed_s: float = 0.0
     coords: CoordStats = field(default_factory=CoordStats)   # el tracker escribe aca
     time_by_state: dict[str, float] = field(default_factory=dict)
@@ -132,7 +133,7 @@ class BotStats:
         deaths = f" | muertes: {self.deaths} (revividas: {self.revives})" if self.deaths > 0 else ""
         return (f"Metin rotos: {self.metins} | objetos recogidos (estimado): {self.items} | captchas: {self.captchas} | "
                 f"destrabes: {self.unstucks} ({self.episodes} episodios, {self.episodes_resolved} resueltos, "
-                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills}{bichos}{deaths} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
+                f"{self.centros} al centro, {self.surrounded} ESPACIO por rodeado) | acercamientos: {self.approaches}{skills}{bichos}{deaths} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
                 f"motivo de fin: {self.end_reason or '-'}\n{self.coords.line()}")
 
 
@@ -181,11 +182,14 @@ class _Attack:
     wait_t: float | None = None                 # desde cuando la vida esta baja pero la piedra sigue a la vista
     reclick_t: float = -math.inf                # hora del ultimo reclic
     first_drop_t: float | None = None           # hora de la primera baja de vida (desde ahi "viene pegando")
+    cm: _CurrentMetin | None = None             # contadores del metin de este ataque; pasa a `Bot._cur` al confirmarlo el panel
+    stone: bool = False                         # el clic fue sobre una piedra sin etiqueta a la vista
 
 
 @dataclass
 class _CurrentMetin:
-    """Metin en curso: clickeado/seleccionado o atacado y todavia no roto. Mientras existe no se elige otro."""
+    """Metin en curso: el panel confirmo que es un metin objetivo y todavia no se rompio. Mientras `Bot._cur` lo tiene no se
+    elige otro (un clic sin confirmar vive solo en `_Attack.cm` y no bloquea nada)."""
     screen: tuple[int, int]            # ultimo punto de pantalla
     gp: Xy | None                      # posicion estimada en el juego (None sin camara)
     name: str | None                   # tipo (slug del panel o de la etiqueta)
@@ -198,6 +202,14 @@ class _CurrentMetin:
     rounds: int = 0                    # veces que se agotaron los reclics por deseleccion
     unstick_n: int = 0                 # intentos de destrabe yendo al metin (escalera ESPACIO / costado)
     ladders: int = 0                   # veces que se agoto esa escalera (y se paso a DESTRABAR)
+
+
+@dataclass
+class _Surround:
+    """Seguimiento de "rodeado de monstruos sin avanzar" mientras se camina."""
+    ref: tuple[int, int]               # posicion de referencia
+    since: float                       # desde cuando el personaje esta cerca de `ref`
+    n: int = 0                         # ESPACIO seguidos sin que el personaje avance
 
 
 @dataclass
@@ -378,6 +390,9 @@ class Bot:
         self._atk: _Attack | None = None
         self._cur: _CurrentMetin | None = None    # metin en curso (sobrevive a BUSCAR/EXPLORAR/DESTRABAR)
         self._apr: _Approach | None = None
+        self._sur: _Surround | None = None        # rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO caminando)
+        self._cur_log_t = -math.inf               # ultimo "Busco el metin en curso" (sin spam)
+        self._labels_seen = False                 # el ultimo `_pick_goal` vio metin objetivo con etiqueta
         self._walk: _Walk | None = None
         self._pk: _Pickup | None = None
         self._ex: _Explore | None = None
@@ -569,6 +584,8 @@ class Bot:
         if self._maybe_cast_skill(t):
             return
         before = self.state
+        if self._surrounded(p, t):
+            return
         out = getattr(self, "_do_" + self.state.name.lower())(p, t)
         if out is not None and self.state is before:   # si el handler ya cambio de estado (captcha en una tecla) no se pisa
             self._enter(*out)
@@ -749,12 +766,18 @@ class Bot:
         - Con `gp`: por distancia (el error de la camara crece con la distancia), mas la incertidumbre de `s`.
         - Sin camara: el candidato esta a lo sumo a `escala maxima x px en pantalla` unidades del jugador y `s` a lo sumo
           a `unc` de su centro: cubre si esas dos regiones se tocan, es decir si el jugador esta cerca de `s` y el
-          candidato cerca de el en pantalla (uno lejano en pantalla solo se toca con una `s` cercana)."""
+          candidato cerca de el en pantalla (uno lejano en pantalla solo se toca con una `s` cercana). Si `s` guardo el
+          vector de pantalla y el jugador sigue en su lugar (misma vista), cubre solo al candidato a <= `approach.match_px`
+          de ese vector."""
         pos = self.tracker.position
         if gp is not None:
             return math.dist(gp, s.xy) <= s.unc + self._spot_radius(gp, base)
         if pos is None or screen is None or player_xy is None:
             return False
+        if s.vec is not None and s.rot == self.camera.rotations and math.dist(pos, s.xy) <= s.unc + base:
+            # el jugador sigue donde se guardo la posicion y la vista no giro: el vector de pantalla identifica al candidato
+            # (si no, ignorar una piedra falsa ignoraria todo lo que se ve desde ese lugar)
+            return math.dist((screen[0] - player_xy[0], screen[1] - player_xy[1]), s.vec) <= float(self.apr["match_px"])
         return math.dist(pos, s.xy) <= self.camera.scale_range[1] * math.dist(screen, player_xy) + s.unc + base
 
     def _expiry(self, spots: list[_Spot], gp: Xy | None, t: float, screen: tuple[int, int] | None,
@@ -778,11 +801,14 @@ class Bot:
         """Piedra lejana en una posicion que ya resulto ser de otro tipo (o que se perdio / no se pudo alcanzar)."""
         return self._expiry(self.ignored, gp, t, screen, player_xy, float(self.apr["ignore_radius"])) is not None
 
-    def _ignore_position(self, gp: Xy | None, t: float, why: str, screen: tuple[int, int] | None = None) -> None:
-        s = self._new_spot(gp, screen, t, float(self.apr["ignore_minutes"]))
+    def _ignore_position(self, gp: Xy | None, t: float, why: str, screen: tuple[int, int] | None = None,
+                         seconds: float | None = None) -> None:
+        """Ignora una posicion `seconds` (por defecto `approach.ignore_minutes`)."""
+        secs = float(self.apr["ignore_minutes"]) * 60 if seconds is None else seconds
+        s = self._new_spot(gp, screen, t, secs / 60)
         if s is not None:
             self.ignored.append(s)
-        logger.info("Posicion ignorada por %.0f min (%s): %s", self.apr["ignore_minutes"], why,
+        logger.info("Posicion ignorada por %.0f s (%s): %s", secs, why,
                     "sin camara, desde la posicion del jugador" if gp is None else f"est. ({gp[0]:.0f}, {gp[1]:.0f})")
         self._dbg("ignorada", why)
 
@@ -1009,6 +1035,7 @@ class Bot:
         far, why_far = self._far_view(p, t)
         self._log_reasons(why + why_far)
         ranked = self._goals(cands, far, p)
+        self._labels_seen = any(g.kind == "etiqueta" for g, _ in ranked)
         if self._cur is not None:
             out = self._pick_current(ranked, p, t, attack_why)
             if out is not None or self._cur is not None:
@@ -1058,9 +1085,10 @@ class Bot:
         return self._current_dist(screen, gp) is not None
 
     def _pick_current(self, ranked: list[tuple[Goal, float]], p: Perception, t: float, attack_why: str) -> Transition:
-        """Con un metin en curso: solo ese (el candidato mas cercano a su ultimo punto). Lo retoma con un clic (a un punto sin
-        monstruos encima); si no se ve y pasaron `attack.target_keep_s` desde la ultima vez que se lo vio, lo suelta (y
-        sigue la eleccion normal: `_cur` queda None)."""
+        """Con un metin en curso (confirmado por el panel): solo ese (el candidato mas cercano a su ultimo punto). Lo retoma con
+        un clic (a un punto sin monstruos encima); si no se ve y pasaron `attack.target_keep_s` desde la ultima vez que se lo
+        vio (`attack.keep_with_others_s` si hay otro metin objetivo con etiqueta a la vista), lo suelta (y sigue la eleccion
+        normal: `_cur` queda None)."""
         c = self._cur
         found: list[tuple[float, tuple[int, int], Xy | None]] = []
         for g, _ in ranked:
@@ -1081,26 +1109,33 @@ class Bot:
             self._no_target_t = t
             return State.ATACAR, attack_why + " (en curso)"
         lost = t - c.last_seen_t
-        if lost >= float(self.atk["target_keep_s"]):
-            logger.info("Abandono el metin en curso: no lo encuentro hace %.0f s", lost)
+        others = any(g.kind == "etiqueta" for g, _ in ranked)   # otro metin objetivo con etiqueta a la vista
+        keep = float(self.atk["keep_with_others_s"] if others else self.atk["target_keep_s"])
+        if lost >= keep:
+            logger.info("Abandono el metin en curso: no lo encuentro hace %.0f s%s", lost,
+                        " y hay otro metin objetivo a la vista" if others else "")
             self._cur = None
+        elif t - self._cur_log_t >= 5.0:
+            self._cur_log_t = t
+            logger.info("Busco el metin en curso (%.0f s de %.0f)", lost, keep)
         return None
 
-    def _set_current(self, point: tuple[int, int], gp: Xy | None, p: Perception, t: float) -> None:
-        """Clic en un metin: si es el que ya estaba en curso se lo conserva (con sus contadores); si no, es uno nuevo."""
+    def _current_for(self, point: tuple[int, int], gp: Xy | None, p: Perception, t: float) -> _CurrentMetin:
+        """Contadores del metin al que se hace clic: si es el que ya estaba en curso se lo conserva (con sus contadores); si no,
+        uno nuevo SIN confirmar (no queda en `_cur` hasta que el panel lo confirme)."""
         c = self._cur
         if c is not None and self._is_current(point, gp):
             c.screen, c.rot, c.last_seen_t = point, self.camera.rotations, t
             if gp is not None:
                 c.gp = gp
-            return
+            return c
+        self._cur = None   # un clic en otro metin: el anterior ya no es el que se sigue
         lab = self._label_of(point, p)
-        self._next = None   # un metin nuevo en curso: lo recordado era del anterior
-        self._cur = _CurrentMetin(point, gp, lab.name if lab is not None else None, t, t, self.camera.rotations)
+        return _CurrentMetin(point, gp, lab.name if lab is not None else None, t, t, self.camera.rotations)
 
     def _touch_current(self, a: _Attack, p: Perception, t: float) -> None:
         """Durante ATACAR: sigue el punto de pantalla y la posicion del metin en curso y anota cuando se lo vio."""
-        c = self._cur
+        c = a.cm
         if c is None:
             return
         c.screen, c.rot = a.click, self.camera.rotations
@@ -1159,7 +1194,17 @@ class Bot:
         out = self._pick_goal(p, t, "metin elegido")
         if out is not None:
             return out
+        if self._cur is not None:
+            if self._labels_seen:   # hay etiquetas objetivo a la vista: se espera (el metin en curso se suelta solo a su tiempo)
+                return None
+            return State.EXPLORAR, "no hay metin visible (busco el metin en curso)"
         return State.EXPLORAR, "no hay metin visible"
+
+    def _after_reject(self, p: Perception, t: float, why: str) -> Transition:
+        """Se rechazo una piedra (no era un metin objetivo): elige el siguiente candidato en el mismo ciclo; si no hay, BUSCAR."""
+        self._apr = None
+        out = self._pick_goal(p, t, "metin elegido")
+        return out if out is not None else (State.BUSCAR, why)
 
     def _click_attack(self, point: tuple[int, int], gp: Xy | None, p: Perception, t: float) -> bool:
         """Clic izquierdo en `point` (sobre el metin) y arranca el ataque. False si el clic no se pudo mandar."""
@@ -1171,7 +1216,8 @@ class Bot:
         pos = self.tracker.position
         self._atk = _Attack(t, point, gp, t, t, pos, last_drop_t=t, trail=[] if pos is None else [(t, pos)],
                             start_pos=pos, ref=pos)
-        self._set_current(point, gp, p, t)
+        self._atk.stone = self._label_of(point, p) is None
+        self._atk.cm = self._current_for(point, gp, p, t)
         return True
 
     def _hover_label(self, p: Perception, a: _Approach) -> MetinDetection | None:
@@ -1185,7 +1231,8 @@ class Bot:
     def _do_acercarse(self, p: Perception, t: float) -> Transition:
         """Piedra sin etiqueta elegida: hover sobre su cuerpo y lee la etiqueta que aparece (sin girar la camara, sin W ni
         clics en el piso). Objetivo -> clic y ATACAR (el personaje camina solo); otro tipo -> se ignora esa posicion;
-        sin etiqueta tras `approach.hover_tries` hovers -> clic igual (el panel de ATACAR confirma el tipo)."""
+        sin etiqueta tras `approach.hover_tries` hovers -> NO es un metin: no hay clic, se ignora esa posicion
+        `approach.no_label_ignore_s` y se elige el siguiente candidato en el mismo ciclo."""
         a = self._apr
         if a is None or a.point is None:
             return State.BUSCAR, "sin acercamiento en curso"
@@ -1201,11 +1248,11 @@ class Bot:
                     return State.ATACAR, f"etiqueta de metin objetivo en el hover ({d.name})"
                 gp = cand.gp or a.gp
                 self._ignore_position(gp, t, "sin punto de clic valido hacia la piedra", d.click_point)
-                return State.BUSCAR, "no se puede clickear la piedra"
+                return self._after_reject(p, t, "no se puede clickear la piedra")
             gp = self._game_pos_of(d.click_point, p) or a.gp
             self._ignore_position(gp, t, f"otro tipo ({d.name})" if not d.is_target else
                                   f"la piedra no es elegible ({d.name})", d.click_point)
-            return State.BUSCAR, f"piedra de otro tipo ({d.name}): posicion ignorada"
+            return self._after_reject(p, t, f"piedra de otro tipo ({d.name}): posicion ignorada")
         near = [f for f in p.far_metins if math.dist(f.center, a.last_screen) <= float(self.apr["match_px"])]
         if not near:
             a.lost += 1
@@ -1224,15 +1271,14 @@ class Bot:
         if a.hovers > 0:
             logger.info("Hover sobre piedra (%d, %d): etiqueta ninguna", a.point[0], a.point[1])
         if a.hovers >= int(self.apr["hover_tries"]):
-            if self._click_attack(a.point, a.gp, p, t):
-                if self._atk is not None:
-                    self._atk.spot = a.spot   # una piedra fantasma no tiene panel: las aproximaciones siguen contando
-                return State.ATACAR, "sin etiqueta tras el hover: clic en la piedra"
-            self._ignore_position(a.gp, t, "sin punto de clic valido hacia la piedra", a.last_screen)
-            return State.BUSCAR, "no se puede clickear la piedra"
+            logger.info("La piedra en (%d, %d) no muestra nombre de metin tras %d hovers: no es un metin, no hago clic",
+                        a.point[0], a.point[1], a.hovers)
+            self._ignore_position(a.gp, t, "sin nombre en el hover", a.last_screen,
+                                  seconds=float(self.apr["no_label_ignore_s"]))
+            return self._after_reject(p, t, "piedra sin nombre en el hover: posicion ignorada")
         if not self.gi.hover_at(*a.point, p.mask):
             self._ignore_position(a.gp, t, "sin punto de hover valido sobre la piedra", a.last_screen)
-            return State.BUSCAR, "no se puede hacer hover sobre la piedra"
+            return self._after_reject(p, t, "no se puede hacer hover sobre la piedra")
         a.hovers += 1
         self._planned = a.point
         logger.debug("Hover %d/%d sobre la piedra en %s", a.hovers, int(self.apr["hover_tries"]), a.point)
@@ -1244,8 +1290,6 @@ class Bot:
         a = self._atk
         if a is None:
             return State.BUSCAR, "sin ataque en curso"
-        if self._cur is None:
-            self._set_current(a.click, a.gp, p, t)
         pos = self.tracker.position
         if pos != a.last_pos:
             a.progress_t, a.last_pos = t, pos
@@ -1284,6 +1328,10 @@ class Bot:
                 return None
             self.gi.press("deselect")
             self._atk = None
+            if a.stone:   # el clic fue sobre una piedra sin etiqueta y era un monstruo: esa posicion no es un metin
+                self._ignore_position(a.gp, t, f"el clic selecciono otra cosa ({what})", a.click,
+                                      seconds=float(self.apr["no_label_ignore_s"]))
+                return self._after_reject(p, t, f"se selecciono otra cosa ({what}): posicion ignorada")
             return State.BUSCAR, f"se selecciono otra cosa ({what})"
         need = int(self.atk["broken_confirm_cycles"])
         ended = False
@@ -1333,7 +1381,7 @@ class Bot:
 
     def _read_panel(self, a: _Attack, panel: Any, t: float) -> None:
         """Panel con el metin objetivo: confirma el ataque y sigue la vida (cuando BAJA es que esta pegando)."""
-        c = self._cur
+        c = a.cm
         hp = panel.hp_ratio
         a.missing, a.wait_t = 0, None
         a.slug = panel.name or a.slug
@@ -1347,7 +1395,9 @@ class Bot:
             if a.spot is not None and a.spot in self._tries:
                 self._tries.remove(a.spot)
             if c is not None:
-                c.confirmed_t, c.name = t, panel.name
+                c.confirmed_t, c.name, c.last_seen_t = t, panel.name, t
+                if self._cur is not c:   # el panel confirmo un metin objetivo: recien ahora hay metin en curso
+                    self._cur, self._next = c, None
         if hp is not None:
             a.last_hp = hp
             if c is not None:
@@ -1408,7 +1458,7 @@ class Bot:
         """El panel se perdio sin romperse el metin (deseleccion por un clic en un bicho, p. ej.): reclic en el MISMO metin
         (relocalizado, sin pasar por BUSCAR). Con `attack.max_deselect_reclicks` agotados va a BUSCAR (el metin sigue en
         curso); la segunda vez que se agotan lo descarta."""
-        c = self._cur
+        c = a.cm
         if c is not None:
             c.deselects += 1
             if c.deselects > int(self.atk["max_deselect_reclicks"]):
@@ -1454,12 +1504,12 @@ class Bot:
         """Trabado yendo al metin (quieto `attack.walk_stuck_s`, vida sin bajar, haya o no monstruos): 1) ESPACIO y reclic en
         el MISMO metin; 2) un paso al costado (A, D, W+A, W+D) y reclic; tras `attack.max_unstick` intentos, DESTRABAR
         (sin soltar el metin en curso)."""
-        c = self._cur
+        c = a.cm
         c.unstick_n += 1
         n, mx = c.unstick_n, int(self.atk["max_unstick"])
         if n > mx:
             c.unstick_n, c.ladders = 0, c.ladders + 1
-            if c.ladders >= 2:   # ya paso por DESTRABAR una vez y sigue sin poder llegar: inalcanzable
+            if c.ladders >= 2 or self._cur is not c:   # sin panel que lo confirme no queda en curso: se lo descarta   # ya paso por DESTRABAR una vez y sigue sin poder llegar: inalcanzable
                 logger.info("Metin en curso inalcanzable: segunda escalera de destrabe agotada, lo descarto")
                 return self._discard(a, "inalcanzable", p, t)
             logger.info("Trabado yendo al metin: %d intentos (ESPACIO y pasos al costado) sin salir: DESTRABAR "
@@ -2776,6 +2826,46 @@ class Bot:
                 return "ok"
             if guard is not None and (img is None or not guard(img)):
                 return "guard"
+
+    def _walking_now(self) -> bool:
+        """El bot esta intentando caminar (VOLVER, CENTRO, un tramo de EXPLORAR o la caminata corta de BICHOS; no el barrido
+        de camara ni la pelea con ESPACIO)."""
+        if self.state in (State.VOLVER, State.CENTRO):
+            return True
+        if self.state is State.BICHOS:
+            return self._bi_target is not None
+        return self.state is State.EXPLORAR and self._ex is not None and self._ex.phase != "sweep"
+
+    def _surrounded(self, p: Perception, t: float) -> bool:
+        """Rodeado sin avanzar mientras camina: con >= `stuck.monsters_min` monstruos cerca y menos de `stuck.min_move` de
+        movimiento en `stuck.surrounded_s`, ESPACIO `stuck.surrounded_space_s` (montado empuja) y sigue en el mismo estado. Si
+        tras `stuck.surrounded_max` ESPACIO seguidos sigue sin avanzar, el DESTRABAR de siempre. True si uso el ciclo."""
+        pos = self.tracker.position
+        if not self._walking_now() or pos is None or p.monsters_near < int(self.stuck["monsters_min"]):
+            self._sur = None
+            return False
+        sr = self._sur
+        if sr is None or math.dist(pos, sr.ref) >= float(self.stuck["min_move"]):
+            self._sur = _Surround(pos, t)
+            return False
+        if t - sr.since < float(self.stuck["surrounded_s"]):
+            return False
+        n = p.monsters_near
+        if sr.n >= int(self.stuck["surrounded_max"]):
+            self._sur = None
+            logger.info("Rodeado de %d monstruos y sin avanzar tras %d ESPACIO: DESTRABAR", n, sr.n)
+            self._enter(*self._stuck_transition(self.state, t, f"rodeado de {n} monstruos sin avanzar"))
+            return True
+        logger.info("Rodeado de %d monstruos sin avanzar: ESPACIO y sigo", n)
+        self._dbg("bloqueado", f"rodeado de {n} monstruos sin avanzar: ESPACIO")
+        self.stats.surrounded += 1
+        sr.n += 1
+        if self._hold_space(float(self.stuck["surrounded_space_s"])):
+            self.tracker.forget_reference()
+            self._walk = self._leg = None   # el tramo en curso ya no vale: ESPACIO movio al personaje
+            self._bi_target = None
+            sr.ref, sr.since = pos, self.clock()
+        return True
 
     def _hold_space(self, seconds: float | None = None) -> bool:
         """ESPACIO `seconds` (por defecto `stuck.space_s`) en tramos. False si un captcha lo interrumpio (ya esta en CAPTCHA)."""

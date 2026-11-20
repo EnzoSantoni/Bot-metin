@@ -58,6 +58,7 @@ def build_record(stats: Any, inicio: datetime, fin: datetime, perfiles: dict, mo
             "metins": int(stats.metins), "metins_por_tipo": dict(stats.metins_by_type),
             "objetos": int(stats.items), "objetos_por_tipo": dict(stats.items_by_type),
             "captchas": int(stats.captchas), "destrabes": int(stats.unstucks), "acercamientos": int(stats.approaches),
+            "rodeado": int(getattr(stats, "surrounded", 0)),
             "habilidades": int(stats.skills_cast), "farm_mode": str(getattr(stats, "farm_mode", "metin")),
             "lures": int(getattr(stats, "lures", 0)),
             "muertes": int(getattr(stats, "deaths", 0)), "revives": int(getattr(stats, "revives", 0))}

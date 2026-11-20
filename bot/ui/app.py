@@ -50,6 +50,7 @@ STAT_FIELDS = (("state", "Estado", "Qué está haciendo el bot ahora."), ("time"
                ("metins", "Metin rotos", "Metin rotos en esta corrida."), ("items", "Objetos", "Objetos recogidos."),
                ("captchas", "Captchas", "Captchas detectados."), ("unstucks", "Destrabes", "Veces que se destrabó."),
                ("skills_cast", "Habilidades lanzadas", "Habilidades que el bot lanzó."),
+               ("surrounded", "Rodeado", "Veces que el bot pulsó ESPACIO por estar rodeado de monstruos sin avanzar."),
                ("lures", "Señuelos usados", "Señuelos usados (solo modo bichos)."),
                ("deaths", "Muertes (revividas)", "Veces que murió el personaje y cuántas veces logró revivir."),
                ("coords", "Coordenadas fallidas", "Porcentaje de lecturas de coordenadas (debajo del minimapa) que no salieron. "
@@ -1427,6 +1428,7 @@ class App:
         v["unstucks"].set(str(s.unstucks))
         v["time"].set(ctl.format_elapsed(s.elapsed_s))
         v["skills_cast"].set(str(s.skills_cast))
+        v["surrounded"].set(str(s.surrounded))
         v["lures"].set(str(s.lures) if s.farm_mode == "bichos" else "-")
         v["deaths"].set(f"{s.deaths} ({s.revives})")
         v["coords"].set(f"{100.0 * s.coords_failed / s.coords_total:.1f}%" if s.coords_total else "-")
