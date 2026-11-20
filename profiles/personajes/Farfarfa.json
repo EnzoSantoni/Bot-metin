@@ -15,7 +15,7 @@
     }
   },
   "pickup": {
-    "dismount": false
+    "dismount": true
   },
   "coords_filter": {
     "max_speed": 30.0

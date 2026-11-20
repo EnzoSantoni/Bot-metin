@@ -106,7 +106,7 @@ DEATH = DeathInfo(Rect(10, 10, 100, 20), None, 1.0)
 class Harness:
     """Bot completo con todo simulado; `script(h, n)` devuelve la Perception del ciclo n."""
 
-    def __init__(self, script, cfg=None, **over):
+    def __init__(self, script, cfg=None, bot_kwargs=None, **over):
         self.cfg = cfg or make_cfg(**over)
         self.clock = FakeClock()
         self.be, self.win, self.alarm = FakeBackend(), FakeWindow(), FakeAlarm()
@@ -122,7 +122,8 @@ class Harness:
             orig_release()
         self.gi.release_all = spy_release
         self.bot = Bot(self.cfg, self.win, self.gi, self.ctl, self.alarm, perceive_fn=self._perceive,
-                       clock=self.clock, sleep_fn=self.clock.sleep, rng=random.Random(3), coords_fn=self._peek_coords)
+                       clock=self.clock, sleep_fn=self.clock.sleep, rng=random.Random(3), coords_fn=self._peek_coords,
+                       **(bot_kwargs or {}))
         orig_enter = self.bot._enter
 
         def rec(new, reason):
@@ -179,17 +180,16 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
             return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
         if st is State.RECOGER:
             w["done"] = True
-            return perc(items=[item()] if h.keys("z") < 3 else [])
+            return perc(items=[item()] if h.keys("z") < 2 else [])
         return perc()
 
     h = Harness(script)
     h.run_until(lambda: State.EXPLORAR in h.states())
     assert h.states() == [State.ATACAR, State.RECOGER, State.BUSCAR, State.EXPLORAR]
     assert h.bot.stats.metins == 1 and h.bot.stats.items == 1
-    assert h.clicks() == 1 and h.keys("z") == 3
-    assert ("mouse_down", "left") in h.be.events
+    assert h.clicks() == 1 and h.keys("z") == 2 and h.keys("g") == 2   # 1 clic del ataque; el objeto esta encima: solo Z
     # las partes de percepcion que pide cada estado
-    assert ({"items", "coords"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
+    assert ({"items", "coords", "monsters"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
     assert all("panel" in c[1] for c in h.calls if c[0] is State.ATACAR)
 
 
@@ -529,6 +529,7 @@ def test_dismount_emparejado_aunque_haya_timeout():
 def test_dismount_se_vuelve_a_montar_si_hay_error():
     h = Harness(lambda h, n: perc(items=[item()]), pickup={"dismount": True})
     _to_recoger(h)
+    h.bot.step()   # mira, ve el objeto y se baja
     assert h.keys("g") == 1
     h.script = lambda h, n: (_ for _ in ()).throw(RuntimeError("boom"))
     with pytest.raises(RuntimeError):
@@ -544,6 +545,8 @@ def test_dismount_con_captcha_no_manda_input_hasta_que_desaparece():
 
     h = Harness(script, pickup={"dismount": True})
     _to_recoger(h)
+    h.bot.step()   # se baja
+    assert h.keys("g") == 1
     cap["on"] = True
     h.bot.step()
     assert h.bot.state is State.CAPTCHA
@@ -561,15 +564,6 @@ def test_objetos_de_otro_y_yang_no_disparan_z():
     _to_recoger(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR)
     assert h.keys("z") == 0 and h.bot.stats.items == 0
-
-
-def test_recoger_clic_en_la_etiqueta_despues_de_varias_z():
-    h = Harness(lambda h, n: perc(items=[item()], item_choice=item()),
-                pickup={"presses_before_click": 2, "press_interval_ms": 0, "max_presses": 6})
-    _to_recoger(h)
-    h.run_until(lambda: h.bot.state is State.BUSCAR)
-    assert h.keys("z") == 6 and h.clicks() >= 2      # cada 2 Z, un clic sobre la etiqueta
-    assert ("move_to",) != h.be.events[0] and any(e[0] == "move_to" for e in h.be.events)
 
 
 # ---------------------------------------------------------------- explorar

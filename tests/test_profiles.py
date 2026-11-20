@@ -471,7 +471,7 @@ def test_personaje_guarda_plantilla_y_perfil(tmp_path, root, piso, in_tmp):
     prof = c.prof("personaje", "Testchar")
     assert prof["character"] == {**DEFAULTS["character"], "name": "Testchar", "class": "sura"}
     assert prof["vision"]["items"]["owner_template"] == "templates/items/owner_testchar.png"
-    assert prof["pickup"] == {"dismount": False} and prof["coords_filter"] == {"max_speed": 30.0}
+    assert prof["pickup"] == {"dismount": True} and prof["coords_filter"] == {"max_speed": 30.0}
     assert (tmp_path / "debug" / "calibrate_personaje.png").exists()
     assert c.raw()["profiles"] == {"personaje": "Testchar"}            # lo dejo activo (3er "s")
     assert c.path.with_name("config.json.bak").exists()

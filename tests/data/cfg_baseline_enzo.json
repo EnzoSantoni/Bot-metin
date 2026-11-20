@@ -194,13 +194,20 @@
   "zone_guard_margin": 10.0
  },
  "pickup": {
-  "dismount": false,
+  "arrive_px": 70,
+  "dismount": true,
   "empty_confirm_cycles": 5,
+  "look_s": 1.0,
   "max_presses": 30,
   "max_seconds": 20.0,
+  "monster_gap_px": 12,
   "mount_wait_s": 2.0,
   "press_interval_ms": 350,
-  "presses_before_click": 3
+  "same_spot_u": 3.0,
+  "still_s": 0.6,
+  "track_px": 80,
+  "tries_per_item": 2,
+  "walk_timeout_s": 4.0
  },
  "safety": {
   "corner_poll_ms": 50,

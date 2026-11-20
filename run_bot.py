@@ -274,7 +274,10 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
         except InputBlockedError as e:
             print(e)
             return 1
-    bot = Bot(cfg, window, gi, control, alarm, **(bot_kwargs or {}))
+    kwargs = dict(bot_kwargs or {})
+    if not args.observar:   # marca de "a pie": la proxima corrida se sube si esta se corto a pie (F12)
+        kwargs.setdefault("mount_marker", resolve_path(cfg["log"]["dir"]) / "a_pie.flag")
+    bot = Bot(cfg, window, gi, control, alarm, **kwargs)
 
     control.add_stop_callback(gi.release_all)
     control.add_stop_callback(alarm.stop)

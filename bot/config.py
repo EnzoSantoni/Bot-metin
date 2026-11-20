@@ -101,9 +101,11 @@ DEFAULTS: dict[str, Any] = {
                "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0, "wrong_monsters_min": 1,
                # blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
                "blocked_window_frac": 0.8},
-    # RECOGER: Z cada press_interval_ms; tras presses_before_click sin exito, clic en la etiqueta.
-    "pickup": {"press_interval_ms": 350, "presses_before_click": 3, "empty_confirm_cycles": 5, "max_presses": 30,
-               "max_seconds": 20.0, "dismount": False, "mount_wait_s": 2.0},
+    # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero),
+    # clic en la etiqueta y Z al llegar. Ver config.example.jsonc.
+    "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+               "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "monster_gap_px": 12, "arrive_px": 70,
+               "track_px": 80, "still_s": 0.6, "walk_timeout_s": 4.0, "tries_per_item": 2, "same_spot_u": 3.0},
     # EXPLORAR: barrido de camara (pasos de Q/E) y caminata hacia un punto aleatorio del poligono.
     # border_margin: destino de cada tramo a >= esta distancia del borde; leg_s / leg_units: tope de tiempo y largo de un
     # tramo recto; max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO; min_leg_sep_deg / recent_legs: el
@@ -706,9 +708,10 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac"))
-    nums("pickup", ("press_interval_ms", "presses_before_click", "empty_confirm_cycles", "max_presses", "max_seconds",
-                    "mount_wait_s"),
-         ("presses_before_click", "empty_confirm_cycles", "max_presses", "max_seconds"))
+    nums("pickup", ("press_interval_ms", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
+                    "monster_gap_px", "arrive_px", "track_px", "still_s", "walk_timeout_s", "tries_per_item", "same_spot_u"),
+         ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "track_px", "still_s",
+          "walk_timeout_s", "tries_per_item", "same_spot_u"))
     nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s"),
          ("press_hold_s", "chunk_s"))
     if cfg["skill_timing"]["chunk_s"] > 0.5:
