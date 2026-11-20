@@ -2,6 +2,19 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## PARA ENZO AL LEVANTARSE (resumen de la noche del 2026-11-20)
+**Qué terminé:**
+- **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)**, con commit y push de cada uno (`103aae8`, `04fea11`, `0c66ec3`), 1167 tests. Detalle en "Fase 6d: qué cambió".
+- **`desarrollo`:**
+  - Tiene todo `main` (`eb77fbc`).
+  - Fase 12 parte 2, historial y objetos por tipo (`b3f3743`).
+  - Fase 13, modo bichos (`e104243`).
+  - El estado de lo que vino después (Fase 14, interfaz completa, pausa automática, parada programada y revisión general) está en el PROGRESS.md de `desarrollo`.
+
+**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto 1, en esta carpeta (`main`). Es lo que más cambió: elige el metin más cercano, va con hover y clic, camina con W/A/S/D sin girar la cámara y recoge sin clics.
+
+**Decisiones que tomé sin vos:** en "Decisiones tomadas sin Enzo", más abajo y en el PROGRESS.md de `desarrollo`.
+
 ## Estado actual (2026-11-20, noche)
 **Fase 6d (los 6 puntos de la prueba de las 01:15) en `main`. PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1).
 
