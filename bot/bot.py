@@ -27,7 +27,7 @@ from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
 from bot.spawns import Spot, SpawnMap
-from bot.tracking import CoordTracker, StuckEpisode
+from bot.tracking import CoordStats, CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
 from bot.vision.far_metin import FarMetin
@@ -102,6 +102,7 @@ class BotStats:
     centros: int = 0             # veces que se fue al CENTRO
     approaches: int = 0          # acercamientos a piedras lejanas
     elapsed_s: float = 0.0
+    coords: CoordStats = field(default_factory=CoordStats)   # el tracker escribe aca
     time_by_state: dict[str, float] = field(default_factory=dict)
     end_reason: str = ""
 
@@ -110,7 +111,7 @@ class BotStats:
         return (f"Metin rotos: {self.metins} | objetos recogidos (estimado): {self.items} | captchas: {self.captchas} | "
                 f"destrabes: {self.unstucks} ({self.episodes} episodios, {self.episodes_resolved} resueltos, "
                 f"{self.centros} al centro) | acercamientos: {self.approaches} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
-                f"motivo de fin: {self.end_reason or '-'}")
+                f"motivo de fin: {self.end_reason or '-'}\n{self.coords.line()}")
 
 
 @dataclass
@@ -288,7 +289,7 @@ class Bot:
                                  respawn_s=float(sp["respawn_s"]), revisit_s=float(sp["revisit_s"]))
         self.spawns = spawn_map
         self.sp = sp
-        self.tracker = CoordTracker(cfg)
+        self.tracker = CoordTracker(cfg, clock=self.clock)
         self.camera = CameraModel(cfg)
         self.navigator = Navigator(cfg, self.zone, self.camera, self.rng)
         self.loop, self.atk, self.pk = cfg["loop"], cfg["attack"], cfg["pickup"]
@@ -296,7 +297,7 @@ class Bot:
         self.vlv, self.apr, self.ctr = cfg["volver"], cfg["approach"], cfg["center"]
         self._stuck_segments = max(1, math.ceil(self.stuck["window_s"] / self.nav["settle_s"]))
         self.state = State.BUSCAR
-        self.stats = BotStats()
+        self.stats = BotStats(coords=self.tracker.stats)
         self.debug = DebugRecorder(cfg)
         self.last_perception: Perception | None = None
         self.discarded: list[_Spot] = []   # metin descartados
@@ -373,6 +374,7 @@ class Bot:
             raise
         finally:
             self._account(self.clock())
+            logger.info(self.tracker.stats.line())
         return self.stats
 
     def step(self) -> None:
@@ -385,6 +387,7 @@ class Bot:
         if p is not None:
             t = self.clock()
             self.tracker.update(p.coords, t)
+            self._debug_coords(t)
             self.last_perception = p
             self._frames += 1
             self._decide(p, t)
@@ -392,6 +395,15 @@ class Bot:
         rest = wait - (self.clock() - t0)
         if rest > 0 and self.state is not State.FIN:
             self._sleep(rest)
+
+    def _debug_coords(self, t: float) -> None:
+        """Con debug, guarda el recorte de la zona de coordenadas de una lectura fallida o descartada."""
+        if self.debug.enabled and self.tracker.last_outcome != CoordTracker.OK:
+            self.debug.save_coord_crop(self._img, self.tracker.last_outcome, t)
+
+    def _read_coords(self, img: Any) -> Any:
+        """Lectura suelta de coordenadas (entre tramos de tecla) con el mismo umbral de confianza del filtro."""
+        return self.tracker.confident(self._coords_fn(img, self.cfg))
 
     def _observe(self, cycle: int) -> Perception | None:
         """Captura y percibe. En CAPTCHA no se roba el foco: solo se lee si el juego ya esta al frente."""
@@ -1869,7 +1881,7 @@ class Bot:
             return ok
 
         def guard(img: Any) -> bool:
-            c = self._coords_fn(img, self.cfg)
+            c = self._read_coords(img)
             if c is None:
                 return False
             sd = self.zone.signed_distance((c.x, c.y))
@@ -1921,7 +1933,7 @@ class Bot:
         if pos is None:
             return "nocoords"
         leg, self._leg = self._leg, None
-        if leg is not None and t - leg.end_t <= LEG_MAX_AGE_S and p.coords is not None:
+        if leg is not None and t - leg.end_t <= LEG_MAX_AGE_S and self.tracker.last_outcome == CoordTracker.OK:   # lectura buena de este ciclo
             res = self._after_leg(leg, pos)
             if res is not None:
                 return res
@@ -2292,7 +2304,7 @@ class Bot:
     def _peek_pos(self) -> tuple[int, int] | None:
         """Coordenadas del juego ahora mismo (captura + lectura, sin pasar por el filtro), None si no se leen."""
         img = self._peek()
-        c = None if img is None else self._coords_fn(img, self.cfg)
+        c = None if img is None else self._read_coords(img)
         return None if c is None else (c.x, c.y)
 
     def _heads_inward(self, direction: str, pos: tuple[int, int]) -> bool:
@@ -2318,7 +2330,7 @@ class Bot:
             return "guard"
 
         def guard(img: Any) -> bool:
-            c = self._coords_fn(img, self.cfg)
+            c = self._read_coords(img)
             if c is None:
                 return False
             sd, before = self.zone.signed_distance((c.x, c.y)), prev["sd"]

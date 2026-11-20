@@ -54,7 +54,11 @@
     "jpeg_quality": 80,
     "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                      "bloqueado": 20, "explorar": 40},
-    "reason_memory_s": 60.0
+    "reason_memory_s": 60.0,
+    // Lecturas de coordenadas fallidas o descartadas: recorte x4 de la zona en <run>/coordenadas/NNNN_<motivo>.png
+    // (motivo: sin_lectura, confianza, salto). max_coord_crops: tope por corrida; coord_crop_every_s: separacion minima.
+    "max_coord_crops": 60,
+    "coord_crop_every_s": 1.0
   },
 
   // Alarma sonora (captcha o muerte): winsound.Beep en un hilo hasta que se la para.
@@ -117,8 +121,18 @@
   //  consistentes entre si (a <= consistency_dist unidades) que se aceptan como teletransporte real.
   //  max_dt_s: tope del dt usado en el filtro (una pausa en las lecturas no habilita saltos grandes).
   //  history: lecturas que se recuerdan para detectar trabas.
+  //  min_score: confianza minima de la lectura (las capturas reales dan 1.0; el lector ya descarta < vision.coords.min_score).
+  //  Velocidad medida: el filtro mide su velocidad con las lecturas aceptadas mientras el personaje se mueve (percentil
+  //  speed_percentile de las ultimas speed_window velocidades de >= speed_move_min u/s, con dt >= speed_min_dt_s; hacen
+  //  falta speed_min_samples). Limite de salto = min(max_speed, max(vel_medida*speed_factor, min_speed_limit))*dt + slack;
+  //  sin medicion todavia, max_speed.
+  //  no_read_warn_s: segundos seguidos sin lectura buena para avisar en el log (una vez por episodio).
+  //  stale_s: una ultima lectura buena mas vieja que esto se trata como "sin coordenadas" (zona desconocida).
+  //  report_every_min: cada cuanto se loguea el conteo de lecturas (0 = solo al final).
   "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0, "max_dt_s": 0.5,
-                    "history": 512},
+                    "history": 512, "min_score": 0.95, "speed_factor": 1.6, "min_speed_limit": 10.0, "speed_window": 30,
+                    "speed_min_samples": 5, "speed_percentile": 90.0, "speed_min_dt_s": 0.2, "speed_move_min": 3.0,
+                    "no_read_warn_s": 5.0, "stale_s": 3.0, "report_every_min": 5.0},
 
   // "No me muevo": trabado si en los ultimos window_s segundos el desplazamiento maximo es < min_move unidades
   // (solo mientras el bot intenta moverse: CoordTracker.mark_moving).

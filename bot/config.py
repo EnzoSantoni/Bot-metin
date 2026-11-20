@@ -32,7 +32,7 @@ DEFAULTS: dict[str, Any] = {
     "debug": {"enabled": False, "dir": "debug", "explore_every_s": 30.0, "max_images": 400, "jpeg_quality": 80,
               "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                                "bloqueado": 20, "explorar": 40},
-              "reason_memory_s": 60.0},
+              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0},
     # Alarma sonora (bot/alarm.py): beep de `freq` Hz y `beep_ms` ms, pausa `pause_ms`, en bucle.
     # max_seconds: corta sola a los N segundos (0 = suena hasta stop()).
     "alarm": {"freq": 1000, "beep_ms": 400, "pause_ms": 300, "max_seconds": 0},
@@ -53,8 +53,14 @@ DEFAULTS: dict[str, Any] = {
     "farm_zone": {"polygon": [[439, 141], [753, 91], [702, 203], [436, 196]], "outside_tolerance": 30},
     # Filtro de coordenadas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
     # history: lecturas que se recuerdan para detectar trabas.
+    # min_score: confianza minima del lector (las 17 capturas reales leen 1.0; el lector ya corta en vision.coords.min_score).
+    # speed_*: velocidad medida con las lecturas aceptadas; limite de salto = min(max_speed, max(vel*speed_factor,
+    # min_speed_limit))*dt + slack. no_read_warn_s: aviso sin lectura buena; stale_s: mas viejo que esto = zona desconocida.
     "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0,
-                       "max_dt_s": 0.5, "history": 512},
+                       "max_dt_s": 0.5, "history": 512, "min_score": 0.95, "speed_factor": 1.6,
+                       "min_speed_limit": 10.0, "speed_window": 30, "speed_min_samples": 5, "speed_percentile": 90.0,
+                       "speed_min_dt_s": 0.2, "speed_move_min": 3.0, "no_read_warn_s": 5.0, "stale_s": 3.0,
+                       "report_every_min": 5.0},
     # Deteccion de "no me muevo" (bot/tracking.py): desplazamiento maximo < min_move en window_s segundos.
     # max_attempts / unstuck_radius_px / back_key_s: rutina de destrabe (bot/bot.py).
     # Episodios de traba (bot/tracking.py::StuckEpisode): resolve_dist = alejarse tanto del origen cierra el episodio;
@@ -721,8 +727,14 @@ def _validate_tracking_navigation(cfg: dict) -> None:
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
                 raise ConfigError(f"{sec}.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
         return d
-    nums("coords_filter", ("max_speed", "slack", "accept_after", "consistency_dist", "max_dt_s", "history"),
-         ("max_speed", "accept_after", "max_dt_s", "history"))
+    cf = nums("coords_filter", ("max_speed", "slack", "accept_after", "consistency_dist", "max_dt_s", "history",
+                                "min_score", "speed_factor", "min_speed_limit", "speed_window", "speed_min_samples",
+                                "speed_percentile", "speed_min_dt_s", "speed_move_min", "no_read_warn_s", "stale_s",
+                                "report_every_min"),
+              ("max_speed", "accept_after", "max_dt_s", "history", "speed_factor", "min_speed_limit", "speed_window",
+               "speed_min_samples", "speed_min_dt_s", "no_read_warn_s", "stale_s"))
+    if cf["min_score"] > 1 or not 0 < cf["speed_percentile"] <= 100:
+        raise ConfigError("coords_filter.min_score debe ser <= 1 y speed_percentile estar en (0, 100]")
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
@@ -835,6 +847,10 @@ def validate_config(cfg: dict) -> None:
     v = debug.get("reason_memory_s")
     if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
         raise ConfigError("debug.reason_memory_s debe ser un numero >= 0")
+    for k in ("max_coord_crops", "coord_crop_every_s"):
+        v = debug.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"debug.{k} debe ser un numero >= 0")
     per = _require_dict(debug.get("max_per_kind"), "debug.max_per_kind")
     for k, v in per.items():
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:

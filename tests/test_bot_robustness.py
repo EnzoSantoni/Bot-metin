@@ -198,7 +198,7 @@ def test_tracker_acota_el_dt_del_filtro():
     tr.update(Coords(500, 150, 1.0), 0.0)
     far = 500 + int(cfg["coords_filter"]["max_speed"] * cfg["coords_filter"]["max_dt_s"] + cfg["coords_filter"]["slack"]) + 20
     tr.update(Coords(far, 150, 1.0), 60.0)   # 60 s sin lecturas: con dt sin acotar el salto pasaria
-    assert tr.position == (500, 150)
+    assert tr.last_known == (500, 150)
     tr.update(Coords(510, 150, 1.0), 60.2)
     assert tr.position == (510, 150)
 
