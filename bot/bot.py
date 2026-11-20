@@ -20,6 +20,7 @@ from bot.capture import WindowMinimizedError, WindowNotFoundError
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
+from bot.keynav import MAX_LEARN_TURN, KeyboardNav, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
 from bot.priority import order_candidates
@@ -28,7 +29,7 @@ from bot.tracking import CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
 from bot.vision.far_metin import FarMetin
-from bot.vision.metin import MetinDetection
+from bot.vision.metin import MetinDetection, target_slugs
 from bot.zone import FarmZone, ZoneStatus
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,10 @@ HOLD_EPS = 1e-9
 END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER sin lograrlo)
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
+LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
+SCREEN_LEARN_MIN = math.radians(25.0)   # giro por pantalla minimo para detectar Q/E al reves
+SCREEN_LEARN_GAP = math.radians(10.0)   # cuanto tiene que crecer el desvio tras girar para decir "al reves"
+MIN_TURN_RAD = math.radians(5.0)        # giros menores no se hacen
 
 
 class _AvoidMask:
@@ -140,6 +145,15 @@ class _Walk:
     best_sd: float = 0.0               # mejor (mayor) distancia firmada a la zona vista en el tramo
     bad: int = 0                       # ciclos seguidos con el rumbo observado fuera de tolerancia
     probe: bool = False                # sondeo corto (camara sin calibrar): se deja terminar para poder medirlo
+
+
+@dataclass
+class _KeyLeg:
+    """Un tramo de W ('up') o S ('down') ya hecho, pendiente de evaluar con la posicion del ciclo siguiente (teclado)."""
+    key: str
+    before: tuple[int, int]
+    seconds: float                     # segundos que la tecla estuvo sostenida
+    end_t: float
 
 
 @dataclass
@@ -262,6 +276,12 @@ class Bot:
         self.skill_cfg = cfg["skill_timing"]
         self.skills = SkillScheduler(cfg["character"]["skills"], self.clock, float(self.skill_cfg["recast_margin_s"]))
         self._skills_started = False
+        self.kmode = self.nav["mode"] == "teclado"   # caminar solo con W/A/S/D y girar con Q/E (sin clics en el piso)
+        self.kb = self.nav["keyboard"]
+        self.keynav = KeyboardNav(cfg)
+        self._leg: _KeyLeg | None = None
+        self._scr_turn: tuple[float, float] | None = None   # (angulo de pantalla ordenado, hora) del ultimo giro hacia una piedra
+        self._target_slugs = target_slugs(cfg)
         self._new_sweep()
 
     # ------------------------------------------------------------------ ciclo
@@ -380,6 +400,8 @@ class Bot:
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
         self._walk = None
+        if new not in WALKING_STATES and new is not State.DESTRABAR:
+            self._leg = self._scr_turn = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
         if new not in (State.ACERCARSE, State.DESTRABAR):
             self._apr = None
         if new is State.BUSCAR:
@@ -427,6 +449,8 @@ class Bot:
             lo, hi = cam.scale_range
             camline = (f"camara phi={math.degrees(cam.phi):.0f} escala={lo:.2f}-{hi:.2f} lista={cam.ready} "
                        f"giros={cam.rotations}")
+            if self.kmode:
+                camline = "teclado " + self.keynav.describe()
             dest = None if self._dest is None else (round(self._dest[0]), round(self._dest[1]))
             p = self.last_perception
             lines = [f"[{kind}] pos={pos} {zone}", camline, f"destino={dest} clic={self._planned}",
@@ -565,18 +589,22 @@ class Bot:
 
     def _zone_reason(self, gp: Xy | None, st: ZoneStatus | None, what: str, screen: tuple[int, int] | None = None,
                      player_xy: tuple[int, int] | None = None) -> str | None:
-        """Motivo por el que algo en `gp` queda fuera de la zona (None si esta aceptado). Sin camara (`gp` None) solo
-        vale si el jugador esta adentro con margen y, con `screen`, el candidato esta cerca de el en pantalla."""
+        """Motivo por el que algo en `gp` queda fuera de la zona (None si esta aceptado). Con `gp` (camara lista) vale la
+        zona y la posicion del jugador no importa. Sin camara (`gp` None): un metin con etiqueta (`screen`) vale si el
+        jugador esta adentro o en la franja de tolerancia (no mas afuera) y la etiqueta queda a <= `approach.blind_screen_px`
+        del jugador en pantalla; una piedra lejana sin etiqueta (sin `screen`) vale si el jugador esta adentro del poligono
+        (la guardia de zona de la caminata hace el resto)."""
         if gp is not None:
             if self.zone.accepts(gp):
                 return None
             return f"{what} fuera de zona (est. ({gp[0]:.0f}, {gp[1]:.0f}), d={self.zone.signed_distance(gp):.0f})"
-        if st is not ZoneStatus.INSIDE:
-            return f"{what}: sin camara y jugador fuera"
-        pos = self.tracker.position
-        if pos is None or not self._inside_with_margin(pos):
-            return f"{what}: sin camara y jugador cerca del borde"
-        if screen is not None and player_xy is not None and math.dist(screen, player_xy) > float(self.apr["blind_screen_px"]):
+        if screen is None:
+            if st is not ZoneStatus.INSIDE:
+                return f"{what}: sin camara y jugador fuera de la zona"
+            return None
+        if st is None or st is ZoneStatus.OUTSIDE:
+            return f"{what}: sin camara y jugador fuera de la zona"
+        if player_xy is not None and math.dist(screen, player_xy) > float(self.apr["blind_screen_px"]):
             return f"{what}: sin camara y lejos en pantalla ({math.dist(screen, player_xy):.0f} px)"
         return None
 
@@ -588,7 +616,11 @@ class Bot:
         why: list[tuple[tuple, str]] = []
         for d in p.metins:
             if not d.is_target:
-                why.append((("tipo", d.name), f"tipo ignorado ({d.name})"))
+                if d.name in self._target_slugs:   # gano una plantilla objetivo pero sin pasar el umbral: duda, no es ese tipo
+                    why.append((("dudosa", d.name), f"etiqueta dudosa (se parece a {d.name}, {d.score:.2f}; "
+                                                    "no alcanza el umbral)"))
+                else:
+                    why.append((("tipo", d.name), f"tipo ignorado ({d.name})"))
                 continue
             if not d.allowed:
                 why.append((("ui", d.name), "clic no permitido (interfaz)"))
@@ -794,6 +826,10 @@ class Bot:
         else:
             lim = float(self.apr["match_px"])
             near = [f for f in p.far_metins if math.dist(f.center, a.last_screen) <= lim]
+            if not near and self.kmode and p.far_metins and self._just_turned():
+                # recien se giro la vista hacia la piedra: cambio de lugar en la pantalla, se la busca cerca del frente
+                near = [min(p.far_metins, key=lambda f: abs(screen_angle(
+                    (f.center[0] - p.player_xy[0], f.center[1] - p.player_xy[1]))))]
             if near:
                 f = min(near, key=lambda f: math.dist(f.center, a.last_screen))
                 a.last_screen, a.lost = f.center, 0
@@ -811,6 +847,8 @@ class Bot:
         if t - a.start_t > float(self.apr["max_seconds"]):
             self._ignore_position(a.gp, t, "tiempo maximo acercandose", a.last_screen)
             return State.BUSCAR, "tiempo maximo acercandose a la piedra"
+        if self.kmode and a.lost > 0:
+            return None   # sin la piedra a la vista no hay hacia donde girar ni caminar: se espera al proximo ciclo
         vec = (a.last_screen[0] - p.player_xy[0], a.last_screen[1] - p.player_xy[1])
         res = self._walk_toward(p, t, a.gp or (0.0, 0.0), screen_vec=vec)
         if res == "stuck":
@@ -1114,7 +1152,6 @@ class Bot:
         if x.phase == "sweep":
             if x.steps < int(self.ex["camera_steps"]):
                 self._rotate_camera(x.dir, float(self.ex["camera_step_s"]))
-                self.camera.on_camera_rotated()
                 x.steps += 1
             else:
                 self._new_leg(x, t)
@@ -1195,6 +1232,8 @@ class Bot:
     def _walk_toward(self, p: Perception, t: float, target: Xy, screen_vec: Xy | None = None) -> str:
         """Un ciclo de caminata: 'moving' | 'done' (tramo terminado) | 'cut' (tramo cortado: rumbo o zona) | 'arrived' |
         'stuck' | 'blocked' | 'nocoords'. Con `screen_vec` el clic va en esa direccion de PANTALLA (ACERCARSE)."""
+        if self.kmode:
+            return self._walk_keys(p, t, target, screen_vec)
         pos = self.tracker.position
         if pos is None:
             return "nocoords"
@@ -1289,6 +1328,169 @@ class Bot:
         if self._zero_streak >= self._stuck_segments or self.tracker.is_stuck(t):
             return "stuck"
         return "done"
+
+    # ------------------------------------------------------------------ caminata con teclado
+    def _just_turned(self) -> bool:
+        """Hubo un giro de la vista hacia una piedra hace poco (todavia no se evaluo en `_walk_screen`)."""
+        return self._scr_turn is not None and self.clock() - self._scr_turn[1] <= LEG_MAX_AGE_S
+
+    def _key_name(self, direction: str) -> str:
+        return str(self.cfg["controls"]["camera_" + direction]).upper()
+
+    def _flush_leg(self) -> None:
+        """Evalua ya el tramo de teclado pendiente (antes de girar la camara, para no mezclar los rumbos)."""
+        leg, self._leg = self._leg, None
+        pos = self.tracker.position
+        if leg is not None and pos is not None and self.clock() - leg.end_t <= LEG_MAX_AGE_S:
+            self._after_leg(leg, pos)
+
+    def _after_leg(self, leg: _KeyLeg, pos: tuple[int, int]) -> str | None:
+        """Evalua un tramo de W/S con la posicion de ahora: alimenta a `keynav` (rumbo, velocidad, sentido de Q/E) y
+        cuenta los tramos sin avance. Devuelve 'stuck' (varios tramos sin moverse), 'cut' (zona) o None."""
+        kn, limit = self.keynav, self.navigator.guard_limit()
+        delta = (pos[0] - leg.before[0], pos[1] - leg.before[1])
+        sd, sd0 = self.zone.signed_distance(pos), self.zone.signed_distance(leg.before)
+        if leg.key == "up" and leg.seconds > 0:
+            edge = min(sd, sd0) < limit   # pasado de la guardia: no hay lugar para tramos largos, se mide con poco
+            ev = kn.observe(delta, leg.seconds, float(self.kb["edge_measure_u"]) if edge else None)
+            if ev == "externo":
+                self.camera.on_camera_rotated()
+        need = min(float(self.stuck["min_move"]), 0.4 * kn.speed * leg.seconds)
+        self._zero_streak = 0 if math.hypot(*delta) >= need else self._zero_streak + 1
+        if self._zero_streak >= self._stuck_segments:
+            return "stuck"
+        if sd < limit and sd < sd0:
+            logger.warning("Tramo cortado (zona): cerca del limite de la zona")
+            return "cut"
+        return None
+
+    def _run_leg(self, key: str, seconds: float, pos: tuple[int, int]) -> str:
+        """W ('up') o S ('down') durante `seconds`, en tramos de `stuck.forward_chunk_s` con la zona chequeada entre tramos
+        (se corta si pasa de `guard_limit` y empeora), y deja el tramo para evaluarlo despues. 'ok' | 'guard' | 'captcha'
+        | 'blocked'."""
+        limit = self.navigator.guard_limit()
+        best, done = [self.zone.signed_distance(pos)], [0.0]
+
+        def hold(s: float) -> bool:
+            ok = self.gi.move_key(key, s)
+            if ok:
+                done[0] += s
+            return ok
+
+        def guard(img: Any) -> bool:
+            c = self._coords_fn(img, self.cfg)
+            if c is None:
+                return False
+            sd = self.zone.signed_distance((c.x, c.y))
+            worse, best[0] = sd < best[0], max(best[0], sd)
+            return not (worse and sd < limit)
+
+        res = self._hold_chunked(hold, seconds, float(self.stuck["forward_chunk_s"]), guard)
+        if done[0] > 0:
+            self._leg = _KeyLeg(key, pos, done[0], self.clock())
+            if done[0] > self.tracker.max_dt:   # un tramo largo: la proxima lectura puede estar mas lejos de lo que el filtro permite
+                self.tracker.forget_reference()
+            logger.info("Tramo: %s %.2f s | %s", "W" if key == "up" else "S", done[0], self.keynav.describe())
+        return res
+
+    def _w_seconds(self, pos: tuple[int, int], secs: float) -> float | None:
+        """Segundos de W que no se pasan de la guardia de zona. Con rumbo medido se predice el punto final y se acorta el
+        tramo (None si ni el minimo entra); si no, se limita a lo que alcanza antes del limite en el peor caso."""
+        kn = self.keynav
+        min_s, limit, sd = float(self.kb["min_step_s"]), self.navigator.guard_limit(), self.zone.signed_distance(pos)
+        if kn.heading is not None and kn.measured:
+            for f in self.navigator.factors:
+                s = secs * f
+                if s < min_s - 1e-9:
+                    break
+                end = (pos[0] + math.cos(kn.heading) * kn.speed * s, pos[1] + math.sin(kn.heading) * kn.speed * s)
+                e = self.zone.signed_distance(end)
+                if e >= limit or e >= sd:
+                    return s
+            return None
+        room = sd - limit
+        return max(min_s, room / kn.speed) if kn.speed * secs > room else secs
+
+    def _forward(self, pos: tuple[int, int], secs: float) -> str:
+        s = self._w_seconds(pos, max(secs, float(self.kb["min_step_s"])))
+        if s is None:
+            return "blocked"
+        self._run_leg("up", s, pos)
+        return "moving"
+
+    def _turn_view(self, delta: float, screen: bool = False) -> str:
+        """Gira la vista `delta` rad (positivo = derecha) con Q/E."""
+        direction, secs = self.keynav.plan_turn(delta)
+        logger.info("Tramo: giro %s %.2f s (%.0f grados) | %s", self._key_name(direction), secs, math.degrees(delta),
+                    self.keynav.describe())
+        self._rotate_camera(direction, secs)
+        if screen:
+            self._scr_turn = (delta, self.clock())
+        return "moving"
+
+    def _walk_keys(self, p: Perception, t: float, target: Xy, screen_vec: Xy | None) -> str:
+        """`_walk_toward` con teclado: a lo sumo UNA accion por ciclo (girar con Q/E o W unos segundos); la percepcion
+        corre entre tramos. Mismo contrato de retorno que el modo clic ('done' no se usa: el tramo siguiente arranca en el
+        mismo ciclo en que se evalua el anterior)."""
+        pos = self.tracker.position
+        if pos is None:
+            return "nocoords"
+        leg, self._leg = self._leg, None
+        if leg is not None and t - leg.end_t <= LEG_MAX_AGE_S and p.coords is not None:
+            res = self._after_leg(leg, pos)
+            if res is not None:
+                return res
+        kn = self.keynav
+        if screen_vec is not None:
+            return self._walk_screen(pos, screen_vec)
+        if self.navigator.arrived(pos, target):
+            return "arrived"
+        if kn.heading is None:   # no se sabe hacia donde apunta W: un tramo corto para medirlo
+            return self._forward(pos, float(self.kb["probe_s"]))
+        diff = _wrap(math.atan2(target[1] - pos[1], target[0] - pos[0]) - kn.heading)
+        if abs(diff) > kn.align:
+            return self._turn_view(diff)
+        return self._forward(pos, min(float(self.kb["chunk_s"]), math.dist(pos, target) / kn.speed))
+
+    def _walk_screen(self, pos: tuple[int, int], vec: Xy) -> str:
+        """ACERCARSE con teclado: gira la vista hacia la piedra (angulo de pantalla) y camina con W. Si despues de girar
+        la piedra queda mas lejos del frente que antes, Q/E estan al reves: se corrige."""
+        kn = self.keynav
+        th = screen_angle(vec)
+        prev, self._scr_turn = self._scr_turn, None
+        if prev is not None and self.clock() - prev[1] <= LEG_MAX_AGE_S and abs(prev[0]) >= SCREEN_LEARN_MIN \
+                and abs(prev[0]) <= math.radians(150.0):
+            real = _wrap(prev[0] - th)   # lo que se giro de verdad, con el signo del giro ordenado
+            if real * prev[0] < 0 and abs(real) > SCREEN_LEARN_GAP:
+                logger.warning("Q/E giran al reves de lo supuesto (la piedra quedo mas lejos del frente), corrijo")
+                kn.flip_keys()
+        if abs(th) > kn.align:
+            return self._turn_view(th, screen=True)
+        return self._forward(pos, float(self.kb["chunk_s"]))
+
+    def _unstuck_keys_back(self, ep: StuckEpisode) -> str:
+        """ATRAS con teclado: S durante `stuck.back_s`, en tramos con la zona chequeada."""
+        pos = self.tracker.position
+        if pos is None:
+            return "guard"
+        ang = math.pi / 2   # abajo en pantalla
+        ep.add_dir(self.camera.rotations, ang, self._game_angle(ang))
+        self._mem = (self.clock(), self._mem_dirs(ep), ep.last_strategy)
+        return self._run_leg("down", float(self.stuck["back_s"]), pos)
+
+    def _unstuck_keys_look(self, ep: StuckEpisode, ang: float) -> None:
+        """MIRAR con teclado: gira la vista hacia `ang` (angulo de pantalla) y camina con W `stuck.look_walk_s`."""
+        pos = self.tracker.position
+        ep.add_dir(self.camera.rotations, ang, self._game_angle(ang))
+        self._mem = (self.clock(), self._mem_dirs(ep), ep.last_strategy)
+        th = screen_angle((math.cos(ang), math.sin(ang)))
+        if abs(th) >= MIN_TURN_RAD:
+            direction, secs = self.keynav.plan_turn(th)
+            logger.info("MIRAR: giro %s %.2f s", self._key_name(direction), secs)
+            if not self._rotate_camera(direction, secs):
+                return   # captcha
+        if pos is not None:
+            self._run_leg("up", float(self.stuck["look_walk_s"]), pos)
 
     # ------------------------------------------------------------------ episodios de traba
     def _progress_metric(self, state: State, pos: tuple[int, int] | None = None) -> float | None:
@@ -1415,6 +1617,11 @@ class Bot:
             self.tracker.forget_reference()
             self.tracker.mark_moving(self.clock())
             u.phase, u.acted_t = "settle", self.clock()
+        elif strat == "ATRAS" and self.kmode:   # teclado: S un rato, sin clics
+            res = self._unstuck_keys_back(ep)
+            if res == "captcha":
+                return None
+            u.phase, u.acted_t = "settle", None
         elif strat == "ATRAS":
             res = self._move_guarded("down", float(self.stuck["back_key_s"]))
             self.tracker.forget_reference()
@@ -1439,12 +1646,15 @@ class Bot:
             return out
         if u.steps < int(self.stuck["look_steps"]):
             self._rotate_camera(u.cam_dir, float(self.stuck["look_step_s"]))
-            self.camera.on_camera_rotated()
             u.steps += 1
             return None
         ang = self._pick_direction(ep)
         logger.info("MIRAR: nada a la vista, camino hacia %.0f grados de pantalla (marco de camara %d)",
                     math.degrees(ang) % 360, self.camera.rotations)
+        if self.kmode:
+            self._unstuck_keys_look(ep, ang)
+            u.phase, u.acted_t = "settle", None
+            return None
         u.phase = "leg" if self._unstuck_click(p, t, ep, ang) else "settle"
         u.acted_t = self.clock()
         return None
@@ -1465,7 +1675,11 @@ class Bot:
         return ep.dirs[max(0, len(ep.dirs) - int(self.stuck["memory_dirs"])):]
 
     def _game_angle(self, screen_ang: float) -> float | None:
-        """Angulo en el juego de una direccion de pantalla (None si la camara no esta lista)."""
+        """Angulo en el juego de una direccion de pantalla (None si la camara no esta lista; en modo teclado, si no se
+        conoce el rumbo)."""
+        if self.kmode:
+            h = self.keynav.heading
+            return None if h is None else _wrap(h + screen_angle((math.cos(screen_ang), math.sin(screen_ang))))
         if not self.camera.ready:
             return None
         g = self.camera.screen_to_game((math.cos(screen_ang), math.sin(screen_ang)))
@@ -1482,7 +1696,7 @@ class Bot:
         base = self.rng.uniform(0, step)
         min_sep = math.radians(float(self.stuck["min_dir_sep_deg"]))
         pos = self.tracker.position
-        ready = self.camera.ready and pos is not None
+        ready = (self.camera.ready or (self.kmode and self.keynav.heading is not None)) and pos is not None
         cur = self.zone.signed_distance(pos) if pos is not None else 0.0
         need = max(min(self.navigator.border_margin, cur), 0.0)
         leg = float(self.ex["leg_units"])
@@ -1579,8 +1793,20 @@ class Bot:
         return self._hold_chunked(lambda s: self.gi.hold("attack_forward", s), float(self.stuck["space_s"])) != "captcha"
 
     def _rotate_camera(self, direction: str, seconds: float) -> bool:
-        """Gira la camara en tramos. False si un captcha lo interrumpio."""
-        return self._hold_chunked(lambda s: self.gi.rotate_camera(direction, s), seconds) != "captcha"
+        """UNICO lugar donde se pulsa Q/E: gira la camara en tramos, avisa a `keynav` (rumbo estimado) y a la camara
+        (el giro vigente deja de valer). False si un captcha lo interrumpio."""
+        self._flush_leg()   # el tramo anterior se evalua antes del giro, para no mezclar los rumbos
+        done = [0.0]
+
+        def hold(s: float) -> bool:
+            ok = self.gi.rotate_camera(direction, s)
+            if ok:
+                done[0] += s
+            return ok
+        res = self._hold_chunked(hold, seconds)
+        self.keynav.on_turned(direction, done[0])
+        self.camera.on_camera_rotated()
+        return res != "captcha"
 
     def _peek_pos(self) -> tuple[int, int] | None:
         """Coordenadas del juego ahora mismo (captura + lectura, sin pasar por el filtro), None si no se leen."""

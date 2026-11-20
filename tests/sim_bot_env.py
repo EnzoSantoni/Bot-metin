@@ -172,6 +172,7 @@ class SimBackend(FakeBackend):
 def make_cfg(**over) -> dict:
     """Config de test: tiempos de input en 0 (el simulador corre rapido)."""
     cfg = copy.deepcopy(DEFAULTS)
+    cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic; los del teclado usan make_cfg(navigation={"mode": "teclado"})
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     for sec, vals in over.items():

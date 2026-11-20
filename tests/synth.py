@@ -15,6 +15,7 @@ COORDS_DY = {"digit": 1, "(": 0, ")": 0, ",": 6}   # relativo a coords.rect.y
 
 def make_cfg(targets=None) -> dict:
     cfg = copy.deepcopy(DEFAULTS)
+    cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic; los del teclado lo piden aparte
     if targets is not None:
         cfg["target_metin_names"] = list(targets)
     return cfg

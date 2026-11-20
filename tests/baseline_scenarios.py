@@ -27,7 +27,7 @@ def _farm(seed: int, cfg: dict) -> SimEnv:
 
 def build(name: str, skills: list | None = None) -> tuple[SimEnv, int]:
     """(entorno, tiempo simulado maximo) del escenario. `skills`: lista de character.skills (vacia por defecto)."""
-    over = {"character": {"skills": list(skills or [])}}
+    over = {"character": {"skills": list(skills or [])}, "navigation": {"mode": "teclado"}}   # modo por defecto real
     cfg = make_cfg(**over)
     if name == "farmeo":
         return _farm(1, cfg), 200
