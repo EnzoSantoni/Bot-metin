@@ -37,6 +37,17 @@
   "spawns": {"enabled": true, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
              "arrive_u": 5.0, "max_walk_s": 40},
 
+  // Catalogo de tipos de objeto recogido (bot/item_catalog.py). El bot no lee el texto de la etiqueta (no hay OCR):
+  //  identifica el tipo por la FIRMA VISUAL de la etiqueta. Etiquetas iguales se agrupan solas; cada grupo nuevo se
+  //  llama "Objeto N" y se renombra en la pestana Objetos de la interfaz (el nombre tambien vale para el historial).
+  //  enabled: usar el catalogo y contar objetos por tipo. dir: carpeta (catalogo.json + <id>.png + <id>.npy; data/ esta
+  //  en .gitignore). match: correlacion minima (0..1) de la firma con la guardada para ser el mismo tipo (ancho +-2 px).
+  "items_catalog": {"enabled": true, "dir": "data/objetos", "match": 0.88},
+
+  // Historial de sesiones (bot/history.py): al terminar cada corrida agrega una linea JSON a este archivo (perfiles,
+  //  duracion, motivo de fin, metin y objetos por tipo, etc.). Con --observar no se registra.
+  "history": {"enabled": true, "file": "data/historial.jsonl"},
+
   "debug": {
     // true guarda capturas anotadas con lo detectado. Activalo solo para depurar: ocupa disco.
     "enabled": false,

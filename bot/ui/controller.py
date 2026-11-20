@@ -113,6 +113,8 @@ class Status:
     profiles: dict = field(default_factory=dict)
     skills_cast: int = 0
     skills: list = field(default_factory=list)   # [{name, key, remaining_s}]
+    items_by_type: list = field(default_factory=list)    # [{id, name, count}]
+    metins_by_type: dict = field(default_factory=dict)   # {slug: cantidad}
 
 
 @dataclass
@@ -148,13 +150,29 @@ def parse_skills_status(raw: Any) -> list[dict]:
     return out
 
 
+def parse_items_status(raw: Any) -> list[dict]:
+    """`items_by_type` de @@STATUS -> [{id, name, count}] (ignora entradas mal formadas o con cantidad <= 0)."""
+    out = []
+    for e in raw if isinstance(raw, list) else []:
+        if isinstance(e, dict) and _as_int(e.get("count")) > 0:
+            out.append({"id": str(e.get("id", "")), "name": str(e.get("name") or e.get("id") or ""), "count": _as_int(e.get("count"))})
+    return out
+
+
+def parse_metins_status(raw: Any) -> dict[str, int]:
+    """`metins_by_type` de @@STATUS -> {slug: cantidad} (ignora lo mal formado)."""
+    return {str(k): _as_int(v) for k, v in (raw.items() if isinstance(raw, dict) else []) if _as_int(v) > 0}
+
+
 def status_from_dict(d: dict) -> Status:
     prof = d.get("profiles")
     return Status(state=str(d.get("state", "")), phase=str(d.get("phase", "running")), countdown=_as_int(d.get("countdown")),
                   metins=_as_int(d.get("metins")), items=_as_int(d.get("items")), captchas=_as_int(d.get("captchas")),
                   unstucks=_as_int(d.get("unstucks")), elapsed_s=_as_float(d.get("elapsed_s")),
                   paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {},
-                  skills_cast=_as_int(d.get("skills_cast")), skills=parse_skills_status(d.get("skills")))
+                  skills_cast=_as_int(d.get("skills_cast")), skills=parse_skills_status(d.get("skills")),
+                  items_by_type=parse_items_status(d.get("items_by_type")),
+                  metins_by_type=parse_metins_status(d.get("metins_by_type")))
 
 
 def log_level(text: str) -> str:
@@ -267,6 +285,19 @@ def override_warnings(opts: UiOptions, config_path: str | Path = "config.json",
     except Exception as e:  # noqa: BLE001 - la ventana no debe romperse por esto
         return [f"No se pudo leer la config: {e}"]
     return [o["message"] for o in (cfg.get("_profiles") or {}).get("overrides", [])]
+
+
+def data_paths(config_path: str | Path = "config.json", profiles_root_dir: str | Path | None = None
+               ) -> tuple[Path, Path, float]:
+    """(carpeta del catalogo de objetos, archivo del historial, `items_catalog.match`) de la config. Si la config no
+    se puede leer, los de DEFAULTS."""
+    from bot.config import DEFAULTS, resolve_path
+    try:
+        cfg = build_config(config_path, profiles_root_dir=profiles_root_dir, warn=False)
+    except Exception:  # noqa: BLE001 - la ventana no debe romperse por esto
+        cfg = DEFAULTS
+    return (resolve_path(cfg["items_catalog"]["dir"]), resolve_path(cfg["history"]["file"]),
+            float(cfg["items_catalog"]["match"]))
 
 
 # ----------------------------------------------------------------------------- subproceso

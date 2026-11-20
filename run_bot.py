@@ -13,12 +13,15 @@ import logging
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from bot.alarm import Alarm
 from bot.bot import Bot
 from bot.config import ConfigError, load_config, resolve_path
+from bot.history import append_session, build_record
+from bot.item_catalog import ItemCatalog
 from bot.spawns import SpawnMap
 from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
@@ -158,6 +161,7 @@ class UiBridge:
         self._end_sent = False
         self.phase = "countdown"
         self.countdown = 0
+        self.stop_requested = False   # el usuario pidio `stop` desde la interfaz (para el motivo del historial)
 
     def emit(self, tag: str, payload: dict) -> None:
         line = tag + json.dumps(payload, ensure_ascii=False) + "\n"
@@ -175,8 +179,15 @@ class UiBridge:
                 "metins": st.metins, "items": st.items, "captchas": st.captchas, "unstucks": st.unstucks,
                 "elapsed_s": round(st.elapsed_s, 1), "paused": self.control.is_paused,
                 "skills_cast": getattr(st, "skills_cast", 0),
+                "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
                 "skills": self.bot.skills.snapshot() if hasattr(getattr(self.bot, "skills", None), "snapshot") else [],
                 "profiles": {k: prof.get(k) for k in ("servidor", "personaje", "zona")}}
+
+    def _items_by_type(self) -> list[dict]:
+        """Objetos recogidos en la sesion por tipo: [{id, name, count}] con el nombre actual del catalogo."""
+        cat = getattr(self.bot, "catalog", None)
+        by = dict(getattr(self.bot.stats, "items_by_type", {}))
+        return [{"id": i, "name": cat.name_of(i) if cat is not None else i, "count": n} for i, n in by.items()]
 
     def start(self) -> None:
         threading.Thread(target=self._status_loop, name="ui-status", daemon=True).start()
@@ -194,6 +205,7 @@ class UiBridge:
                 if cmd == CMD_PAUSE:
                     self.control.toggle_pause()
                 elif cmd == CMD_STOP:
+                    self.stop_requested = True
                     self.control.panic("interfaz")
         except (OSError, ValueError):
             pass
@@ -212,6 +224,18 @@ class UiBridge:
         self._done.set()
         self.emit(END_TAG, {"reason": reason, "summary": summary, **{k: v for k, v in self.status().items()
                                                                        if k in ("metins", "items", "captchas", "unstucks", "elapsed_s")}})
+
+
+def _record_history(cfg: dict, bot: Any, inicio: datetime, reason: str) -> None:
+    """Agrega la corrida al historial (todas las salidas pasan por el finally de `main`). Nunca lanza."""
+    h = cfg["history"]
+    if not h["enabled"]:
+        return
+    try:
+        prof = cfg.get("_profiles") or {}
+        append_session(resolve_path(h["file"]), build_record(bot.stats, inicio, datetime.now(), prof, reason))
+    except Exception:  # noqa: BLE001 - el historial nunca debe impedir el cierre limpio
+        logger.exception("No se pudo registrar la sesion en el historial")
 
 
 def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any = None, backend: Any = None,
@@ -282,6 +306,8 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
         sp = cfg["spawns"]
         kwargs["spawn_map"] = SpawnMap(resolve_path(sp["file"]), float(sp["merge_u"]), respawn_s=float(sp["respawn_s"]),
                                        revisit_s=float(sp["revisit_s"]), read_only=True)
+    if args.observar and "catalog" not in kwargs:   # observar no cuenta objetos: catalogo desactivado
+        kwargs["catalog"] = ItemCatalog(None)
     bot = Bot(cfg, window, gi, control, alarm, **kwargs)
 
     control.add_stop_callback(gi.release_all)
@@ -289,7 +315,8 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     control.start()
     died = False
     ui = UiBridge(bot, control, cfg, stdin if stdin is not None else sys.stdin) if args.ui else None
-    end_reason = "error"
+    end_reason = hist_reason = "error"
+    run_start: datetime | None = None
     if ui is not None:
         ui.start()
     try:
@@ -308,9 +335,10 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
             control.countdown(on_tick=_tick)
         if ui is not None:
             ui.set_countdown(0)
+        run_start = datetime.now()
         stats = bot.run(max_minutes=args.max_minutos)
         print("\n" + stats.summary())
-        end_reason = stats.end_reason or "fin"
+        end_reason = hist_reason = stats.end_reason or "fin"
         if ui is not None:
             ui.end(end_reason, stats.summary())
         died = stats.end_reason in ALARM_END_REASONS
@@ -321,8 +349,11 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
         print(f"\nCortado por pánico ({cfg['safety']['panic_key'].upper()} o esquina)")
         print(bot.stats.summary())
         end_reason = "panico"
+        hist_reason = "interfaz" if ui is not None and ui.stop_requested else "panico"
         return 0
     finally:
+        if not args.observar and run_start is not None:   # observar no es farmeo real: no se registra
+            _record_history(cfg, bot, run_start, hist_reason)
         if ui is not None:
             ui.end(end_reason, bot.stats.summary())
         control.mark_finished()

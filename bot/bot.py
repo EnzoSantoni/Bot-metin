@@ -17,10 +17,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+
 from bot.capture import WindowMinimizedError, WindowNotFoundError
 from bot.config import resolve_path
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
+from bot.item_catalog import UNKNOWN_ID, ItemCatalog, SeenItem, label_signature, vanished
 from bot.debug_draw import DebugRecorder
 from bot.ground import Goal, feet_of, ground_dist, rank_goals
 from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
@@ -99,6 +102,8 @@ class BotStats:
     centros: int = 0             # veces que se fue al CENTRO
     approaches: int = 0          # acercamientos a piedras lejanas
     skills_cast: int = 0         # habilidades lanzadas
+    items_by_type: dict[str, int] = field(default_factory=dict)    # id del catalogo (o UNKNOWN_ID) -> objetos recogidos
+    metins_by_type: dict[str, int] = field(default_factory=dict)   # slug del tipo confirmado en el panel -> metin rotos
     elapsed_s: float = 0.0
     time_by_state: dict[str, float] = field(default_factory=dict)
     end_reason: str = ""
@@ -128,6 +133,7 @@ class _Attack:
     last_pos: tuple[int, int] | None
     confirmed: bool = False
     min_hp: float | None = None
+    slug: str | None = None            # tipo de metin confirmado en el panel (para metins_by_type)
     last_drop_t: float = 0.0
     reclicks: int = 0
     missing: int = 0                   # ciclos seguidos sin panel (ya confirmado)
@@ -180,6 +186,7 @@ class _Pickup:
     best_d: float = math.inf                        # menor distancia (px) del objeto mas cercano a los pies desde el ultimo avance
     no_gain: int = 0                                # tramos seguidos sin acercarse `stall_gain_px`
     nudge: bool = False                             # el ultimo Z no junto el objeto: antes del proximo, un tramo corto hacia el
+    seen: list = field(default_factory=list)        # SeenItem de la ultima captura (para saber cual desaparecio)
 
 
 @dataclass
@@ -243,7 +250,8 @@ class Bot:
                  sleep_fn: Callable[[float], None] | None = None, rng: random.Random | None = None,
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
                  coords_fn: Callable[[Any, dict], Any] = read_coords,
-                 mount_marker: Path | None = None, spawn_map: SpawnMap | None = None) -> None:
+                 mount_marker: Path | None = None, spawn_map: SpawnMap | None = None,
+                 catalog: ItemCatalog | None = None) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
@@ -256,6 +264,10 @@ class Bot:
                                  respawn_s=float(sp["respawn_s"]), revisit_s=float(sp["revisit_s"]))
         self.spawns = spawn_map
         self.sp = sp
+        ic = cfg["items_catalog"]
+        if catalog is None:   # sin catalogo inyectado: el de la config si esta habilitado; si no, uno desactivado
+            catalog = ItemCatalog(resolve_path(ic["dir"]) if ic["enabled"] else None, float(ic["match"]))
+        self.catalog = catalog
         self.tracker = CoordTracker(cfg)
         self.camera = CameraModel(cfg)
         self.navigator = Navigator(cfg, self.zone, self.camera, self.rng)
@@ -970,6 +982,7 @@ class Bot:
         broken = False
         if kind == "target_metin":
             a.missing = 0
+            a.slug = panel.name or a.slug
             if not a.confirmed:
                 a.confirmed, a.last_drop_t = True, t
                 self._forget_wrong(a)
@@ -988,6 +1001,8 @@ class Bot:
             broken = a.missing >= need
         if broken:
             self.stats.metins += 1
+            slug = a.slug or "desconocido"
+            self.stats.metins_by_type[slug] = self.stats.metins_by_type.get(slug, 0) + 1
             self._atk = None
             self._record_spawn()
             if self._zone_status() is ZoneStatus.TOLERANCE:
@@ -1266,10 +1281,12 @@ class Bot:
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
         n = len(valid)
+        seen = self._seen_items(valid)
         if k.last_n is not None and n < k.last_n:
             self.stats.items += k.last_n - n
+            self._count_picked(k.seen, seen, k.last_n - n, p)
             k.best_d, k.no_gain, k.nudge = math.inf, 0, False   # algo se junto: el siguiente objeto empieza de cero
-        k.last_n = n
+        k.last_n, k.seen = n, seen
         pos = self.tracker.position
         if k.anchor is not None and pos is not None and math.dist(pos, k.anchor) > float(self.pk["same_spot_u"]):
             k.tries, k.ignored, k.anchor = [], [], None   # el jugador se movio: los puntos de pantalla ya no valen
@@ -1287,6 +1304,39 @@ class Bot:
         if pending:
             self._pickup_step(k, p, t, pos, pending)
         return None
+
+    def _seen_items(self, valid: list) -> list[SeenItem]:
+        """Firma y recorte de la etiqueta de cada objeto valido de la captura actual ([] sin catalogo o sin imagen)."""
+        img = self._img
+        if not self.catalog.enabled or not isinstance(img, np.ndarray):
+            return []
+        v = self.cfg["vision"]["items"]
+        out = []
+        for i in valid:
+            r = i.rect
+            sig = label_signature(img, r, int(v["white_min"]), int(v["text_rows"]))
+            crop = img[max(r.y, 0):max(r.bottom, 0), max(r.x, 0):max(r.right, 0)].copy()
+            out.append(SeenItem(self._item_point(i), sig, crop))
+        return out
+
+    def _count_picked(self, prev: list[SeenItem], cur: list[SeenItem], drop: int, p: Perception) -> None:
+        """`drop` objetos dejaron de verse: los de la captura anterior sin pareja en la actual (el mas cercano a los pies
+        primero) se cuentan con su firma; el resto, como "Objeto sin identificar"."""
+        if not self.catalog.enabled:
+            return
+        gone = vanished(prev, cur, self.catalog.match, feet_of(p.player_xy, self.cfg))[:drop]
+        for g in gone:
+            if g.sig is None:
+                self._count_item(UNKNOWN_ID)
+            else:
+                self._count_item(self.catalog.match_or_add(g.sig, g.crop).id)
+        for _ in range(drop - len(gone)):
+            self._count_item(UNKNOWN_ID)
+
+    def _count_item(self, item_id: str) -> None:
+        by = self.stats.items_by_type
+        by[item_id] = by.get(item_id, 0) + 1
+        logger.info("Objeto recogido: %s (total en la sesion: %d)", self.catalog.name_of(item_id), by[item_id])
 
     def _pickup_look(self, k: _Pickup, t: float, valid: list, back: State) -> Transition:
         """Fase inicial: mirar un rato si hay objetos validos. Sin ellos no se baja del caballo."""

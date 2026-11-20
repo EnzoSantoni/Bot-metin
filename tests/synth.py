@@ -17,6 +17,7 @@ def make_cfg(targets=None) -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic; los del teclado lo piden aparte
     cfg["spawns"]["enabled"] = False   # los tests no tocan el mapa de metin del usuario
+    cfg["items_catalog"]["enabled"] = cfg["history"]["enabled"] = False
     if targets is not None:
         cfg["target_metin_names"] = list(targets)
     return cfg

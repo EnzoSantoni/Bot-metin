@@ -3,7 +3,7 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-20)
-**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, más la prioridad de metin de la 12, con 1381 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: el resto de la 12 (historial y conteo de objetos), la 13 y la 14. `main` no se tocó.
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades) y 12 (prioridad de metin, historial y conteo de objetos por tipo) hechas, con 1419 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: la 13 y la 14. `main` no se tocó.
 
 - **main 0c66ec3 (Fase 6d) integrado en desarrollo:** elección del metin más cercano por perspectiva (`bot/ground.py`), ACERCARSE con hover + clic, ATACAR con caminata, barrido de cámara con pausa, RECOGER con W/A/S/D sin clics, `bot/keynav.py` reescrito y mapa de metin `bot/spawns.py`, todo junto con perfiles, interfaz, habilidades y prioridad. Prioridad + distancia de piso: con `zone.metin_priority` vacía el orden es el de main; con lista, las etiquetas van por rango de su tipo, las piedras sin etiqueta con el rango "no listado" y, a igual rango, la menor distancia de piso (`Bot._goals`, `bot/priority.py::order_by_priority`). Mapa de metin por zona: `spawns` es categoría de zona; sin `spawns.file` en el perfil de zona se deriva `profiles/zonas/<zona>.mapa.json` (ignorado por git, no se lista como perfil). Líneas de base regeneradas desde main (única diferencia con main: `spawns.file`, probada en `tests/test_profiles.py`).
 - **main b353ff2 (Fase 6c) integrado en desarrollo:** regla del metin a la vista sin cámara, "etiqueta dudosa" y movimiento solo con teclado (`navigation.mode`, `bot/keynav.py`) conviven con perfiles, habilidades y prioridad. Líneas de base de "sin cambios de comportamiento" regeneradas desde main.
@@ -168,7 +168,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
   - F11 y F12 siguen funcionando igual.
   - Guarda las últimas opciones y tiene un `.bat` para abrirla con doble clic.
 - [x] 11. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Habilidades con temporizador (lista editable en la interfaz).
-- [ ] 12. Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin. *(La prioridad está hecha en `desarrollo` y falta la prueba de Enzo; quedan el historial y el conteo.)*
+- [x] 12. *(Hecha en `desarrollo`; falta la prueba de Enzo en la PC.)* Historial de sesiones, conteo de objetos recogidos por tipo y prioridad entre tipos de metin.
 - [ ] 13. Modo bichos: F4 cada X segundos + barra espaciadora + recoger.
 - [ ] 14. Revivir automáticamente al morir.
 
@@ -217,6 +217,23 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
   - Precedencia, validación por tipo, perfil faltante, selección por CLI, migración ida y vuelta (migrar y reconstruir da lo mismo) y que `calibrate` guarde en el perfil correcto.
   - Toda la suite actual tiene que seguir pasando sin cambios.
 - **Documentación:** sección "Perfiles" en el README, y el bloque `profiles` documentado en `config.example.jsonc`.
+
+## Fase 12 (parte 2) — historial y conteo de objetos
+**Hecha en `desarrollo`; falta la prueba de Enzo.**
+- **Catálogo de objetos** (`bot/item_catalog.py`, config `items_catalog`: `enabled` true, `dir` "data/objetos", `match` 0.88):
+  - `label_signature(img, rect)`: máscara del texto blanco (`vision.items.white_min`) de las últimas `text_rows` filas del interior de la etiqueta, recortada a la caja del texto y escalada a 10 px de alto.
+  - `ItemCatalog.match_or_add(firma, recorte)`: mismo ancho ±2 px y correlación >= `match` -> ese grupo; si no, grupo nuevo "Objeto N". `rename(id, nombre)`. Guarda `catalogo.json` + `<id>.png` (miniatura) + `<id>.npy` (firma), con guardado atómico; un archivo roto va a `.bak` y se empieza vacío. `dir=None` = desactivado.
+  - Sobre `samples/items_en_piso.png` las 5 etiquetas reales dan 5 grupos distintos y la misma etiqueta da correlación 1.0.
+- **Conteo** (`Bot._do_recoger`): en cada ciclo de la fase de recoger guarda la firma y el recorte de cada objeto válido (`_Pickup.seen`). Cuando la cantidad baja, los objetos de la captura anterior sin pareja en la actual (pareja = misma firma, desempate por cercanía en pantalla) son los que se recogieron; el más cercano a los pies primero. Cada uno suma a `stats.items_by_type[id]`; los que no se pueden asociar (sin firma o sin imagen) cuentan como `sin_identificar` ("Objeto sin identificar"). `stats.items` sigue igual. Log INFO "Objeto recogido: <nombre> (total en la sesion: N)". `stats.metins_by_type[slug]` suma al romper un metin, con el tipo confirmado en el panel.
+- **Historial** (`bot/history.py`, config `history`: `enabled` true, `file` "data/historial.jsonl"): `run_bot.py` agrega una línea JSON por corrida en el `finally` (tope de tiempo, F12/pánico, Detener desde la interfaz -> motivo "interfaz", juego cerrado, muerte, excepción). Campos: `inicio`, `fin`, `duracion_s`, `perfiles`, `motivo`, `metins`, `metins_por_tipo`, `objetos`, `objetos_por_tipo` (ids del catálogo), `captchas`, `destrabes`, `acercamientos`, `habilidades`. `load_history` saltea líneas rotas con WARNING; `summarize(sesiones, catalogo, desde)` da los totales con el nombre actual de cada objeto.
+- **Interfaz:** `@@STATUS` suma `items_by_type` ([{id, name, count}]) y `metins_by_type` (parseo tolerante en `controller.py`). Pestaña Control: tabla "Objetos de esta sesión" en vivo. Pestaña "Historial": totales Hoy / Total, tabla de sesiones (más nueva arriba), detalle de la elegida y botón Actualizar (recarga sola al terminar la corrida). Pestaña "Objetos": catálogo con miniatura, nombre y cantidad total; doble clic o "Renombrar" (valida no vacío, máx. 60 caracteres). Lógica pura en `bot/ui/history_view.py`; tkinter mínimo en `bot/ui/app.py`.
+- **Decisiones tomadas sin Enzo (noche del 2026-11-20):**
+  1. **No hay OCR:** el "tipo" de un objeto se identifica por la firma visual de su etiqueta. Etiquetas iguales se agrupan solas, cada grupo nuevo es "Objeto N" con miniatura y Enzo lo renombra en la interfaz; el nombre queda en el catálogo y también vale para el historial pasado (que guarda ids).
+  2. Con `--observar` NO se registra en el historial (no es farmeo real) y el catálogo queda desactivado.
+  3. El texto de la firma es solo el blanco puro (como `find_items`); un nombre de objeto con otro color de texto no se firma y cuenta como "sin identificar". Un objeto con la etiqueta pegada a terreno muy claro puede dar una firma distinta (grupo repetido): se arregla renombrando ambos con el mismo nombre (el historial los suma por nombre).
+  4. Renombrar está bloqueado mientras el bot corre (el bot escribe el catálogo y pisaría el cambio).
+  5. El conteo por tipo se hace con la misma heurística que `stats.items` (baja la cantidad de objetos válidos a la vista); si un objeto sale de pantalla al caminar, también cuenta.
+- Tests: `tests/test_item_catalog.py`, `tests/test_history.py`, `tests/test_ui_history.py`. Los `make_cfg` de tests dejan `items_catalog` e `history` desactivados (como `spawns`).
 
 ## Fase 12 (parte 1) — estado: prioridad entre tipos de metin HECHA (1140 tests)
 - `bot/priority.py` (`priority_rank`, `order_candidates`). Se usa en `_label_view` de `bot/bot.py`: con la lista vacía (o con un solo candidato) queda el orden de antes, por distancia. Los 4 baselines salen idénticos.
@@ -669,6 +686,14 @@ En la interfaz, pestaña Control, sección "Prioridad de metin":
 2. Con un Oscuridad más cerca y un Negro más lejos a la vista (primero en modo Observar): tiene que elegir el Negro, y el log tiene que decir "Elegido metin_negro por prioridad (más cerca había metin_de_oscuridad)".
 3. Apagá el interruptor y guardá: tiene que volver a ir al más cercano.
 4. Cambiá de zona o tocá Iniciar con cambios sin guardar: tiene que preguntar.
+
+### Rama `desarrollo`: Fase 12 (parte 2), historial y objetos por tipo
+En la interfaz (`abrir_interfaz.bat`), con el juego:
+1. Corré una sesión corta con objetos en el piso. En la pestaña Control, "Objetos de esta sesión" tiene que mostrar "Objeto 1", "Objeto 2"… con la cantidad, y el log "Objeto recogido: … (total en la sesion: N)".
+2. Tienen que agruparse bien: dos objetos con el mismo nombre en el mismo tipo, y nombres distintos en tipos distintos. Si un mismo objeto aparece como dos "Objeto N", o dos distintos como uno solo, avisame (se ajusta `items_catalog.match` en `config.json`).
+3. Pestaña "Objetos" (con el bot detenido): miniaturas de las etiquetas. Doble clic en una y ponele el nombre real; un nombre vacío tiene que rechazarse.
+4. Pestaña "Historial": la sesión aparece arriba con fecha, duración, metin, objetos y motivo. Elegila para ver el detalle (metin y objetos por tipo, con el nombre nuevo) y mirá los totales Hoy / Total.
+5. Cortá una sesión con Detener (motivo "detenido desde la interfaz"), con F12 y con `--max-minutos` (motivo "tope de tiempo"): las tres tienen que quedar en el historial. Con Observar no tiene que agregar nada. Los datos están en `data\historial.jsonl` y `data\objetos\`.
 
 ### GitHub: decidir qué hacer con `samples/`
 El repo está subido sin la carpeta `samples/`: 16 capturas, ~35 MB. Muestran el nombre del personaje (Farfarfa), el servidor y el chat con nombres y mensajes de otros jugadores. Los tests de visión las necesitan, así que, sin ellas, quien clone el repo no puede correr esos tests. El nombre "Farfarfa" igual aparece en `ESPECIFICACION.md`, `PROGRESS.md` y en dos plantillas (`templates/items/owner.png` y `templates/panel_names/farfarfa.png`), que el bot necesita.

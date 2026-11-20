@@ -6,11 +6,14 @@ import logging
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from typing import Callable
 
 from bot.config import ConfigError
+from bot.history import load_history
+from bot.item_catalog import ItemCatalog
 from bot.ui import controller as ctl
+from bot.ui import history_view as hv
 from bot.ui import skills_editor as se
 from bot.ui.priority_editor import PriorityEditor
 
@@ -33,7 +36,9 @@ class App:
                  profiles_root: str | Path | None = None, process: ctl.BotProcess | None = None,
                  command_builder: Callable[[ctl.UiOptions], list[str]] | None = None,
                  confirm: Callable[[str, str], bool] | None = None, notify: Callable[[str, str], None] | None = None,
-                 ask_save: Callable[[str, str], bool | None] | None = None) -> None:
+                 ask_save: Callable[[str, str], bool | None] | None = None,
+                 catalog_dir: str | Path | None = None, history_file: str | Path | None = None,
+                 ask_name: Callable[[str, str], str | None] | None = None) -> None:
         self.root, self.settings_path, self.config_path = root, Path(settings_path), config_path
         self.profiles_root = profiles_root
         self.proc = process or ctl.BotProcess()
@@ -42,6 +47,14 @@ class App:
         self._notify = notify or (lambda t, m: messagebox.showerror(t, m, parent=root))
         # True = guardar, False = seguir sin guardar, None = cancelar
         self._ask_save = ask_save or (lambda t, m: messagebox.askyesnocancel(t, m, parent=root))
+        # Nombre nuevo para un objeto: (nombre actual, texto del pedido) -> nombre o None (cancelar)
+        self._ask_name = ask_name or (lambda cur, msg: simpledialog.askstring("Renombrar objeto", msg, initialvalue=cur,
+                                                                               parent=root))
+        d_dir, d_file, d_match = ctl.data_paths(config_path, profiles_root)
+        self.catalog = ItemCatalog(Path(catalog_dir) if catalog_dir is not None else d_dir, d_match)
+        self.history_file = Path(history_file) if history_file is not None else d_file
+        self.sessions: list[dict] = []
+        self._thumbs: dict[str, tk.PhotoImage] = {}
         self.phase = ctl.STOPPED
         self.paused = False
         self._got_end = False
@@ -77,6 +90,12 @@ class App:
         self.notebook.add(main, text="Control")
         self.notebook.add(skills_tab, text="Habilidades")
         self._build_skills(skills_tab)
+        history_tab = ttk.Frame(self.notebook, padding=8)
+        items_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(history_tab, text="Historial")
+        self.notebook.add(items_tab, text="Objetos")
+        self._build_history(history_tab)
+        self._build_items(items_tab)
 
         prof = ttk.LabelFrame(main, text="Perfiles", padding=6)
         prof.pack(fill="x")
@@ -136,6 +155,15 @@ class App:
         tk.Label(st, textvariable=self.info_var, anchor="w", justify="left", wraplength=420).grid(
             row=4, column=0, columnspan=4, sticky="ew", pady=(4, 0))
 
+        live = ttk.LabelFrame(main, text="Objetos de esta sesión", padding=4)
+        live.pack(fill="x", pady=(6, 0))
+        self.live_tree = ttk.Treeview(live, columns=("name", "count"), show="headings", height=3, selectmode="none")
+        self.live_tree.heading("name", text="Objeto")
+        self.live_tree.heading("count", text="Cantidad")
+        self.live_tree.column("name", width=300, anchor="w")
+        self.live_tree.column("count", width=80, anchor="center", stretch=False)
+        self.live_tree.pack(fill="x")
+
         lf = ttk.LabelFrame(main, text="Log", padding=4)
         lf.pack(fill="both", expand=True, pady=6)
         self.log = tk.Text(lf, height=10, wrap="word", state="disabled", font=("Consolas", 9))
@@ -147,6 +175,145 @@ class App:
         self.log.tag_configure("ERROR", foreground=COLOR_ERROR)
         self.log.tag_configure("CRITICAL", foreground=COLOR_ERROR)
         ttk.Label(main, text=REMINDER, foreground="#444").pack(fill="x")
+
+    # ------------------------------------------------------------------ historial
+    HISTORY_COLS = (("date", "Fecha", 120), ("duration", "Duración", 90), ("metins", "Metin", 55), ("items", "Objetos", 60),
+                    ("reason", "Motivo", 150))
+
+    def _build_history(self, tab: ttk.Frame) -> None:
+        top = ttk.Frame(tab)
+        top.pack(fill="x")
+        self.hist_today = tk.StringVar(value="")
+        self.hist_total = tk.StringVar(value="")
+        for var in (self.hist_today, self.hist_total):
+            tk.Label(top, textvariable=var, anchor="w", justify="left", wraplength=420).pack(fill="x", pady=(0, 4))
+        ttk.Button(top, text="Actualizar", command=self.refresh_history).pack(anchor="w")
+        frame = ttk.Frame(tab)
+        frame.pack(fill="both", expand=True, pady=4)
+        self.hist_tree = ttk.Treeview(frame, columns=[c[0] for c in self.HISTORY_COLS], show="headings", height=7,
+                                      selectmode="browse")
+        for cid, label, width in self.HISTORY_COLS:
+            self.hist_tree.heading(cid, text=label)
+            self.hist_tree.column(cid, width=width, anchor="w" if cid in ("date", "reason") else "center",
+                                  stretch=cid == "reason")
+        sb = ttk.Scrollbar(frame, command=self.hist_tree.yview)
+        self.hist_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.hist_tree.pack(side="left", fill="both", expand=True)
+        self.hist_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_session_detail())
+        self.hist_detail = tk.Text(tab, height=10, wrap="word", state="disabled", font=("Consolas", 9))
+        self.hist_detail.pack(fill="x")
+        self.refresh_history()
+
+    def refresh_history(self) -> None:
+        """Recarga el archivo del historial y redibuja tabla y totales (conserva la sesión elegida si sigue)."""
+        keep = self.hist_tree.selection()
+        self.sessions = load_history(self.history_file)
+        self.hist_tree.delete(*self.hist_tree.get_children())
+        for r in hv.session_rows(self.sessions):
+            self.hist_tree.insert("", "end", iid=str(r.index), values=(r.date, r.duration, r.metins, r.items, r.reason))
+        today, total = hv.totals_texts(self.sessions, self.catalog)
+        self.hist_today.set(today)
+        self.hist_total.set(total)
+        if keep and self.hist_tree.exists(keep[0]):
+            self.hist_tree.selection_set(keep[0])
+        self._show_session_detail()
+
+    def _show_session_detail(self) -> None:
+        sel = self.hist_tree.selection()
+        text = hv.session_detail(self.sessions[int(sel[0])], self.catalog) if sel else "Elegí una sesión para ver el detalle."
+        self.hist_detail.configure(state="normal")
+        self.hist_detail.delete("1.0", "end")
+        self.hist_detail.insert("end", text)
+        self.hist_detail.configure(state="disabled")
+
+    # ------------------------------------------------------------------ objetos (catálogo)
+    ITEM_THUMB_MAX_H = 34
+
+    def _build_items(self, tab: ttk.Frame) -> None:
+        ttk.Label(tab, text="Tipos de objeto recogidos. El bot los agrupa por cómo se ve la etiqueta; ponele el nombre real "
+                            "(doble clic o Renombrar). El nombre también cambia en el historial.", wraplength=420,
+                  justify="left").pack(fill="x")
+        frame = ttk.Frame(tab)
+        frame.pack(fill="both", expand=True, pady=4)
+        ttk.Style(self.root).configure("Items.Treeview", rowheight=self.ITEM_THUMB_MAX_H + 4)
+        self.items_tree = ttk.Treeview(frame, columns=("name", "count"), show="tree headings", height=8, selectmode="browse",
+                                       style="Items.Treeview")
+        self.items_tree.heading("#0", text="Etiqueta")
+        self.items_tree.heading("name", text="Nombre")
+        self.items_tree.heading("count", text="Cantidad total")
+        self.items_tree.column("#0", width=170, stretch=False)
+        self.items_tree.column("name", width=150, anchor="w")
+        self.items_tree.column("count", width=90, anchor="center", stretch=False)
+        sb = ttk.Scrollbar(frame, command=self.items_tree.yview)
+        self.items_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.items_tree.pack(side="left", fill="both", expand=True)
+        self.items_tree.bind("<Double-1>", lambda _e: self.rename_selected_item())
+        bar = ttk.Frame(tab)
+        bar.pack(fill="x")
+        self.btn_rename = ttk.Button(bar, text="Renombrar", command=self.rename_selected_item)
+        self.btn_rename.pack(side="left", padx=2)
+        ttk.Button(bar, text="Actualizar", command=self.refresh_items).pack(side="left", padx=2)
+        self.items_state = tk.StringVar(value="")
+        tk.Label(tab, textvariable=self.items_state, anchor="w", fg=COLOR_WARN, justify="left", wraplength=420).pack(fill="x")
+        self.refresh_items()
+
+    def _thumbnail(self, path: str | None) -> tk.PhotoImage | None:
+        """Miniatura del PNG (reducida si es muy alta); None si no hay o no se puede cargar."""
+        if not path:
+            return None
+        try:
+            img = tk.PhotoImage(master=self.root, file=path)
+            if img.height() > self.ITEM_THUMB_MAX_H:
+                img = img.subsample(-(-img.height() // self.ITEM_THUMB_MAX_H))
+            return img
+        except tk.TclError:
+            logger.warning("No se pudo cargar la miniatura %s", path)
+            return None
+
+    def refresh_items(self) -> None:
+        """Recarga el catálogo del disco y redibuja la tabla (conserva la selección)."""
+        keep = self.items_tree.selection()
+        if not self.proc.running:   # con el bot corriendo el archivo lo escribe él: no se pisa
+            self.catalog.reload()
+        self.items_tree.delete(*self.items_tree.get_children())
+        self._thumbs = {}
+        for r in hv.catalog_rows(self.catalog):
+            img = self._thumbnail(r.thumbnail)
+            kw = {}
+            if img is not None:
+                self._thumbs[r.id] = img
+                kw["image"] = img
+            self.items_tree.insert("", "end", iid=r.id, values=(r.name, r.count), **kw)
+        if keep and self.items_tree.exists(keep[0]):
+            self.items_tree.selection_set(keep[0])
+        self._refresh_items_state()
+
+    def _refresh_items_state(self) -> None:
+        locked = self.phase != ctl.STOPPED
+        self.btn_rename.configure(state="disabled" if locked else "normal")
+        self.items_state.set("Renombrar se habilita al terminar la corrida." if locked else
+                             ("" if len(self.catalog) else "Todavía no hay objetos recogidos."))
+
+    def rename_selected_item(self) -> bool:
+        """Pide el nombre nuevo del objeto elegido y lo guarda en el catálogo. False si no se cambió nada."""
+        sel = self.items_tree.selection()
+        if not sel or self.phase != ctl.STOPPED:
+            return False
+        entry = self.catalog.get(sel[0])
+        if entry is None:
+            return False
+        name = self._ask_name(entry.name, f"Nombre para '{entry.name}':")
+        if name is None:
+            return False
+        err = hv.rename_item(self.catalog, entry.id, name)
+        if err:
+            self._notify("No se pudo renombrar", err)
+            return False
+        self.refresh_items()
+        self.refresh_history()
+        return True
 
     # ------------------------------------------------------------------ prioridad de metin
     def _build_priority(self, parent: ttk.Frame) -> None:
@@ -481,6 +648,7 @@ class App:
         self.info_var.set("")
         for v in self.stat_vars.values():
             v.set("-")
+        self.live_tree.delete(*self.live_tree.get_children())
         self._append_log("--- iniciando el bot ---", "INFO")
         self._set_phase(ctl.RUNNING)
 
@@ -535,6 +703,8 @@ class App:
             w.configure(state="normal" if b.options else "disabled")
         self.refresh_priority(select=self._selected_priority())
         self.refresh_skills(select=self._selected_skill())
+        if hasattr(self, "btn_rename"):
+            self._refresh_items_state()
 
     def _poll(self) -> None:
         try:
@@ -568,6 +738,9 @@ class App:
         v["unstucks"].set(str(s.unstucks))
         v["time"].set(ctl.format_elapsed(s.elapsed_s))
         v["skills_cast"].set(str(s.skills_cast))
+        self.live_tree.delete(*self.live_tree.get_children())
+        for name, n in hv.live_item_rows(s.items_by_type):
+            self.live_tree.insert("", "end", values=(name, n))
         self.refresh_skills(select=self._selected_skill(), status=s)
         if s.phase == "countdown" and s.countdown > 0:
             self.info_var.set(f"Arrancando en {s.countdown}... (pone el juego al frente)")
@@ -595,6 +768,8 @@ class App:
         elif not self._got_end:
             self.info_var.set("Detenido")
         self._append_log("--- bot detenido ---", "INFO")
+        self.refresh_history()   # la corrida que termino ya quedo en el archivo
+        self.refresh_items()
 
     def _append_log(self, text: str, level: str = "INFO") -> None:
         lg = self.log

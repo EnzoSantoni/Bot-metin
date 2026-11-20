@@ -24,6 +24,9 @@ DEFAULTS: dict[str, Any] = {
     # Mapa de metin: puntos donde se rompio un metin (persisten entre sesiones). Ver config.example.jsonc.
     "spawns": {"enabled": True, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
                "arrive_u": 5.0, "max_walk_s": 40.0},
+    # Catalogo de tipos de objeto por firma visual de la etiqueta y historial de sesiones. Ver config.example.jsonc.
+    "items_catalog": {"enabled": True, "dir": "data/objetos", "match": 0.88},
+    "history": {"enabled": True, "file": "data/historial.jsonl"},
     # explore_every_s: cada cuanto guarda una imagen periodica mientras explora; max_images: tope por corrida;
     # jpeg_quality 1-100; max_per_kind: tope de imagenes por tipo de evento (estado, descarte, destrabe, ignorada,
     # equivocada, bloqueado, explorar = la periodica); reason_memory_s: un motivo de descarte que vuelve a aparecer antes
@@ -893,6 +896,17 @@ def validate_config(cfg: dict) -> None:
         v = sp.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"spawns.{k} debe ser un numero > 0")
+    ic = _require_dict(cfg.get("items_catalog"), "items_catalog")
+    if not isinstance(ic.get("enabled"), bool):
+        raise ConfigError("items_catalog.enabled debe ser true o false")
+    _require_text(ic.get("dir"), "items_catalog.dir")
+    m = ic.get("match")
+    if not isinstance(m, (int, float)) or isinstance(m, bool) or not 0 < m <= 1:
+        raise ConfigError("items_catalog.match debe ser un numero entre 0 (sin incluir) y 1")
+    hist = _require_dict(cfg.get("history"), "history")
+    if not isinstance(hist.get("enabled"), bool):
+        raise ConfigError("history.enabled debe ser true o false")
+    _require_text(hist.get("file"), "history.file")
     debug = _require_dict(cfg.get("debug"), "debug")
     if not isinstance(debug.get("enabled"), bool):
         raise ConfigError("debug.enabled debe ser true o false")
