@@ -183,8 +183,11 @@ def test_i2_piedra_fantasma_no_hace_loop():
         return p
     env.bot._perceive = per
     env.run_until(max_s=600)
-    # la 1a aproximacion es a ciegas (sin camara, posicion del jugador) y las siguientes ya ubicadas: un tope de 1 + max_tries
-    assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= 1 + int(env.cfg["approach"]["max_tries_per_spot"])
+    # la piedra fantasma no muestra nombre en el hover: nunca se le hace clic y su posicion queda ignorada no_label_ignore_s;
+    # en 600 s solo puede volver a intentarse cuando vence (a lo sumo una vez por vencimiento, mas la 1a y un margen)
+    assert not any(t.new == "ATACAR" for t in env.transitions)
+    acercarse = sum(1 for t in env.transitions if t.new == "ACERCARSE")
+    assert acercarse <= 2 + 600 / float(env.cfg["approach"]["no_label_ignore_s"])
     assert env.bot.ignored
 
 

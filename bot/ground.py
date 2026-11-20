@@ -28,6 +28,13 @@ def to_ground(pt: Xy, shape: tuple[int, ...], cfg: dict) -> Xy:
     return (pt[0] - cx) / dv, f / dv
 
 
+def depth_px(y: float, shape: tuple[int, ...], cfg: dict) -> float:
+    """Distancia vertical en pixeles de la fila `y` al horizonte (acotada por `min_dv_px`): el tamano en pantalla de un objeto
+    del piso es proporcional a ella (perspectiva)."""
+    hor, _, _, min_dv = _params(shape, cfg)
+    return max(y - hor, min_dv)
+
+
 def feet_of(player_xy: tuple[int, int], cfg: dict) -> Xy:
     """Pies del personaje: el punto de pantalla del personaje (cabeza/torso) mas `feet_dy_px` hacia abajo."""
     return float(player_xy[0]), float(player_xy[1]) + float(cfg["vision"]["ground"]["feet_dy_px"])
@@ -50,9 +57,19 @@ class Goal:
 
 def rank_goals(goals: list[Goal], player_xy: tuple[int, int], shape: tuple[int, ...], cfg: dict
                ) -> list[tuple[Goal, float]]:
-    """(meta, distancia de piso a los pies del personaje) ordenado de la mas cercana a la mas lejana (estable: a igual
-    distancia queda primero la que vino primero)."""
+    """(meta, distancia de piso a los pies del personaje) en orden de eleccion. Las etiquetas objetivo van primero (la mas
+    cercana antes); una piedra sin etiqueta solo le gana a la etiqueta mas cercana si su distancia es menor que
+    `approach.unlabeled_closer_ratio` x la de ella. Las piedras sin etiqueta con la base por debajo de
+    `approach.near_unlabeled_y_frac` del alto (cerca del personaje: de cerca los metin siempre muestran su nombre, casi seguro
+    es un monstruo) quedan al final. A igual distancia queda primero la que vino primero."""
     feet = feet_of(player_xy, cfg)
-    out = [(g, ground_dist(feet, g.point, shape, cfg)) for g in goals]
-    out.sort(key=lambda e: e[1])
-    return out
+    apr = cfg["approach"]
+    ratio, y_lim = float(apr["unlabeled_closer_ratio"]), float(apr["near_unlabeled_y_frac"]) * shape[0]
+    scored = sorted(((g, ground_dist(feet, g.point, shape, cfg)) for g in goals), key=lambda e: e[1])
+    labels = [e for e in scored if e[0].kind == "etiqueta"]
+    stones = [e for e in scored if e[0].kind != "etiqueta" and e[0].point[1] < y_lim]
+    near = [e for e in scored if e[0].kind != "etiqueta" and e[0].point[1] >= y_lim]
+    out: list[tuple[Goal, float]] = []
+    while labels and stones:
+        out.append(stones.pop(0) if stones[0][1] < ratio * labels[0][1] else labels.pop(0))
+    return out + labels + stones + near

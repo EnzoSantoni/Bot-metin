@@ -105,9 +105,9 @@ def test_regla_a_rodeado_explorando_usa_espacio_primero_y_se_libera(caplog):
     env.world.schedule_surround(8.0, 3, 1)
     env.run_until(lambda: not m.alive, max_s=300)
     assert not m.alive and env.world.space_pushes >= 1 and env.world.surround == 0
-    destr = [x for x in messages(caplog) if x.startswith("Destrabe: episodio")]
-    assert destr and "estrategia ESPACIO" in destr[0] and "monstruos cerca: 3" in destr[0]
-    assert "intento 1/4" in destr[0]
+    rod = [x for x in messages(caplog) if x.startswith("Rodeado de")]   # ESPACIO sin pasar por DESTRABAR
+    assert rod and "3 monstruos sin avanzar: ESPACIO y sigo" in rod[0]
+    assert env.bot.stats.surrounded >= 1
 
 
 def test_regla_a_el_bot_no_avanza_mientras_esta_rodeado():
@@ -351,14 +351,18 @@ def hovers(h):
     return sum(1 for e in h.be.events if e[0] == "move_to") - 2 * h.clicks()
 
 
-def test_acercarse_sin_camara_en_la_tolerancia_hace_hover_y_despues_clic():
-    """Sin camara, jugador en la franja de tolerancia: se acerca igual. Sin etiqueta: hover_tries hovers y clic igual."""
+def test_acercarse_sin_camara_en_la_tolerancia_hace_hover_y_sin_nombre_no_clickea(caplog):
+    """Sin camara, jugador en la franja de tolerancia: se acerca igual. Sin etiqueta tras hover_tries hovers: NO es un metin,
+    no hay clic y la posicion queda ignorada."""
+    caplog.set_level(logging.INFO)
     h = Harness(lambda h, n: perc_far(coords=TOL_XY, far=[far_at(1300, 548)]))
-    h.run_until(lambda: State.ACERCARSE in h.states() and h.clicks() >= 1)
-    assert h.states()[:2] == [State.ACERCARSE, State.ATACAR]
-    assert hovers(h) == 2 and h.clicks() == 1
+    h.run_until(lambda: State.ACERCARSE in h.states() and State.BUSCAR in h.states())
+    assert h.states()[:2] == [State.ACERCARSE, State.BUSCAR]
+    assert hovers(h) == 2 and h.clicks() == 0
     kinds = [e[0] for e in h.be.events]
-    assert kinds[:2] == ["move_to", "move_to"] and "mouse_down" not in kinds[:2]
+    assert kinds[:2] == ["move_to", "move_to"] and "mouse_down" not in kinds
+    assert len(h.bot.ignored) == 1
+    assert any("sin nombre en el hover" in x for x in messages(caplog))
 
 
 def test_hover_etiqueta_objetivo_hace_clic_y_ataca(caplog):

@@ -195,6 +195,7 @@ class DebugRecorder:
         self._fails = 0
         self._last_explore = -math.inf
         self._capped = False
+        self.save_raw = bool(d["save_raw"])
         self.max_coord_crops = int(d["max_coord_crops"])
         self.coord_crop_every_s = float(d["coord_crop_every_s"])
         self.coord_crops = 0
@@ -264,6 +265,10 @@ class DebugRecorder:
             out = annotate_perception(img, p, self.cfg, [f"{state}: {reason}"] + list(lines or []), click)
             if not cv2.imwrite(str(path), out, [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]):
                 raise OSError(f"cv2.imwrite no pudo escribir {path}")
+            if self.save_raw:   # captura cruda (sin dibujos) con el mismo numero: caso de prueba limpio (mismo tope: n <= max_images)
+                raw = path.with_name(path.stem + "_raw.png")
+                if not cv2.imwrite(str(raw), img):
+                    raise OSError(f"cv2.imwrite no pudo escribir {raw}")
             with open(self._dir / "events.log", "a", encoding="utf-8") as f:
                 f.write(f"{n:04d} {path.name} | {state} | {reason} | {summary}\n")
             self.count = n

@@ -81,12 +81,12 @@ def perceive(img: np.ndarray, cfg: dict, *, full_captcha: bool = False,
     if "items" in wanted:
         items = timed("items", lambda: find_items(img, cfg, mask))
         choice = choose_item(items, player)
-    far: list[FarMetin] = []
-    if "far" in wanted:
-        far = timed("far", lambda: find_far_metins(img, cfg, mask, label_exclusions(metins, cfg)))
     monsters: list[MonsterLabel] = []
     if "monsters" in wanted:
         monsters = timed("monsters", lambda: find_monsters(img, cfg, mask))
+    far: list[FarMetin] = []
+    if "far" in wanted:
+        far = timed("far", lambda: find_far_metins(img, cfg, mask, label_exclusions(metins, cfg), monsters))
     captcha = timed("captcha", lambda: find_captcha(img, cfg, full=full_captcha))
     death = timed("death", lambda: find_death(img, cfg))
     timings["total"] = (time.perf_counter() - t0) * 1000
