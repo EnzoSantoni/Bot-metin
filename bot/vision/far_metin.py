@@ -28,6 +28,7 @@ class FarMetin:
     score: float               # 0..1 (tamano del nucleo y del humo)
     allowed: bool              # el centro esta permitido por la mascara
     smoke: bool = True         # lo detecto el criterio principal (humo); False = solo el cuerpo claro (sin humo, mas dudoso)
+    hue: int = -1              # matiz dominante del blob (0-179) si lo midio el detector por estructura; -1 = no medido
 
 
 def _core_mask(hsv: np.ndarray, m: dict) -> np.ndarray:
@@ -107,8 +108,38 @@ def _bad_shape(r: Rect, center: tuple[int, int], shape: tuple[int, ...], cfg: di
     return None
 
 
+def merge_far(a: list[FarMetin], b: list[FarMetin]) -> list[FarMetin]:
+    """Union de dos listas sin duplicar: `b` se descarta si su centro cae dentro del rect de alguna de `a` (o al reves).
+    Del duplicado se conserva el de `a` (el detector por color, ya ajustado) con el mayor puntaje y el humo si alguno lo vio."""
+    out = list(a)
+    for f in b:
+        for i, g in enumerate(out):
+            if g.rect.contains(*f.center) or f.rect.contains(*g.center):
+                out[i] = FarMetin(g.rect, g.center, max(g.score, f.score), g.allowed, g.smoke or f.smoke,
+                                  g.hue if g.hue >= 0 else f.hue)
+                break
+        else:
+            out.append(f)
+    out.sort(key=lambda p: (p.rect.y, p.rect.x))
+    return out
+
+
 def find_far_metins(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = None,
                     exclude: list[Rect] | None = None, monsters: list[MonsterLabel] | None = None) -> list[FarMetin]:
+    """Piedras sin etiqueta segun `vision.far_metin.mode`: "color" (nucleo rojo + humo), "estructura" (piedra + aura +
+    humo, sin depender del tono; bot/vision/far_structure.py) o "ambos" (union sin duplicados)."""
+    mode = cfg["vision"]["far_metin"].get("mode", "color")
+    if mode == "color":
+        return find_far_metins_color(img_bgr, cfg, mask, exclude, monsters)
+    from bot.vision.far_structure import find_structural_metins   # import tardio: far_structure importa este modulo
+    struct = find_structural_metins(img_bgr, cfg, mask, exclude, monsters)
+    if mode == "estructura":
+        return struct
+    return merge_far(find_far_metins_color(img_bgr, cfg, mask, exclude, monsters), struct)
+
+
+def find_far_metins_color(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = None,
+                          exclude: list[Rect] | None = None, monsters: list[MonsterLabel] | None = None) -> list[FarMetin]:
     """Piedras sin etiqueta: nucleo rojo con humo encima, fuera de zonas excluidas, ventanas y `exclude`. Con `monsters`
     descarta los cuerpos con etiqueta de monstruo arriba; ademas filtra por forma y tamano esperado (perspectiva)."""
     h, w = img_bgr.shape[:2]

@@ -264,6 +264,27 @@ DEFAULTS: dict[str, Any] = {
             # Filtros contra cuerpos de monstruos: etiqueta de monstruo justo arriba (<= above_px por encima, centro a <=
             # dx_px), cuerpo mas alto que max_aspect x ancho, o mas chico que min_size_ratio x distancia al horizonte.
             "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9,
+            # Detector por estructura (bot/vision/far_structure.py): piedra + aura + humo, sin depender del tono.
+            # mode: "color" (nucleo rojo), "estructura" o "ambos" (union sin duplicados). hue_hints: {slug: [h_min, h_max]}
+            # pista opcional de matiz por tipo (calibrate.py metin la mide); solo sube el puntaje, nunca es requisito.
+            "mode": "ambos",
+            "hue_hints": {},
+            "structure": {
+                "bg_scale": 4, "bg_kernel": 21,
+                "core_ds": 55, "core_dv": 35, "core_s_min": 90,
+                "group_kernel": [9, 9],
+                "min_core_pixels": 120, "min_w": 12, "max_w": 140, "min_h": 12, "max_h": 160,
+                "min_aspect": 0.45, "min_fill": 0.38, "min_calm": 0.3,
+                "max_zone_overlap": 0.7,   # el blob incluye el aura: es mas grande que el nucleo rojo
+                "ring_margin": 6, "calm_d": 25,
+                "smoke_s_max": 75, "smoke_dv": 20, "smoke_row_px": 3, "min_smoke_pixels": 40, "min_smoke_rows": 5,
+                "smoke_height_frac": 1.2, "smoke_side_frac": 0.5, "smoke_side_px": 8, "smoke_overlap_frac": 0.15,
+                "nosmoke_enabled": True, "nosmoke_min_core": 500, "nosmoke_min_calm": 0.8, "nosmoke_min_fill": 0.5,
+                "nosmoke_aspect": [0.6, 1.5],
+                "glow_ds": 110, "glow_ref": 0.3, "core_ref": 700, "smoke_ref": 300,
+                "weights": {"core": 0.3, "smoke": 0.3, "aura": 0.2, "calm": 0.2},
+                "hue_bonus": 0.1, "hue_margin": 8, "min_score": 0.5,
+            },
         },
         # Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano + nombre rojo plano.
         "monsters": {
@@ -470,6 +491,40 @@ def _validate_vision(vision: dict) -> None:
     _validate_far_monsters(vision)
 
 
+FAR_MODES = ("color", "estructura", "ambos")
+
+
+def _validate_far_structure(fm: dict) -> None:
+    """vision.far_metin.mode, hue_hints y structure (detector por estructura)."""
+    if fm.get("mode") not in FAR_MODES:
+        raise ConfigError(f"vision.far_metin.mode debe ser uno de {FAR_MODES}, no {fm.get('mode')!r}")
+    hints = fm.get("hue_hints")
+    if not isinstance(hints, dict):
+        raise ConfigError("vision.far_metin.hue_hints debe ser un objeto {slug: [h_min, h_max]}")
+    for slug, rng in hints.items():
+        _require_numbers(rng, f"vision.far_metin.hue_hints.{slug}", 2)
+        if not all(0 <= v <= 179 for v in rng):
+            raise ConfigError(f"vision.far_metin.hue_hints.{slug} debe estar entre 0 y 179")
+    st = _require_dict(fm.get("structure"), "vision.far_metin.structure")
+    for k, v in st.items():
+        name = f"vision.far_metin.structure.{k}"
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, dict):
+            if not v or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 for x in v.values()):
+                raise ConfigError(f"{name} debe ser un objeto de numeros >= 0")
+        elif isinstance(v, list):
+            _require_numbers(v, name, len(v))
+        elif not isinstance(v, (int, float)) or v < 0:
+            raise ConfigError(f"{name} debe ser un numero >= 0")
+    if st["bg_scale"] < 1 or st["bg_kernel"] < 3:
+        raise ConfigError("vision.far_metin.structure.bg_scale debe ser >= 1 y bg_kernel >= 3")
+    if not isinstance(st["nosmoke_enabled"], bool):
+        raise ConfigError("vision.far_metin.structure.nosmoke_enabled debe ser true o false")
+    if sum(st["weights"].values()) <= 0 or st["core_ref"] <= 0 or st["smoke_ref"] <= 0 or st["glow_ref"] <= 0:
+        raise ConfigError("vision.far_metin.structure: weights, core_ref, smoke_ref y glow_ref deben ser > 0")
+
+
 def _validate_far_monsters(vision: dict) -> None:
     """vision.far_metin y vision.monsters."""
     def nums(sec: dict, name: str, keys: tuple[str, ...], positive: tuple[str, ...] = ()) -> None:
@@ -493,6 +548,7 @@ def _validate_far_monsters(vision: dict) -> None:
         _require_numbers(fm.get(k), f"vision.far_metin.{k}", 3)
     if fm["core_ref"] <= 0 or fm["smoke_ref"] <= 0:
         raise ConfigError("vision.far_metin.core_ref y smoke_ref deben ser > 0")
+    _validate_far_structure(fm)
     gr = _require_dict(vision.get("ground"), "vision.ground")
     nums(gr, "ground", ("horizon_frac", "focal_frac", "feet_dy_px", "min_dv_px"), ("min_dv_px",))
     if gr["focal_frac"] <= 0:
