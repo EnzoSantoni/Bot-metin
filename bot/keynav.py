@@ -114,6 +114,13 @@ class KeyboardNav:
         right_dir = "right" if self.view_right_key == "camera_right" else "left"
         return 1 if direction == right_dir else -1
 
+    def plan_turn(self, delta: float) -> tuple[str, float]:
+        """(tecla 'left'|'right', segundos) para girar la vista `delta` rad (positivo = derecha), recortado a `max_turn`."""
+        d = max(-self.max_turn, min(self.max_turn, delta))
+        right_dir = "right" if self.view_right_key == "camera_right" else "left"
+        left_dir = "left" if right_dir == "right" else "right"
+        return (right_dir if d >= 0 else left_dir), abs(d) / self.rate
+
     def on_turned(self, direction: str, seconds: float) -> None:
         """Se giro la vista con `direction` durante `seconds`: cam_h pasa a estimado y se guarda el giro para verificarlo
         con el proximo tramo medido."""
@@ -136,6 +143,12 @@ class KeyboardNav:
         """Olvida cam_h (y el giro pendiente): el proximo tramo de prueba lo mide."""
         self.heading, self.measured, self.pending = None, False, None
         self._acc, self._rejects = (0.0, 0.0, 0.0, "W"), 0
+
+    def flip_keys(self) -> None:
+        """Q/E giran al reves de lo supuesto."""
+        self.view_right_key = OTHER_KEY[self.view_right_key]
+        self._turn_votes = 0
+        self.invalidate()
 
     # --- tramos de caminata ---
     def _ema(self, old: float, new: float, ref: float) -> float:

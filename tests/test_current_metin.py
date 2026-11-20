@@ -15,6 +15,7 @@ from test_bot_behavior import messages, perc_far
 from test_bot_states import Harness, make_cfg, metin, perc, target_panel
 
 A_POINT = (1000, 500)
+AIM = (1000, 476)   # el clic va al cuerpo de la piedra: click_point - round(label_click_up_frac * click_dy) = 24 px mas arriba
 
 
 @pytest.fixture(autouse=True)
@@ -69,7 +70,7 @@ def test_panel_que_desaparece_con_vida_alta_es_deseleccion_no_roto(caplog):
     h.run_until(lambda: h.clicks() >= 2 and w["i"] >= 12)
     assert h.bot.state is State.ATACAR and h.bot.stats.metins == 0 and not calls
     assert any("Panel perdido con vida 64%: deseleccion, reclic en el mismo metin" in m for m in messages(caplog))
-    assert clicks_xy(h) == [A_POINT, A_POINT]
+    assert clicks_xy(h) == [AIM, AIM]
     assert State.BUSCAR not in h.states()[1:]   # sin pasar por BUSCAR
 
 
@@ -103,7 +104,7 @@ def test_vida_baja_pero_piedra_visible_espera_y_reclickea():
     t0 = h.clock.t
     h.run_until(lambda: h.clicks() >= 2)
     assert h.clock.t - t0 >= float(h.cfg["attack"]["broken_wait_s"]) - 0.5   # espero broken_wait_s antes de reclickear
-    assert h.bot.stats.metins == 0 and not calls and clicks_xy(h)[-1] == A_POINT
+    assert h.bot.stats.metins == 0 and not calls and clicks_xy(h)[-1] == AIM
 
 
 def test_deselecciones_agotadas_vuelve_a_buscar_con_el_metin_en_curso():
@@ -136,7 +137,7 @@ def test_vida_quieta_reclick_stall_s_reclickea_al_punto_mas_alejado_de_los_monst
         p = perc_far(panel=target_panel(0.8), metins=stone(0), far=[far_at_stone()])
         p.monsters = [MonsterLabel(mon, mon.center)]
         return p
-    h = Harness(script, attack={"walk_stuck_s": 1000.0, "reclick_stall_s": 5.0})
+    h = Harness(script, attack={"reclick_stall_s": 5.0}, stuck={"fast_s": 1000.0})
     h.run_until(lambda: h.clicks() >= 2, limit=600)
     x, y = clicks_xy(h)[-1]
     gap = math.hypot(max(mon.x - x, 0, x - mon.right), max(mon.y - y, 0, y - mon.bottom))
@@ -216,7 +217,7 @@ def test_tras_clickear_un_bicho_no_hay_metin_en_curso_y_se_elige_el_mas_cercano(
         return [metin(A_POINT)] if h.clicks() == 0 else [other, metin(A_POINT)]
     h = Harness(wrong_then_view(view))
     h.run_until(lambda: h.clicks() >= 2, limit=300)
-    assert clicks_xy(h) == [A_POINT, (950, 560)]
+    assert clicks_xy(h) == [AIM, (950, 536)]
     assert h.bot._cur is None
     assert not any("Retomo el metin en curso" in m for m in messages(caplog))
 
@@ -251,7 +252,7 @@ def test_metin_en_curso_se_suelta_a_los_keep_with_others_s_con_otro_objetivo_a_l
     h.run_until(lambda: h.bot._cur is not None and State.BUSCAR in h.states())
     t0 = h.clock.t
     n_states = len(h.states())
-    h.run_until(lambda: (1300, 700) in clicks_xy(h), limit=3000)
+    h.run_until(lambda: (1300, 676) in clicks_xy(h), limit=3000)
     elapsed = h.clock.t - t0
     keep, long_keep = float(h.cfg["attack"]["keep_with_others_s"]), float(h.cfg["attack"]["target_keep_s"])
     assert keep - 1.0 <= elapsed < long_keep - 1.0
@@ -288,8 +289,9 @@ def test_config_nueva_defaults_y_validacion():
     a = DEFAULTS["attack"]
     assert (a["broken_hp_ratio"], a["broken_gone_px"], a["min_break_s"], a["broken_wait_s"]) == (0.10, 90, 15.0, 3.0)
     assert (a["max_deselect_reclicks"], a["hp_progress_s"], a["reclick_stall_s"], a["monster_clear_px"]) == (6, 4.0, 5.0, 25)
-    assert (a["walk_stuck_s"], a["sidestep_s"], a["max_unstick"], a["relocate_px"], a["target_keep_s"]) == (5.0, 0.6, 4, 150, 25.0)
-    for key, bad in (("min_break_s", -1), ("walk_stuck_s", 0), ("broken_hp_ratio", 2), ("clear_offsets_px", [[1]]),
+    assert (a["sidestep_s"], a["max_unstick"], a["relocate_px"], a["target_keep_s"]) == (0.6, 4, 150, 25.0)
+    assert "walk_stuck_s" not in a   # ahora es stuck.fast_s
+    for key, bad in (("min_break_s", -1), ("sidestep_s", -1), ("broken_hp_ratio", 2), ("clear_offsets_px", [[1]]),
                      ("target_keep_s", "x")):
         cfg = make_cfg()
         cfg["attack"][key] = bad

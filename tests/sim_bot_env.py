@@ -201,7 +201,8 @@ class SimEnv:
     """Mundo + Bot completo. `world` se llena desde el test; `run_until` corre el bot ciclo a ciclo."""
 
     def __init__(self, seed: int = 0, *, phi: float | None = None, a0=None, start=(550.0, 150.0),
-                 cfg: dict | None = None, coords_noise: float = 0.0, real_pickup: bool = False, **world_kw) -> None:
+                 cfg: dict | None = None, coords_noise: float = 0.0, heading: bool = False,
+                 pinhole_k: float | None = None, bot_kw: dict | None = None, real_pickup: bool = False, **world_kw) -> None:
         self.rng = random.Random(seed)
         self.cfg = cfg or make_cfg()
         self.zone = FarmZone.from_config(self.cfg)
@@ -226,7 +227,11 @@ class SimEnv:
         self._noise_rng = random.Random(seed + 3)
         self.bot = Bot(self.cfg, self.window, self.gi, self.control, self.alarm, perceive_fn=self.perceive,
                        clock=lambda: self.world.t, sleep_fn=self.control.sleep, rng=random.Random(seed + 4),
-                       captcha_fn=self._peek_captcha, coords_fn=self._peek_coords)
+                       captcha_fn=self._peek_captcha, coords_fn=self._peek_coords,
+                       heading_fn=self._heading if heading else (lambda img, cfg: None), **(bot_kw or {}))
+        self.pinhole_k = pinhole_k
+        if pinhole_k is not None:   # camara en perspectiva coherente con `vision.ground`; `pinhole_k` = unidades por unidad de piso
+            self.world.pinhole = self._pinhole
         self.transitions: list[Transition] = []
         orig_enter = self.bot._enter
 
@@ -236,6 +241,26 @@ class SimEnv:
         self.bot._enter = rec
         self.panicked = False
         self.initial_state = self.bot.state.name
+
+    def _heading(self, img, cfg):
+        """Rumbo de la camara (grados) como lo leeria el minimapa: hacia donde apunta el frente de la pantalla."""
+        return math.degrees(self.world.phi - math.pi / 2) % 360.0
+
+    def _pinhole(self, world, game_pt):
+        """Vector de pantalla (desde el personaje) de un punto del juego con la camara en perspectiva de `vision.ground`."""
+        g = self.cfg["vision"]["ground"]
+        hor, f, cx = g["horizon_frac"] * H, g["focal_frac"] * W, W / 2.0
+        px, py = self.backend.player
+        dvf = py + g["feet_dy_px"] - hor
+        zf, xf = f / dvf, (px - cx) / dvf
+        ang = world.phi - math.pi / 2
+        rel = (game_pt[0] - world.pos[0], game_pt[1] - world.pos[1])
+        z = (rel[0] * math.cos(ang) + rel[1] * math.sin(ang)) / self.pinhole_k
+        x = (-rel[0] * math.sin(ang) + rel[1] * math.cos(ang)) / self.pinhole_k
+        if zf + z <= 0.2:   # detras de la camara
+            return 1e6, 1e6
+        dv = f / (zf + z)
+        return cx + (xf + x) * dv - px, hor + dv - py
 
     # --- lecturas rapidas entre tramos de una tecla sostenida (en vez de analizar la imagen negra) ---
     def _peek_captcha(self, img, cfg):

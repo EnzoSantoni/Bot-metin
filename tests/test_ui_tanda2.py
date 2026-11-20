@@ -21,7 +21,7 @@ from bot.ui import validators as vd
 from bot.ui.farm_mode_editor import ADVANCED_KEYS, FarmModeEditor, validate_advanced, validate_bichos
 
 ROOT = Path(__file__).resolve().parent.parent
-ZONA = "Guabina - Oscuridad y Negro"
+ZONA = "Ciudad 1"
 PJ = "Farfarfa"
 
 

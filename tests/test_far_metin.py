@@ -37,7 +37,11 @@ TOL = 20
 
 @pytest.fixture(scope="module")
 def cfg():
-    return load_config()
+    """Estos tests miden el detector por COLOR (modo "color"); el de estructura se prueba en test_far_structure.py."""
+    import copy
+    c = copy.deepcopy(load_config())
+    c["vision"]["far_metin"]["mode"] = "color"
+    return c
 
 
 def _find(img, cfg, exclude=None, windows=False):

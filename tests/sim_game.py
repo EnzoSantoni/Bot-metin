@@ -230,6 +230,13 @@ class SimWorld(SimGame):
         self._z_streak: dict[int, int] = {}
         self.events: list[tuple[float, object]] = []
         self.on_step: list[object] = []
+        self.pinhole = None                    # None = proyeccion lineal (A0); si no, funcion de proyeccion en perspectiva
+
+    def screen_offset_of(self, game_pt) -> tuple[float, float]:
+        """Con `pinhole` (funcion (mundo, punto) -> vector de pantalla) la proyeccion es la de una camara en perspectiva."""
+        if self.pinhole is None:
+            return super().screen_offset_of(game_pt)
+        return self.pinhole(self, game_pt)
 
     # --- construccion ---
     def add_metin(self, pos, **kw) -> SimMetin:

@@ -25,6 +25,7 @@
   "unlabeled_closer_ratio": 0.5
  },
  "attack": {
+  "arrive_px": 120,
   "blocked_s": 4.0,
   "blocked_window_frac": 0.8,
   "broken_confirm_cycles": 2,
@@ -79,6 +80,7 @@
     -15
    ]
   ],
+  "confirm_check_s": 0.5,
   "confirm_timeout_s": 6.0,
   "discard_error_frac": 0.3,
   "discard_minutes": 10.0,
@@ -86,6 +88,7 @@
   "hp_progress_s": 4.0,
   "hp_stall_s": 8.0,
   "keep_with_others_s": 8.0,
+  "label_click_up_frac": 0.37,
   "max_deselect_reclicks": 6,
   "max_reclicks": 3,
   "max_seconds": 120.0,
@@ -94,6 +97,8 @@
   "min_break_s": 15.0,
   "monster_clear_px": 25,
   "next_keep_s": 60.0,
+  "quick_reclicks": 2,
+  "quick_up_px": 10,
   "reclick_stall_s": 5.0,
   "reclick_wait_s": 1.0,
   "relocate_px": 150,
@@ -105,7 +110,6 @@
   "target_keep_s": 25.0,
   "unstick_space_s": 1.5,
   "walk_max_s": 25.0,
-  "walk_stuck_s": 5.0,
   "wrong_monsters_min": 1
  },
  "camera_pitch": {
@@ -204,10 +208,27 @@
   1057
  ],
  "explore": {
+  "aim_max_turns": 4,
+  "aim_tol_deg": 12.0,
   "border_margin": 25.0,
   "camera_step_s": 0.5,
   "camera_steps": 12,
+  "candidate_broken_u": 20.0,
+  "candidate_keep_s": 180.0,
+  "candidate_max_u": 200.0,
+  "candidate_merge_u": 12.0,
+  "candidate_tie_u": 4.0,
+  "candidate_walk_tries": 2,
+  "candidate_walk_u": 30.0,
+  "center_return_u": 25.0,
   "edge_return_u": 5.0,
+  "ground_reach_u": 4.0,
+  "ground_scale_bounds": [
+   0.4,
+   2.5
+  ],
+  "ground_scale_ema": 0.3,
+  "ground_scale_u": 13.0,
   "leg_s": 10.0,
   "leg_tiebreak_units": 3.0,
   "leg_units": 45.0,
@@ -216,6 +237,9 @@
   "recent_legs": 3,
   "settle_frames": 2,
   "settle_s": 0.6,
+  "sweep_cut_floor": 2.0,
+  "sweep_deg": 325.0,
+  "sweep_max_factor": 1.5,
   "visited_keep": 8,
   "walk_timeout_s": 20.0
  },
@@ -346,7 +370,8 @@
  "spawns": {
   "arrive_u": 5.0,
   "enabled": true,
-  "file": "data/mapa_metin.json",
+  "file": "data/Ciudad 1.mapa.json",
+  "map_name": "Ciudad 1",
   "max_walk_s": 40.0,
   "merge_u": 6.0,
   "respawn_s": 240.0,
@@ -357,6 +382,7 @@
   "back_s": 1.0,
   "dir_step_deg": 30.0,
   "episode_ttl_s": 120.0,
+  "fast_s": 1.8,
   "forward_chunk_s": 0.3,
   "forward_s": 1.0,
   "look_step_s": 0.8,
@@ -374,7 +400,6 @@
   "space_fail_max": 2,
   "space_s": 2.0,
   "surrounded_max": 3,
-  "surrounded_s": 2.0,
   "surrounded_space_s": 1.5,
   "unstuck_radius_px": 200,
   "window_s": 3.0
@@ -536,6 +561,7 @@
     9,
     9
    ],
+   "hue_hints": {},
    "max_aspect": 1.9,
    "max_h": 160,
    "max_w": 140,
@@ -545,6 +571,7 @@
    "min_size_ratio": 0.08,
    "min_smoke_pixels": 40,
    "min_w": 8,
+   "mode": "ambos",
    "monster_label_above_px": 150,
    "monster_label_dx_px": 60,
    "smoke_height_frac": 1.2,
@@ -561,7 +588,59 @@
    "smoke_overlap_frac": 0.15,
    "smoke_ref": 150,
    "smoke_side_frac": 0.5,
-   "smoke_side_px": 8
+   "smoke_side_px": 8,
+   "structure": {
+    "bg_kernel": 21,
+    "bg_scale": 4,
+    "calm_d": 25,
+    "core_ds": 55,
+    "core_dv": 35,
+    "core_ref": 700,
+    "core_s_min": 90,
+    "glow_ds": 110,
+    "glow_ref": 0.3,
+    "group_kernel": [
+     9,
+     9
+    ],
+    "hue_bonus": 0.1,
+    "hue_margin": 8,
+    "max_h": 160,
+    "max_w": 140,
+    "max_zone_overlap": 0.7,
+    "min_aspect": 0.45,
+    "min_calm": 0.3,
+    "min_core_pixels": 120,
+    "min_fill": 0.38,
+    "min_h": 12,
+    "min_score": 0.5,
+    "min_smoke_pixels": 40,
+    "min_smoke_rows": 5,
+    "min_w": 12,
+    "nosmoke_aspect": [
+     0.6,
+     1.5
+    ],
+    "nosmoke_enabled": true,
+    "nosmoke_min_calm": 0.8,
+    "nosmoke_min_core": 500,
+    "nosmoke_min_fill": 0.5,
+    "ring_margin": 6,
+    "smoke_dv": 20,
+    "smoke_height_frac": 1.2,
+    "smoke_overlap_frac": 0.15,
+    "smoke_ref": 300,
+    "smoke_row_px": 3,
+    "smoke_s_max": 75,
+    "smoke_side_frac": 0.5,
+    "smoke_side_px": 8,
+    "weights": {
+     "aura": 0.2,
+     "calm": 0.2,
+     "core": 0.3,
+     "smoke": 0.3
+    }
+   }
   },
   "glyphs": {
    "coords": {
@@ -667,6 +746,23 @@
    "min_score": 0.85,
    "min_text_h": 6,
    "min_text_w": 40
+  },
+  "minimap": {
+   "center_dx": -68,
+   "center_dy": 68,
+   "heading_offset_deg": 0.0,
+   "min_excess": 18.0,
+   "min_samples": 6,
+   "min_val": 50,
+   "offset_ema": 0.3,
+   "r_max": 50,
+   "r_min": 14,
+   "rel_frac": 0.45,
+   "step_deg": 2.0,
+   "width_deg": [
+    12.0,
+    70.0
+   ]
   },
   "monsters": {
    "color_tol": 6,

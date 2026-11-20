@@ -28,7 +28,7 @@ DEFAULTS: dict[str, Any] = {
     "window": {"settle_ms": 500, "unobstructed_poll_ms": 50},
     "log": {"level": "INFO", "dir": "logs", "file": "bot.log"},
     # Mapa de metin: puntos donde se rompio un metin (persisten entre sesiones). Ver config.example.jsonc.
-    "spawns": {"enabled": True, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
+    "spawns": {"enabled": True, "map_name": "Ciudad 1", "file": "data/Ciudad 1.mapa.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
                "arrive_u": 5.0, "max_walk_s": 40.0},
     # Catalogo de tipos de objeto por firma visual de la etiqueta y historial de sesiones. Ver config.example.jsonc.
     "items_catalog": {"enabled": True, "dir": "data/objetos", "match": 0.88},
@@ -120,9 +120,11 @@ DEFAULTS: dict[str, Any] = {
               "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
               # Modo teclado (navigation.mode): back_s = S de ATRAS; look_walk_s = W despues de girar la vista en MIRAR.
               "back_s": 1.0, "look_walk_s": 1.2,
-              # Rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO/ACERCARSE): monsters_min monstruos cerca y movimiento < min_move
-              # en surrounded_s -> ESPACIO surrounded_space_s y seguir; surrounded_max veces seguidas sin avanzar -> DESTRABAR.
-              "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
+              # Trabado RAPIDO (EXPLORAR/VOLVER/CENTRO caminando, y ATACAR yendo al metin): si deberia moverse (W/A/S/D
+              # sostenida, clic de ataque) y las coordenadas se mueven < min_move durante fast_s -> con >= monsters_min monstruos
+              # cerca ESPACIO surrounded_space_s, si no un paso al costado (attack.sidestep_s); y sigue en el mismo estado.
+              # surrounded_max reacciones seguidas sin avanzar -> DESTRABAR. (Reemplaza a surrounded_s y attack.walk_stuck_s.)
+              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -158,9 +160,15 @@ DEFAULTS: dict[str, Any] = {
                "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
                "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
                                      [15, -15]],
-               # Trabado yendo al metin: quieto walk_stuck_s con la vida sin bajar -> ESPACIO + reclic en el mismo metin;
-               # despues un paso al costado (A/D/W+A/W+D) de sidestep_s + reclic; max_unstick intentos y recien ahi DESTRABAR.
-               "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+               # Trabado yendo al metin: quieto stuck.fast_s con la vida sin bajar -> con monstruos cerca ESPACIO + reclic en el
+               # mismo metin; sin monstruos un paso al costado (A/D/W+A/W+D, alternando) de sidestep_s + reclic; max_unstick
+               # intentos y recien ahi DESTRABAR. arrive_px: confirmado y con la piedra a esta distancia del personaje ya llego
+               # (no se juzga trabado por estar quieto).
+               "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
+               # Punto de clic: el de la etiqueta (click_dy debajo de ella) se corre hacia arriba label_click_up_frac * click_dy
+               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_check_s del clic sin panel
+               # de metin, reclic mejor apuntado (hasta quick_reclicks; si cae en el mismo punto, quick_up_px mas arriba).
+               "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
                "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
@@ -199,7 +207,21 @@ DEFAULTS: dict[str, Any] = {
                 "edge_return_u": 5.0,
                 # Giros de busqueda de la camara en pasos: despues de cada uno se espera settle_s y settle_frames
                 # percepciones completas antes del siguiente (tiempo para analizar lo que aparecio).
-                "settle_s": 0.6, "settle_frames": 2},
+                "settle_s": 0.6, "settle_frames": 2,
+                # UNA vuelta de camara (sweep_deg, con tope de camera_steps * sweep_max_factor pasos) arma la lista de candidatos con
+                # su posicion en el MAPA (bot/candidates.py); al terminar se gira hacia el mejor (aim_tol_deg de tolerancia, hasta
+                # aim_max_turns giros) y, si no aparece, se camina candidate_walk_u hacia el (hasta candidate_walk_tries veces).
+                # candidate_keep_s: vigencia; candidate_merge_u: fusion de los que caen cerca; candidate_tie_u: empate de distancia
+                # (gana el mas cerca del centro); candidate_max_u: mas lejos no se guarda; candidate_broken_u: radio que se borra
+                # alrededor de un metin roto; sweep_cut_floor: etiqueta objetivo a menos de esta distancia de piso corta la vuelta;
+                # center_return_u: vuelta sin nada y sin punto del mapa listo -> centro si esta a mas de esto.
+                # ground_scale_u: escala inicial (unidades del juego por unidad de piso), se aprende (ground_scale_ema) acotada a
+                # ground_scale_bounds x el inicial; ground_reach_u: alcance de ataque que se suma a lo recorrido al medirla.
+                "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+                "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
+                "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
+                "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+                "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
     # ACERCARSE (piedra lejana sin etiqueta): max_seconds de la caminata; ignore_minutes / ignore_radius: posicion que
     # resulto ser de otro tipo; lost_cycles: ciclos sin ver la piedra para abandonar; label_match_px: una etiqueta a
     # esta distancia de la piedra es "esa piedra"; match_px: seguimiento de la piedra entre ciclos;
@@ -264,6 +286,13 @@ DEFAULTS: dict[str, Any] = {
         # focal = focal_frac del ancho, pies del personaje a feet_dy_px debajo de su punto, min_dv_px = acota (v - horizonte).
         # (Estimados: robusto con horizon_frac 0.10-0.19.)
         "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
+        # Rumbo de la camara desde el cono del minimapa (bot/vision/minimap.py): centro del minimapa (el personaje) a
+        # (ancho + center_dx, center_dy); rayos cada step_deg entre r_min y r_max px; se ignoran pixeles rojos y de V < min_val;
+        # un rayo necesita min_samples validos; el cono = arco de rayos con exceso de V sobre la mediana > max(min_excess,
+        # rel_frac x percentil 95) y de ancho width_deg [min, max]. heading_offset_deg: se suma al rumbo medido (se aprende).
+        "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
+                    "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
+                    "heading_offset_deg": 0.0, "offset_ema": 0.3},
         # Zonas de interfaz ignoradas. dx/dy: esquina superior izquierda respecto del punto de
         # anclaje (medido sobre ./samples). Los rectangulos se recortan al tamano de la imagen.
         "exclusion_zones": [
@@ -311,6 +340,27 @@ DEFAULTS: dict[str, Any] = {
             # Filtros contra cuerpos de monstruos: etiqueta de monstruo justo arriba (<= above_px por encima, centro a <=
             # dx_px), cuerpo mas alto que max_aspect x ancho, o mas chico que min_size_ratio x distancia al horizonte.
             "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9,
+            # Detector por estructura (bot/vision/far_structure.py): piedra + aura + humo, sin depender del tono.
+            # mode: "color" (nucleo rojo), "estructura" o "ambos" (union sin duplicados). hue_hints: {slug: [h_min, h_max]}
+            # pista opcional de matiz por tipo (calibrate.py metin la mide); solo sube el puntaje, nunca es requisito.
+            "mode": "ambos",
+            "hue_hints": {},
+            "structure": {
+                "bg_scale": 4, "bg_kernel": 21,
+                "core_ds": 55, "core_dv": 35, "core_s_min": 90,
+                "group_kernel": [9, 9],
+                "min_core_pixels": 120, "min_w": 12, "max_w": 140, "min_h": 12, "max_h": 160,
+                "min_aspect": 0.45, "min_fill": 0.38, "min_calm": 0.3,
+                "max_zone_overlap": 0.7,   # el blob incluye el aura: es mas grande que el nucleo rojo
+                "ring_margin": 6, "calm_d": 25,
+                "smoke_s_max": 75, "smoke_dv": 20, "smoke_row_px": 3, "min_smoke_pixels": 40, "min_smoke_rows": 5,
+                "smoke_height_frac": 1.2, "smoke_side_frac": 0.5, "smoke_side_px": 8, "smoke_overlap_frac": 0.15,
+                "nosmoke_enabled": True, "nosmoke_min_core": 500, "nosmoke_min_calm": 0.8, "nosmoke_min_fill": 0.5,
+                "nosmoke_aspect": [0.6, 1.5],
+                "glow_ds": 110, "glow_ref": 0.3, "core_ref": 700, "smoke_ref": 300,
+                "weights": {"core": 0.3, "smoke": 0.3, "aura": 0.2, "calm": 0.2},
+                "hue_bonus": 0.1, "hue_margin": 8, "min_score": 0.5,
+            },
         },
         # Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano + nombre rojo plano.
         "monsters": {
@@ -457,7 +507,7 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"))
+                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -517,6 +567,40 @@ def _validate_vision(vision: dict) -> None:
     _validate_far_monsters(vision)
 
 
+FAR_MODES = ("color", "estructura", "ambos")
+
+
+def _validate_far_structure(fm: dict) -> None:
+    """vision.far_metin.mode, hue_hints y structure (detector por estructura)."""
+    if fm.get("mode") not in FAR_MODES:
+        raise ConfigError(f"vision.far_metin.mode debe ser uno de {FAR_MODES}, no {fm.get('mode')!r}")
+    hints = fm.get("hue_hints")
+    if not isinstance(hints, dict):
+        raise ConfigError("vision.far_metin.hue_hints debe ser un objeto {slug: [h_min, h_max]}")
+    for slug, rng in hints.items():
+        _require_numbers(rng, f"vision.far_metin.hue_hints.{slug}", 2)
+        if not all(0 <= v <= 179 for v in rng):
+            raise ConfigError(f"vision.far_metin.hue_hints.{slug} debe estar entre 0 y 179")
+    st = _require_dict(fm.get("structure"), "vision.far_metin.structure")
+    for k, v in st.items():
+        name = f"vision.far_metin.structure.{k}"
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, dict):
+            if not v or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 for x in v.values()):
+                raise ConfigError(f"{name} debe ser un objeto de numeros >= 0")
+        elif isinstance(v, list):
+            _require_numbers(v, name, len(v))
+        elif not isinstance(v, (int, float)) or v < 0:
+            raise ConfigError(f"{name} debe ser un numero >= 0")
+    if st["bg_scale"] < 1 or st["bg_kernel"] < 3:
+        raise ConfigError("vision.far_metin.structure.bg_scale debe ser >= 1 y bg_kernel >= 3")
+    if not isinstance(st["nosmoke_enabled"], bool):
+        raise ConfigError("vision.far_metin.structure.nosmoke_enabled debe ser true o false")
+    if sum(st["weights"].values()) <= 0 or st["core_ref"] <= 0 or st["smoke_ref"] <= 0 or st["glow_ref"] <= 0:
+        raise ConfigError("vision.far_metin.structure: weights, core_ref, smoke_ref y glow_ref deben ser > 0")
+
+
 def _validate_far_monsters(vision: dict) -> None:
     """vision.far_metin y vision.monsters."""
     def nums(sec: dict, name: str, keys: tuple[str, ...], positive: tuple[str, ...] = ()) -> None:
@@ -540,6 +624,18 @@ def _validate_far_monsters(vision: dict) -> None:
         _require_numbers(fm.get(k), f"vision.far_metin.{k}", 3)
     if fm["core_ref"] <= 0 or fm["smoke_ref"] <= 0:
         raise ConfigError("vision.far_metin.core_ref y smoke_ref deben ser > 0")
+    _validate_far_structure(fm)
+    mm = _require_dict(vision.get("minimap"), "vision.minimap")
+    for k in ("center_dx", "center_dy", "r_min", "r_max", "step_deg", "min_val", "min_samples", "min_excess", "rel_frac",
+              "heading_offset_deg", "offset_ema"):
+        v = mm.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise ConfigError(f"vision.minimap.{k} debe ser un numero")
+    _require_numbers(mm.get("width_deg"), "vision.minimap.width_deg", 2)
+    if (mm["r_min"] <= 0 or mm["r_min"] >= mm["r_max"] or mm["step_deg"] <= 0 or mm["min_samples"] < 1
+            or not 0 < mm["width_deg"][0] <= mm["width_deg"][1] <= 180 or not 0 < mm["offset_ema"] <= 1):
+        raise ConfigError("vision.minimap: 0 < r_min < r_max, step_deg > 0, min_samples >= 1, width_deg = [min, max] "
+                          "con 0 < min <= max <= 180 y 0 < offset_ema <= 1")
     gr = _require_dict(vision.get("ground"), "vision.ground")
     nums(gr, "ground", ("horizon_frac", "focal_frac", "feet_dy_px", "min_dv_px"), ("min_dv_px",))
     if gr["focal_frac"] <= 0:
@@ -849,11 +945,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
-                   "progress_tol", "memory_dirs", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s",
+                   "progress_tol", "memory_dirs", "back_s", "look_walk_s", "fast_s", "surrounded_space_s",
                    "surrounded_max"),
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
-          "forward_chunk_s", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s", "surrounded_max"))
+          "forward_chunk_s", "back_s", "look_walk_s", "fast_s", "surrounded_space_s", "surrounded_max"))
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
@@ -867,16 +963,19 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
                     "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
-                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
-                    "next_keep_s", "scan_hp_margin_s", "keep_with_others_s"),
+                    "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
+                    "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
+                    "confirm_check_s", "quick_reclicks", "quick_up_px"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
-          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s"))
+          "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
+          "next_keep_s", "keep_with_others_s", "confirm_check_s"))
     a = cfg["attack"]
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")
+    if not 0 <= a["label_click_up_frac"] < 1:
+        raise ConfigError("attack.label_click_up_frac debe estar en [0, 1)")
     if not 0 < a["broken_hp_ratio"] <= 1:
         raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
     offs = a["clear_offsets_px"]
@@ -898,6 +997,20 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                      "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units",
                      "settle_s", "settle_frames", "edge_return_u"),
          ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
+    ex = cfg["explore"]
+    for k in ("sweep_deg", "sweep_max_factor", "aim_tol_deg", "aim_max_turns", "candidate_keep_s", "candidate_merge_u",
+              "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u", "sweep_cut_floor",
+              "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
+        v = ex.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"explore.{k} debe ser un numero > 0")
+    if ex["sweep_deg"] > 360 or ex["ground_scale_ema"] > 1:
+        raise ConfigError("explore.sweep_deg debe ser <= 360 y explore.ground_scale_ema <= 1")
+    if not isinstance(ex.get("candidate_walk_tries"), int) or ex["candidate_walk_tries"] < 0:
+        raise ConfigError("explore.candidate_walk_tries debe ser un entero >= 0")
+    _require_numbers(ex.get("ground_scale_bounds"), "explore.ground_scale_bounds", 2)
+    if not 0 < ex["ground_scale_bounds"][0] <= 1 <= ex["ground_scale_bounds"][1]:
+        raise ConfigError("explore.ground_scale_bounds debe ser [menor <= 1, mayor >= 1]")
     nums("volver", ("max_seconds",), ("max_seconds",))
     _validate_camera_pitch(cfg)
     nums("captcha_wait", ("poll_s", "clear_confirm"), ("poll_s", "clear_confirm"))
@@ -1069,6 +1182,7 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(sp.get("enabled"), bool):
         raise ConfigError("spawns.enabled debe ser true o false")
     _require_text(sp.get("file"), "spawns.file")
+    _require_text(sp.get("map_name"), "spawns.map_name")
     for k in ("merge_u", "respawn_s", "revisit_s", "arrive_u", "max_walk_s"):
         v = sp.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:

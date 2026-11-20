@@ -559,8 +559,30 @@ def _profile_targets(s: Session) -> list[str] | None:
         return None
 
 
+def _hue_change(s: Session, name: str, hues: list[int]) -> Change | None:
+    """Cambio de config con la pista de matiz (`vision.far_metin.hue_hints[slug]`) a partir de los matices medidos."""
+    from bot.vision.far_structure import hue_range
+    if not hues:
+        return None
+    st = s.cfg["vision"]["far_metin"]["structure"]
+    rng = hue_range(hues, int(st["hue_margin"]))
+    hints = dict(s.cfg["vision"]["far_metin"].get("hue_hints") or {})
+    hints[slugify(name)] = rng
+    s.say(f"Tono medido del nucleo/aura: H={hues} (0-179) -> pista {rng} (solo sube el puntaje, no es obligatoria).")
+    return Change(("vision", "far_metin", "hue_hints"), hints)
+
+
+def _label_stone_hue(s: Session, img: np.ndarray, cand: Any) -> int | None:
+    """Matiz de la piedra que esta debajo de la etiqueta `cand` (a `click_dy` px del centro de la etiqueta)."""
+    from bot.vision.far_structure import measure_stone_hue
+    m = s.cfg["vision"]["metin"]
+    cx, cy = cand.rect.center
+    return measure_stone_hue(img, s.cfg, (cx + int(m["click_dx"]), cy + int(m["click_dy"])))
+
+
 def cmd_metin(s: Session, name: str) -> int:
-    """Agrega un tipo de metin: plantilla de la etiqueta, (opcional) del panel y target_metin_names."""
+    """Agrega un tipo de metin: plantilla de la etiqueta, (opcional) del panel y target_metin_names. Con la misma captura de
+    la etiqueta mide el tono de la piedra y lo guarda como pista opcional (`far_metin.hue_hints`)."""
     if not slugify(name):
         s.say("El nombre del metin no puede estar vacio.")
         return 1
@@ -574,16 +596,55 @@ def cmd_metin(s: Session, name: str) -> int:
         if not _save_label(s, *picked, name):
             return 1
         s.say(f"Plantilla de la etiqueta guardada ({slugify(name)}.png).")
+        hue = _label_stone_hue(s, *picked)
         _save_panel_name(s, hk, name)
+    changes: list[Change] = []
     base = (_profile_targets(s) if s.prefer_profile else None)
     if base is None:
         base = list(s.cfg["target_metin_names"])
     if slugify(name) in {slugify(n) for n in base}:
         s.say(f"{name!r} ya esta en target_metin_names.")
-        return 0
-    names = base + [name]
-    apply_changes(s, [Change(("target_metin_names",), names)])   # la plantilla ya esta guardada: sigue siendo exito
+    else:
+        changes.append(Change(("target_metin_names",), base + [name]))
+    hue_ch = _hue_change(s, name, [] if hue is None else [hue])
+    if hue_ch is None:
+        s.say("No se midio el tono de la piedra (opcional: calibrate.py tono con el mouse sobre la piedra).")
+    else:
+        changes.append(hue_ch)
+    if changes:
+        apply_changes(s, changes)   # la plantilla ya esta guardada: sigue siendo exito
     return 0
+
+
+def cmd_tono(s: Session, name: str, max_shots: int = 3) -> int:
+    """Mide el tono de la piedra de un metin (pista opcional `far_metin.hue_hints`) con 1 a `max_shots` capturas: F9 con el
+    mouse sobre la piedra (se ve su humo y aura), F10 = listo. No toca nada del juego."""
+    from bot.vision.far_structure import measure_stone_hue
+    if not slugify(name):
+        s.say("El nombre del metin no puede estar vacio.")
+        return 1
+    hues: list[int] = []
+    with Hotkeys(s.keyboard, (KEY_CAPTURE, KEY_DONE)) as hk:
+        s.say(f"Pone el mouse sobre la piedra de {name!r} y apreta {KEY_CAPTURE.upper()} (hasta {max_shots} veces, de cerca/"
+              f"lejos o en otro mapa); {KEY_DONE.upper()} = listo, {KEY_CANCEL.upper()} = cancelar.")
+        while len(hues) < max_shots:
+            key = hk.next()
+            if key == KEY_DONE:
+                break
+            if key != KEY_CAPTURE:
+                continue
+            img = s.grab(hk)
+            hue = measure_stone_hue(img, s.cfg, s.cursor_client())
+            if hue is None:
+                s.say("No se vio una piedra cerca del mouse. Acercalo a la piedra y apreta F9 de nuevo.")
+                continue
+            hues.append(hue)
+            s.say(f"  captura {len(hues)}: H={hue}")
+    ch = _hue_change(s, name, hues)
+    if ch is None:
+        s.say("Terminado sin guardar nada.")
+        return 1
+    return 0 if apply_changes(s, [ch]) else 1
 
 
 # ----------------------------------------------------------------------------- personaje

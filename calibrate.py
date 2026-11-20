@@ -1,6 +1,6 @@
 """Herramienta de calibracion (pasiva: lee la pantalla y escucha hotkeys, NUNCA manda teclas ni clics al juego).
 
-Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|personaje|perfiles|zonas|camara|resumen> [opciones]
+Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|tono|personaje|perfiles|zonas|camara|resumen> [opciones]
 Cada valor se guarda en el perfil activo que le corresponde (ventana -> servidor, zona -> zona, velocidad -> personaje,
 metin -> plantillas + zona, camara -> personaje), o en config.json si ese valor esta definido ahi (lo pisa). Los que escriben piden confirmacion (s/n, o --si), hacen config.json.bak y validan antes de guardar.
 F12 o Ctrl+C cancelan sin guardar.
@@ -17,7 +17,7 @@ from bot.config import ConfigError
 from bot.profiles import build_config
 from bot.ui.controller import ASK_TAG
 
-NEEDS_GAME = {"zona", "velocidad", "metin", "personaje", "zonas", "camara"}   # subcomandos que capturan el juego
+NEEDS_GAME = {"zona", "velocidad", "metin", "tono", "personaje", "zonas", "camara"}   # subcomandos que capturan el juego
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--si", action="store_true", help="no pedir confirmacion antes de guardar")
     common.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
     common.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
-    common.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Guabina - Oscuridad y Negro)")
+    common.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Ciudad 1)")
     common.add_argument("--ui", action="store_true", help="modo interfaz: preguntas como '@@ASK ...' y respuesta por stdin")
     common.add_argument("--en-perfil", action="store_true",
                         help="guardar en el perfil activo aunque config.json defina ese valor (lo usa la interfaz)")
@@ -45,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clase", default=None, help='clase del personaje, ej. "guerrero" o "sura" (texto libre)')
     p = sub.add_parser("perfiles", parents=[common], help="listar los perfiles o migrar config.json a los perfiles activos")
     p.add_argument("accion", choices=("listar", "migrar"))
+    p = sub.add_parser("tono", parents=[common], help="medir el tono de la piedra de un metin (pista opcional far_metin.hue_hints)")
+    p.add_argument("nombre", help='nombre del metin, ej. "Metin de Oscuridad"')
+    p.add_argument("--capturas", type=int, default=3, help="maximo de capturas (default: 3)")
     sub.add_parser("zonas", parents=[common], help="guardar debug/calibrate_zonas.png para revisar las zonas excluidas")
     sub.add_parser("camara", parents=[common], help="medir el angulo vertical de la camara (horizonte) y guardarlo como referencia")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
@@ -88,6 +91,8 @@ def run(args: argparse.Namespace, s: cal.Session) -> int:
         return cal.cmd_personaje(s, args.nombre, args.clase)
     if args.cmd == "perfiles":
         return cal.cmd_perfiles(s, args.accion)
+    if args.cmd == "tono":
+        return cal.cmd_tono(s, args.nombre, args.capturas)
     if args.cmd == "zonas":
         return cal.cmd_zonas(s)
     if args.cmd == "camara":

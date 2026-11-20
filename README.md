@@ -87,13 +87,13 @@ Los perfiles son archivos JSON (sin comentarios) en `profiles/`, **dentro del re
 |---|---|---|
 | Servidor | `profiles/servidores/Guabina.json` | `window_title`, `expected_client_size`, `controls`, `vision.*` (plantillas y colores de la interfaz) y la sección `server` (`name`, `pickup_mode`, `captcha_type`). |
 | Personaje | `profiles/personajes/Farfarfa.json` | La sección `character` (`name`, `class`, `potions`, `skills`), `vision.items.owner_template` (el nombre amarillo "Farfarfa's"), `pickup.dismount` y `coords_filter.max_speed`. |
-| Zona | `profiles/zonas/Guabina - Oscuridad y Negro.json` | `farm_zone`, `target_metin_names` y la sección `zone` (`name`, `farm_mode`, `metin_priority`, `bichos`). |
+| Zona | `profiles/zonas/Ciudad 1.json` | `farm_zone`, `target_metin_names` y la sección `zone` (`name`, `farm_mode`, `metin_priority`, `bichos`). |
 
 Todo lo demás (tiempos de ataque, destrabe, navegación, debug, alarma, seguridad) es configuración **general** y va en `config.json`. Un perfil con una clave de otra categoría da un error claro (por ejemplo, "la clave 'controls' no va en un perfil de zona; va en el de servidor"). Las secciones `server`, `character` y `zone` son el lugar previsto para las fases 11 a 13: **el bot todavía no las usa** (están documentadas en `config.example.jsonc`).
 
-**Qué perfiles se usan.** Sin nada más: `Guabina`, `Farfarfa` y `Guabina - Oscuridad y Negro`. Para cambiarlo, el bloque `"profiles": {"servidor": "...", "personaje": "...", "zona": "..."}` de `config.json`, o las opciones `--servidor`, `--personaje` y `--zona` de `run_bot.py`, `detect_preview.py` y `calibrate.py` (pisan al bloque). Un perfil inexistente da un error con la lista de los disponibles. Si la carpeta `profiles/` no existe, todo funciona como antes (valores por defecto + `config.json`). `run_bot.py` loguea al arrancar `Perfiles: servidor=…, personaje=…, zona=…`.
+**Qué perfiles se usan.** Sin nada más: `Guabina`, `Farfarfa` y `Ciudad 1`. (La zona se llamaba "Guabina - Oscuridad y Negro": ese nombre sigue valiendo en `config.json`, en `--zona` y en los ajustes de la interfaz, se usa `Ciudad 1` y el log lo avisa una vez. Su mapa de metin aprendido pasa solo a `profiles/zonas/Ciudad 1.mapa.json`.) Para cambiarlo, el bloque `"profiles": {"servidor": "...", "personaje": "...", "zona": "..."}` de `config.json`, o las opciones `--servidor`, `--personaje` y `--zona` de `run_bot.py`, `detect_preview.py` y `calibrate.py` (pisan al bloque). Un perfil inexistente da un error con la lista de los disponibles. Si la carpeta `profiles/` no existe, todo funciona como antes (valores por defecto + `config.json`). `run_bot.py` loguea al arrancar `Perfiles: servidor=…, personaje=…, zona=…`.
 
-**Avisos de pisado.** Si `config.json` define un valor que el perfil elegido también define, el log avisa una sola vez por sección: `config.json pisa farm_zone del perfil de zona 'Guabina - Oscuridad y Negro'` (y, si el valor es igual, que podés borrarlo o migrar). El bot sigue usando el de `config.json`.
+**Avisos de pisado.** Si `config.json` define un valor que el perfil elegido también define, el log avisa una sola vez por sección: `config.json pisa farm_zone del perfil de zona 'Ciudad 1'` (y, si el valor es igual, que podés borrarlo o migrar). El bot sigue usando el de `config.json`.
 
 **Comandos**
 

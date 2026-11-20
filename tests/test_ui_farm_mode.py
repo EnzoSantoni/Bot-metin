@@ -11,7 +11,7 @@ from bot.ui import controller as c
 from bot.ui.farm_mode_editor import FarmModeEditor, validate_bichos
 
 ROOT = Path(__file__).resolve().parent.parent
-ZONA = "Guabina - Oscuridad y Negro"
+ZONA = "Ciudad 1"
 
 
 @pytest.fixture()

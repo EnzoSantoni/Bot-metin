@@ -24,7 +24,7 @@ from bot.ui import zone_view
 from bot.ui.calibrate_dialog import CalibrateDialog
 from bot.ui.character_tab import CharacterTab
 from bot.ui.farm_mode_editor import MODE_LABELS, MODES, FarmModeEditor
-from bot.ui.metin_editor import MetinEditor
+from bot.ui.metin_editor import FAR_MODE_LABELS, FAR_MODE_TIP, MetinEditor, load_far_mode, save_far_mode
 from bot.ui.widgets import (COLOR_BG, COLOR_ERROR, COLOR_MUTED, COLOR_WARN, GAP, GAP_S, PAD, WRAP, OverrideStrip, ScrollFrame, Tooltip,
                             ValidatedEntry, add_tooltip, apply_style, heading_tooltips, make_fluid, note, section, tab_frame)
 
@@ -38,9 +38,10 @@ KIND_LABELS = (("servidor", "Servidor"), ("personaje", "Personaje"), ("zona", "Z
 MIN_SIZE = (900, 640)
 DEFAULT_GEOMETRY = "1000x800"    # pensado para un segundo monitor; se pisa con la geometria guardada
 ZONE_CANVAS_SIZE = (640, 300)
+CAND_R = 5                       # radio (px) del rombo de un candidato de la vuelta
 SPOT_R, PLAYER_R = 4, 6          # radios (px) de los puntos del mapa y del personaje en el dibujo de la zona
 ZONE_COLORS = {"zone": "#2e8b57", "zone_fill": "#e3f4e8", "tolerance": "#e08a00", "vertex": "#d4a900", "spot": "#1a73e8",
-               "trail": "#e6a1a1", "player": "#d93025"}
+               "trail": "#e6a1a1", "player": "#d93025", "cand": "#f28b00", "cand_stone": "#9aa0a6"}
 TAB_TITLES = (("control", "Control"), ("metin", "Metin"), ("zona", "Zona"), ("bichos", "Modo bichos"),
               ("personaje", "Personaje"), ("habilidades", "Habilidades"), ("historial", "Historial"), ("objetos", "Objetos"))
 PROFILE_TIPS = {"servidor": "Perfil del servidor: teclas del juego y particularidades del servidor.",
@@ -118,6 +119,7 @@ class App:
         self._config_keys: ov.Keys = []
         self.trail = zone_view.Trail()
         self.cur_pos: tuple[float, float] | None = None
+        self.cur_cands: list[tuple[float, float, str]] = []   # candidatos de la vuelta (de @@STATUS)
         self._zone_metins = -1
         self._zone = zone_view.ZoneData()
         self._spots_px: list[tuple[float, float]] = []
@@ -582,10 +584,34 @@ class App:
         self.prio_state = tk.StringVar(value="")
         ttk.Label(box, textvariable=self.prio_state, style="Warn.TLabel", wraplength=WRAP + 120, justify="left").pack(
             fill="x", pady=(GAP_S, 0))
+        far = section(tab, "Piedras lejanas")
+        far.pack(fill="x", pady=(GAP, 0))
+        lbl = ttk.Label(far, text="Detección de piedras sin etiqueta:")
+        lbl.pack(side="left")
+        self.far_var = tk.StringVar(value=FAR_MODE_LABELS[load_far_mode(self.vars["servidor"].get(), self.profiles_root)])
+        self.far_combo = ttk.Combobox(far, textvariable=self.far_var, values=list(FAR_MODE_LABELS.values()), state="readonly",
+                                      width=12)
+        self.far_combo.pack(side="left", padx=GAP)
+        self.far_combo.bind("<<ComboboxSelected>>", lambda _e: self.save_far_mode())
+        for w in (lbl, self.far_combo):
+            add_tooltip(w, FAR_MODE_TIP)
         self.refresh_priority()
+
+    def save_far_mode(self) -> None:
+        """Guarda el modo elegido (Color / Estructura / Ambos) en el perfil de servidor."""
+        mode = next((k for k, v in FAR_MODE_LABELS.items() if v == self.far_var.get()), None)
+        try:
+            if mode is None:
+                raise ValueError("Modo desconocido.")
+            save_far_mode(self.vars["servidor"].get(), mode, self.profiles_root)
+        except (ValueError, ConfigError) as e:
+            self._notify("No se pudo guardar el modo de detección", str(e))
+            self.far_var.set(FAR_MODE_LABELS[load_far_mode(self.vars["servidor"].get(), self.profiles_root)])
 
     def refresh_priority(self, select: int | None = None) -> None:
         """Redibuja la tabla, el interruptor y el indicador de cambios sin guardar."""
+        if hasattr(self, "far_var"):   # el modo de detección sigue al perfil de servidor elegido
+            self.far_var.set(FAR_MODE_LABELS[load_far_mode(self.vars["servidor"].get(), self.profiles_root)])
         self.metin_tree.delete(*self.metin_tree.get_children())
         for i, row in enumerate(self.metin.rows()):
             self.metin_tree.insert("", "end", iid=str(i), values=row)
@@ -799,6 +825,10 @@ class App:
         trail = [tr.apply(x, y) for x, y in self.trail.points]
         if len(trail) >= 2:
             c.create_line([v for p in trail for v in p], fill=ZONE_COLORS["trail"], width=2)
+        for gx, gy, kind in self.cur_cands:   # candidatos de la lista de la vuelta (rombo naranja = etiqueta, gris = piedra)
+            qx, qy = tr.apply(gx, gy)
+            color = ZONE_COLORS["cand_stone"] if kind == "piedra" else ZONE_COLORS["cand"]
+            c.create_polygon(qx, qy - CAND_R, qx + CAND_R, qy, qx, qy + CAND_R, qx - CAND_R, qy, fill=color, outline="#ffffff")
         if self.cur_pos is not None:
             px, py = tr.apply(*self.cur_pos)
             c.create_oval(px - PLAYER_R, py - PLAYER_R, px + PLAYER_R, py + PLAYER_R, fill=ZONE_COLORS["player"], outline="#ffffff", width=2)
@@ -819,8 +849,8 @@ class App:
 
     def update_zone_position(self, s: ctl.Status) -> None:
         """Posicion y rastro del personaje de un @@STATUS (redibuja solo si cambio algo)."""
-        changed = self.trail.add(s.pos) or s.pos != self.cur_pos
-        self.cur_pos = s.pos
+        changed = self.trail.add(s.pos) or s.pos != self.cur_pos or s.candidates != self.cur_cands
+        self.cur_pos, self.cur_cands = s.pos, list(s.candidates)
         self.zone_pos_var.set(zone_view.position_text(s.pos, s.zone_status))
         if s.metins != self._zone_metins:   # se rompio un metin: el mapa tiene un punto nuevo o uno actualizado
             self._zone_metins = s.metins
@@ -1311,7 +1341,7 @@ class App:
         self._got_end, self.paused, self._last_log_error = False, False, ""
         self._last_status = None
         self.trail.clear()
-        self.cur_pos, self._zone_metins = None, -1
+        self.cur_pos, self.cur_cands, self._zone_metins = None, [], -1
         self.zone_pos_var.set(zone_view.position_text(None, ""))
         self.draw_zone()
         self.info_var.set("")
@@ -1378,6 +1408,7 @@ class App:
         self.metin.locked = not b.options
         for w in (self.prio_check, *self.prio_buttons):
             w.configure(state="normal" if b.options else "disabled")
+        self.far_combo.configure(state="readonly" if b.options else "disabled")
         idle = b.options and self._calib is None   # las guias de calibracion necesitan el bot detenido y de a una
         for w in (self.btn_add_metin, self.btn_redo_zone, self.btn_calib_pitch):
             w.configure(state="normal" if idle else "disabled")

@@ -42,6 +42,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 ## Estado actual (2026-11-20)
 **Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades), 12 (prioridad de metin, historial y conteo de objetos por tipo) 13 (modo bichos) y 14 (revivir al morir, apagado por defecto) hechas, y la interfaz completa (tanda 1: Metin y Zona, base común; tanda 2: Personaje, Modo bichos, migrar config.json y pulido), con 1710 tests pasando (más la pausa automática y la parada programada).** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`" y la sección de la Fase 14). `main` no se tocó.
 
+- **main c1bcd51 (Fase 6g) integrado en desarrollo:** clic al centro de la piedra (`_aim`), reclic a los 0.5 s sin panel (`_quick_check`), trabado rapido (`stuck.fast_s`) con ESPACIO o paso al costado, detector por estructura (`vision.far_metin.mode`, `hue_hints`, `calibrate.py tono`), una vuelta de busqueda con lista de candidatos en el mapa (`bot/candidates.py`, `bot/vision/minimap.py`, fases "aim"/"cwalk" de EXPLORAR, escaneo mientras ataca guardado en el mapa) y mapa "Ciudad 1" (`spawns.map_name`/`file`, formato v2). Todo junto con perfiles, interfaz, habilidades, prioridad, historial, bichos, REVIVIR, pausa automatica, parada programada y revision. Ver "Decisiones tomadas sin Enzo (integracion de la Fase 6g y zona Ciudad 1)".
 - **main 260bf29 (Fase 6f) integrado en desarrollo:** elección con etiquetas primero (`rank_goals`: piedra sin etiqueta gana solo si su distancia < `approach.unlabeled_closer_ratio` x la de la etiqueta; piedras bajas al final), hover sin nombre sin clic, metin en curso (`_cur`) solo con panel confirmado (antes vive en `_Attack.cm`), detector de piedras lejanas con filtros, `_surrounded` (ESPACIO si rodeado sin avanzar). Decisiones: (1) `_goals` = `rank_goals` y después `order_by_priority` (estable): con prioridad vacía es exactamente main; con prioridad, una etiqueta de tipo listado va antes que cualquier piedra o etiqueta no listada, y entre piedra y etiqueta no listada sigue la regla de main (tests en test_priority.py). (2) `_surrounded` también en BICHOS pero solo con caminata corta en curso (`_bi_target`); no en REVIVIR ni peleando con ESPACIO. (3) `stats.surrounded` va por @@STATUS (`surrounded`), fila "Rodeado" en estadísticas y `rodeado` en el historial. (4) Semillas 1 y 3 de test_skills: era una limitación del simulador (recogía en el punto del personaje y con radio en unidades; el bot apunta a los pies y tolera en píxeles); nuevo `SimEnv(real_pickup=True)` (recoge bajo los pies, alcance en píxeles, etiqueta sobre el objeto); el bot no tenía bug. (5) Líneas de base regeneradas con el código de main.
 - **main 0f8a855 (Fase 6e) integrado en desarrollo:** roto real por vida, sin reclics mientras la vida baja, escalera de trabado, metin en curso (`_CurrentMetin`), RECOGER de objeto fijo (Z hasta que desaparece), angulo vertical de la camara (`bot/camera_pitch.py`, `calibrate.py camara`), busqueda del proximo metin mientras ataca y filtro de coordenadas por confianza/velocidad, todo junto con perfiles, interfaz, habilidades, prioridad, historial/catalogo, modo bichos y revivir. Lineas de base regeneradas desde main. Ver "Decisiones tomadas sin Enzo (integracion de la Fase 6e)".
 - **main 0c66ec3 (Fase 6d) integrado en desarrollo:** elección del metin más cercano por perspectiva (`bot/ground.py`), ACERCARSE con hover + clic, ATACAR con caminata, barrido de cámara con pausa, RECOGER con W/A/S/D sin clics, `bot/keynav.py` reescrito y mapa de metin `bot/spawns.py`, todo junto con perfiles, interfaz, habilidades y prioridad. Prioridad + distancia de piso: con `zone.metin_priority` vacía el orden es el de main; con lista, las etiquetas van por rango de su tipo, las piedras sin etiqueta con el rango "no listado" y, a igual rango, la menor distancia de piso (`Bot._goals`, `bot/priority.py::order_by_priority`). Mapa de metin por zona: `spawns` es categoría de zona; sin `spawns.file` en el perfil de zona se deriva `profiles/zonas/<zona>.mapa.json` (ignorado por git, no se lista como perfil). Líneas de base regeneradas desde main (única diferencia con main: `spawns.file`, probada en `tests/test_profiles.py`).
@@ -56,6 +57,16 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 **Rama `main`: Fase 6c + recoger a pie, 992 tests pasan.**
 
 ## Decisiones tomadas sin Enzo (noche del 2026-11-20)
+- **Integracion de la Fase 6g y zona Ciudad 1 (2026-11-20):**
+  - Conflictos del merge: `bot/bot.py` (imports, `__init__`, `_try_attack` que desarrollo ya habia sacado, `_walking_now`, `_surrounded`), `bot/calibration.py` (`cmd_metin` + `cmd_tono` con `cmd_personaje`/`cmd_perfiles`), `calibrate.py`, `run_bot.py`, `tests/sim_bot_env.py`: se mantuvo todo de ambos lados.
+  - Prioridad: `CandidateMap.best(..., priority=zone.metin_priority)` se queda primero con el mejor rango de tipo (piedra sin etiqueta = "no listado") y recien ahi aplica la regla de main (etiquetas antes que piedras, mas cercano, empate al centro). Lista vacia = exactamente main.
+  - Bichos: BICHOS es su propio estado, asi que ni la vuelta, ni los candidatos, ni el escaneo aplican. `_walking_now` incluye la caminata corta de BICHOS (`_bi_target`), no la pelea: el trabado rapido (`stuck.fast_s`) corre solo ahi.
+  - REVIVIR: no hay giros de camara ni trabado rapido (no es estado de caminata). Al revivir se compara la primera posicion leida con donde murio: si el personaje se movio mas de `explore.candidate_merge_u` se descarta la lista de candidatos (revivir "aqui" no se mueve: la lista se conserva); si no se sabia donde murio, se descarta. Sin clave nueva de config.
+  - Habilidades: `_skill_safe` en EXPLORAR solo en las fases de caminata ("walk"/"cwalk") y sin tramo en curso: no durante la vuelta ("sweep") ni el giro hacia un candidato ("aim"). Los reclics rapidos son de un ataque sin confirmar, que ya no es momento seguro.
+  - Interfaz: el `@@STATUS` suma `candidates: [[x, y, tipo], ...]` (hasta 40) y la pestana Zona los dibuja (rombo naranja = etiqueta, gris = piedra). La pestana Metin suma "Piedras lejanas" con el combo Color / Estructura / Ambos (tooltip); se guarda al elegir en el PERFIL DE SERVIDOR (`vision.far_metin.mode`: `vision.*` ya es del servidor y depende de como se ve el mapa/cliente); si `config.json` lo define, manda `config.json`.
+  - Lineas de base regeneradas con el codigo de main (`spawns.file` de main ahora es `data/Ciudad 1.mapa.json`, `map_name` "Ciudad 1": `same_as_main` lo documenta). Los tests de `calibrate tono/metin` leen la config efectiva (el tono va al perfil de servidor, los tipos al de zona).
+  - Perfil de zona renombrado "Guabina - Oscuridad y Negro" -> "Ciudad 1" (`git mv`, `zone.name`, `DEFAULT_SELECTION`). Alias `ZONE_ALIASES` (bot/profiles.py): `profiles.zona` de config.json, `--zona` y los ajustes de la interfaz con el nombre viejo usan "Ciudad 1" y loguean INFO una vez; `ui_settings.json` se reescribe con el nombre nuevo al proximo guardado; `config.json` no se toca.
+  - `spawns.map_name` = nombre del perfil de zona si ni el perfil ni config.json lo definen. Mapa de la zona: `profiles/zonas/Ciudad 1.mapa.json`; si no existe se migra (`migrate_zone_map`, al armar el SpawnMap) copiando la primera fuente que haya, en este orden: (1) `profiles/zonas/Guabina - Oscuridad y Negro.mapa.json` (es el de esta rama, por zona), (2) `data/Ciudad 1.mapa.json`, (3) `data/mapa_metin.json` (la carpeta que contiene `profiles/`). La fuente usada queda como `.migrado`.
 - **Integracion de la Fase 6e (2026-11-20):**
   - `stats.metins_by_type` se cuenta en `Bot._broken` (roto real), con el tipo leido del panel (`_Attack.slug`). El conteo de objetos por tipo (catalogo) se dispara cuando desaparece el objeto actual del RECOGER nuevo: `_Cur.seen` guarda su firma y recorte mientras esta visible y `_count_current` lo cuenta (sin firma = "Objeto sin identificar"). Se quitaron `_Pickup.seen`/`_count_picked`; los objetos abandonados (`item_max_s`) no se cuentan.
   - Prioridad: con `_cur` no se elige otro aunque la prioridad prefiera otro tipo. El escaneo mientras ataca (`_scan_find`) y `_go_next` usan `_goals`, asi que el proximo metin es el primero por prioridad (y a igual rango el mas cercano) entre los que cumplen los filtros.
@@ -72,8 +83,33 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 - **Modo bichos (Fase 13):** las decisiones (señuelo primero, recogida periódica, bloqueo si no junta nada, caminata corta = tramo de EXPLORAR, valores estimados de `zone.bichos`) están en la sección "Fase 13 — modo bichos".
 - **Mapa de metin por zona:** el archivo va en el perfil de zona (`spawns.file`); si no lo define, se deriva `profiles/zonas/<zona>.mapa.json`. Cambiar de zona en la interfaz usa el mapa de esa zona. El mapa viejo `data/mapa_metin.json` de main no se migra solo (copiarlo a mano al archivo de la zona si se quiere conservar).
 
+## Fase 6g (una vuelta de camara con lista de candidatos en el mapa, prueba de las 12:10, 2026-11-20)
+- **Regla:** UNA vuelta de ~360 grados en pasos arma la lista de candidatos con su posicion en el MAPA (coordenadas del juego); al terminar se elige el mejor (etiquetas antes que piedras; el mas cercano; a igual distancia, el mas cerca del centro de la zona; solo dentro de la zona o la tolerancia) y se gira directo hacia el. No hay otra vuelta mientras la lista tenga candidatos vigentes (`explore.candidate_keep_s`). Los metin que se ven mientras se ataca van a la misma lista (ya no hay "a N pasos" ni punto de pantalla).
+- **Rumbo de la camara:** `bot/vision/minimap.py` (`camera_heading(img, cfg)`): el cono del minimapa (norte fijo, personaje en el centro) se mide en rayos; en las 53 capturas de `debug/run_20261120_121005` sale estable (misma camara = mismo rumbo, +-2 grados; cono de ~40 grados, ~20 a pie). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas y `_next`).
+- **Posicion en el mapa:** `bot/candidates.py`: jugador + k * (Z * adelante + X * derecha), con el vector de piso de `bot/ground.py`. `k` inicial = 13 u por unidad de piso (de bot.log/events.log de las 12:10: recorrido hasta el metin / piso elegido = 14.2, 12.2, 10.4 y 20; mediana ~13); se afina con EMA con cada clic que lleva al personaje a un metin (se loguea "Escala del mapa").
+- **Decisiones:** (1) la vuelta solo se corta si hay una etiqueta objetivo a menos de `explore.sweep_cut_floor` (2.0) de piso (pegada al personaje); (2) el cono se compara con el rumbo de W de `keynav` para aprender el desfase cono -> juego (EMA) y, tras cada giro hacia un candidato, se verifica el sentido y la velocidad de Q/E con el cono (si estan al reves se corrige); (3) mientras se ataca, el metin en curso se excluye por posicion en el mapa (a <= `candidate_broken_u` del personaje), no por radio de pantalla; (4) vuelta sin nada: punto listo del mapa de metin y, si no hay, centro de la zona (si esta a mas de `center_return_u`; si no, tramo al azar como antes); (5) candidato que no aparece tras girar: camina `candidate_walk_u` hacia el (hasta `candidate_walk_tries` veces) y mira de nuevo, sin vuelta nueva.
+- **Sin verificar en el juego:** que el cono use el mismo marco que las coordenadas (se asumio 0 = este, y hacia abajo = sur, como `cam_h` de keynav; el desfase se aprende) y el valor de `k`. Para Enzo: en el proximo bot.log buscar "Candidato:", "Vuelta de busqueda:", "Giro hacia el candidato" y "Escala del mapa".
+
+## Fase 6f (correcciones tras la prueba de las 11:34, 2026-11-20): `main` `260bf29`, 1293 tests
+**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1B). Para el ángulo vertical (punto 5), Enzo tiene que pasar las capturas de `CAPTURAS_CAMARA.md`.
+- **Qué pasó a las 11:34:**
+  - Eligió una "piedra" sin nombre antes que un metin con etiqueta. Después la tomó como metin en curso y no eligió otro en 25 s.
+  - Las piedras falsas eran cuerpos de monstruos (arqueras y soldados con ropa roja y marrón y su "Lv NN" arriba).
+- **1. Elección** (`bot/ground.py rank_goals`, `Bot._goals`):
+  - Las etiquetas objetivo van primero.
+  - Una piedra sin etiqueta gana solo si su distancia de piso es menor que `approach.unlabeled_closer_ratio` (0.5) × la de la etiqueta. En `real_tres_metin_hover.png` la piedra de adelante sigue ganando (proporción 0.41–0.48 con horizontes de 0.10 a 0.19).
+  - Las piedras sin etiqueta debajo de `near_unlabeled_y_frac` (0.55 del alto) van al final.
+  - Si el hover no muestra nombre, no hace clic: ignora la posición `no_label_ignore_s` (120 s) y pasa al siguiente candidato en el mismo ciclo. Lo mismo si el clic selecciona un monstruo.
+  - Reemplaza la decisión de la Fase 6d de hacer clic igual después de 2 hovers.
+- **2. Metin en curso** solo cuando el panel confirma un metin objetivo; antes vive en `_Attack.cm` y no bloquea nada. Si se pierde y hay otra etiqueta objetivo a la vista, se suelta a los `attack.keep_with_others_s` (8 s), con el log "Busco el metin en curso (N s)".
+- **3. Detector** (`bot/vision/far_metin.py`): descarta las piedras con una etiqueta de monstruo justo arriba, las formas altas (`max_aspect` 1.9) y las chicas para su altura en pantalla (`min_size_ratio` 0.08). Hay tests con dos capturas reales de la corrida en `tests/data/`.
+- **4. Rodeado sin avanzar** en EXPLORAR, VOLVER y CENTRO: ESPACIO `stuck.surrounded_space_s` y sigue. Si se repite `surrounded_max` veces, pasa a DESTRABAR.
+- **Extra:**
+  - El modo debug guarda también la captura cruda (`_raw.png`) para tener casos de test limpios.
+  - En `.gitignore`, `data/` pasó a `/data/` (antes ignoraba también `tests/data/`).
+- **5. Ángulo vertical:** medir el horizonte no sirve porque depende del terreno. Queda apagado (sin `ref_horizon_frac`) hasta rediseñarlo con un tope + arrastre fijo y las capturas de `CAPTURAS_CAMARA.md`.
+
 ## Fase 6e (correcciones tras la prueba de las 09:47, 2026-11-20): `main` `2288eab`, 1262 tests
-**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1A).
 - **0. Roto real** (`b2dfd5b`):
   - Un metin cuenta como roto solo si la última vida leída era ≤ `attack.broken_hp_ratio` (10%), la piedra ya no se ve en su lugar y pasaron ≥ `attack.min_break_s` (15 s) de ataque.
   - Si se pierde el panel con la vida alta, es una deselección: vuelve a clickear el mismo metin.
@@ -139,7 +175,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 6. **Commits:** los puntos 3 y 5 van en el mismo commit porque comparten las teclas combinadas.
 7. **Tests del modo "clic":** el tope de VOLVER en los mundos al azar quedó en 50 s, porque ese modo no cambió. En modo teclado el tope sigue en 25 s.
 8. **Mapa de metin:**
-   - En `main`, que no tiene perfiles, el archivo es `data/mapa_metin.json` (ignorado por git). En `desarrollo` va junto al perfil de zona.
+   - En `main`, que no tiene perfiles, el archivo es `data/Ciudad 1.mapa.json` (antes `data/mapa_metin.json`, se migra solo) (ignorado por git). En `desarrollo` va junto al perfil de zona.
    - `respawn_s` 240 s es estimado ("a los pocos minutos").
    - Un punto al que no pudo llegar porque se trabó queda marcado como visitado, para no insistir con él en bucle.
 
@@ -275,7 +311,7 @@ Los perfiles de la Fase 9 dejan el lugar previsto y los valores por defecto. La 
 1. Los perfiles incluyen los lugares de "Ideas para después", con valores por defecto.
 2. Si `config.json` pisa un valor definido en el perfil elegido, el log lo avisa al arrancar (por ejemplo, "config.json pisa farm_zone del perfil de zona X"). `calibrate.py perfiles migrar` saca de `config.json` lo que pasa a los perfiles.
 3. Nuevo subcomando `calibrate.py personaje "Nombre"`: crea el perfil de un personaje nuevo, con su plantilla del nombre amarillo ("<Nombre>'s").
-4. El perfil de zona se llama **"Guabina - Oscuridad y Negro"**, no "Zona actual".
+4. El perfil de zona se llama **"Guabina - Oscuridad y Negro"** (ahora Ciudad 1), no "Zona actual".
 
 **Plan original:**
 **Objetivo:** separar la configuración en tres perfiles sin cambiar nada de lo que hace el bot. El bot sigue recibiendo **el mismo diccionario `cfg` de siempre**. Lo único que cambia es de dónde salen los valores.
@@ -466,7 +502,7 @@ Con `zone.farm_mode: "bichos"` el bot no busca metins: entra al estado nuevo **B
 - **Perfiles por defecto:**
   - `profiles/servidores/Guabina.json`: ventana, tamaño, `controls` y `server` (`pickup_mode` "uno_por_uno", `captcha_type` "bot_verify_numerico").
   - `profiles/personajes/Farfarfa.json`: `character` (nombre, clase vacía, pociones F2/F3 automáticas, `skills` vacío), `owner_template`, `pickup.dismount` y `coords_filter.max_speed`.
-  - `profiles/zonas/Guabina - Oscuridad y Negro.json`: `farm_zone`, `target_metin_names` y `zone` (`farm_mode` "metin", `metin_priority` vacía, `bichos` F4 cada 60 s).
+  - `profiles/zonas/Guabina - Oscuridad y Negro.json` (ahora `Ciudad 1.json`): `farm_zone`, `target_metin_names` y `zone` (`farm_mode` "metin", `metin_priority` vacía, `bichos` F4 cada 60 s).
 - **Secciones nuevas** `server`, `character` y `zone` en DEFAULTS, con validación. Por ahora solo son el lugar previsto: el bot no las usa (Fases 11–13).
 - **Armado:** DEFAULTS ← servidor ← personaje ← zona ← `config.json`, y gana `config.json`. Cada valor pisado se avisa en el log al arrancar. Con el `config.json` de Enzo hay 4 avisos, todos "con el mismo valor": `window_title`, `expected_client_size`, `target_metin_names` y `farm_zone`.
 - **Selección:** bloque `profiles` en `config.json`, o `--servidor` / `--personaje` / `--zona` en `run_bot.py`, `detect_preview.py` y `calibrate.py`. `run_bot.py` loguea los perfiles y los avisos en `bot.log`.
@@ -801,7 +837,7 @@ Con `zone.farm_mode: "bichos"` el bot no busca metins: entra al estado nuevo **B
 ### Rama `desarrollo` (después de probar `main`): Fase 9, perfiles
 Se prueba desde la carpeta **`D:\proyectos\metin-bot-desarrollo`**, con el Python de la carpeta principal: abrí la terminal en `D:\proyectos\metin-bot-desarrollo` y usá `D:\proyectos\metin-bot\.venv\Scripts\python.exe` en lugar de `.venv\Scripts\python.exe`. Esta carpeta tiene su propia copia de `config.json`: lo que hagas acá no afecta a `main`.
 1. `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py perfiles listar`: muestra los 3 perfiles activos y los 4 avisos de `config.json` pisando valores (con el mismo valor).
-2. `D:\proyectos\metin-bot\.venv\Scripts\python.exe run_bot.py --observar --max-minutos 1`: en `logs\bot.log` tiene que aparecer "Perfiles: servidor=Guabina, personaje=Farfarfa, zona=Guabina - Oscuridad y Negro" y los avisos. El bot tiene que comportarse igual que en `main`.
+2. `D:\proyectos\metin-bot\.venv\Scripts\python.exe run_bot.py --observar --max-minutos 1`: en `logs\bot.log` tiene que aparecer "Perfiles: servidor=Guabina, personaje=Farfarfa, zona=Ciudad 1" y los avisos. El bot tiene que comportarse igual que en `main`.
 3. `D:\proyectos\metin-bot\.venv\Scripts\python.exe calibrate.py perfiles migrar`: revisá el plan que muestra, confirmá con `s` y verificá:
    - que `config.json` quede sin `window_title`, `farm_zone`, etc., y con el bloque `profiles`;
    - que haya copias `.bak`;
@@ -838,7 +874,7 @@ En `D:\proyectos\metin-bot-desarrollo`, con la interfaz (`abrir_interfaz.bat`):
 
 ### Rama `desarrollo`: Fase 12 (parte 1), prioridad de metin
 En la interfaz, pestaña Control, sección "Prioridad de metin":
-1. Encendé "Elegir por prioridad", poné "Metin Negro" arriba y guardá. Fijate que `profiles\zonas\Guabina - Oscuridad y Negro.json` quede con `metin_priority: ["Metin Negro", "Metin de Oscuridad"]` y que haya una copia `.bak`.
+1. Encendé "Elegir por prioridad", poné "Metin Negro" arriba y guardá. Fijate que `profiles\zonas\Ciudad 1.json (antes Guabina - Oscuridad y Negro)` quede con `metin_priority: ["Metin Negro", "Metin de Oscuridad"]` y que haya una copia `.bak`.
 2. Con un Oscuridad más cerca y un Negro más lejos a la vista (primero en modo Observar): tiene que elegir el Negro, y el log tiene que decir "Elegido metin_negro por prioridad (más cerca había metin_de_oscuridad)".
 3. Apagá el interruptor y guardá: tiene que volver a ir al más cercano.
 4. Cambiá de zona o tocá Iniciar con cambios sin guardar: tiene que preguntar.

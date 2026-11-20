@@ -7,12 +7,39 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bot.profiles import load_profile, save_profile
+from bot.config import DEFAULTS, FAR_MODES
+from bot.profiles import load_profile, save_profile, set_path
 from bot.ui.profile_ops import load_profile_or_empty
 from bot.vision.metin import slugify
 
 _SMALL_WORDS = {"de", "del", "la", "las", "los", "el", "y", "en"}
 ERR_NONE_CHECKED = "Marcá al menos un tipo de metin para atacar."
+
+
+FAR_MODE_PATH = ("vision", "far_metin", "mode")
+FAR_MODE_LABELS = {"color": "Color", "estructura": "Estructura", "ambos": "Ambos"}
+FAR_MODE_TIP = ("Cómo detecta el bot las piedras de metin lejanas (sin etiqueta). Color: núcleo rojo con humo encima. "
+                "Estructura: forma de la piedra y su aura, sirve cuando el color cambia (otro mapa, humo distinto). "
+                "Ambos: usa los dos y se queda con lo que ve cualquiera. Se guarda en el perfil de servidor; "
+                "si config.json define este valor, config.json manda.")
+
+
+def load_far_mode(servidor: str, root: str | Path | None = None) -> str:
+    """`vision.far_metin.mode` del perfil de servidor (o el valor por defecto si el perfil no lo define)."""
+    mode = load_profile_or_empty("servidor", servidor, root, "Modo de detección lejana").get("vision", {}).get(
+        "far_metin", {}).get("mode")
+    return mode if mode in FAR_MODES else str(DEFAULTS["vision"]["far_metin"]["mode"])
+
+
+def save_far_mode(servidor: str, mode: str, root: str | Path | None = None) -> Path:
+    """Guarda el modo en el perfil de servidor conservando el resto (con .bak). ValueError si no es valido."""
+    if mode not in FAR_MODES:
+        raise ValueError(f"Modo desconocido: {mode!r}.")
+    if not servidor:
+        raise ValueError("No hay un perfil de servidor elegido.")
+    data = load_profile("servidor", servidor, root)
+    set_path(data, FAR_MODE_PATH, mode)
+    return save_profile("servidor", servidor, data, root)
 
 
 def pretty_name(slug: str) -> str:

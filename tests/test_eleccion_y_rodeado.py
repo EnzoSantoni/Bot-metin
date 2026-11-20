@@ -167,7 +167,7 @@ def test_rodeado_en_explorar_con_barrido_no_aplica():
 # ---------------------------------------------------------------- config
 def test_config_nueva_validacion():
     for sec, key, bad in (("approach", "unlabeled_closer_ratio", -1), ("approach", "no_label_ignore_s", "x"),
-                          ("attack", "keep_with_others_s", 0), ("stuck", "surrounded_s", 0),
+                          ("attack", "keep_with_others_s", 0), ("stuck", "fast_s", 0),
                           ("stuck", "surrounded_max", 0), ("debug", "save_raw", 1)):
         cfg = make_cfg()
         cfg[sec][key] = bad

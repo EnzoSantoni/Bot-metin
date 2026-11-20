@@ -20,7 +20,7 @@ from test_calibration import CLIENT, ORIGIN, QUAD, SAMPLES, FakeKeyboard, Script
 DATA = Path(__file__).parent / "data"
 REAL_PROFILES = PROJECT_ROOT / "profiles"
 NEW_SECTIONS = ("server", "character", "zone", "_profiles", "skill_timing", "items_catalog", "history", "revive", "schedule")   # schedule: pausa automatica y parada programada; skill_timing: Fase 11; items_catalog e history: Fase 12; revive: Fase 14
-ZONA = "Guabina - Oscuridad y Negro"
+ZONA = "Ciudad 1"
 
 
 def write(path: Path, data) -> Path:
@@ -50,9 +50,10 @@ def strip_new(cfg: dict) -> dict:
 
 
 def same_as_main(cfg: dict, baseline: dict) -> dict:
-    """Excepcion documentada a "igual que main": `spawns.file`. main usa data/mapa_metin.json; desarrollo deriva el mapa de
-    la zona elegida (profiles/zonas/<zona>.mapa.json). Se verifica la derivacion y se compara el resto tal cual."""
-    assert baseline["spawns"]["file"] == "data/mapa_metin.json"
+    """Excepcion documentada a "igual que main": `spawns.file`. main usa data/Ciudad 1.mapa.json; desarrollo deriva el mapa
+    de la zona elegida (profiles/zonas/<zona>.mapa.json). `spawns.map_name` (el nombre de la zona) coincide con el de main.
+    Se verifica la derivacion y se compara el resto tal cual."""
+    assert baseline["spawns"]["file"] == "data/Ciudad 1.mapa.json" and baseline["spawns"]["map_name"] == ZONA
     assert cfg["spawns"]["file"] == pf.spawns_file_for(ZONA) == f"profiles/zonas/{ZONA}.mapa.json"
     out = strip_new(cfg)
     out["spawns"] = {**out["spawns"], "file": baseline["spawns"]["file"]}
@@ -619,3 +620,105 @@ def test_run_bot_loguea_los_perfiles(tmp_path, caplog):
     text = caplog.text
     assert f"Perfiles: servidor=Guabina, personaje=Farfarfa, zona={ZONA}" in text
     assert "config.json pisa window_title del perfil de servidor 'Guabina'" in text
+
+
+# ------------------------------------------------------------------ renombre de la zona: "Guabina - Oscuridad y Negro" -> "Ciudad 1"
+
+OLD_ZONA = "Guabina - Oscuridad y Negro"
+
+
+@pytest.fixture
+def alias_log(caplog):
+    pf._alias_logged.clear()
+    caplog.set_level(logging.INFO, logger="bot.profiles")
+    return caplog
+
+
+def test_listado_de_perfiles_muestra_ciudad_1_y_no_el_viejo(root):
+    zonas = pf.list_profiles("zona", root)
+    assert "Ciudad 1" in zonas and OLD_ZONA not in zonas
+    assert pf.load_profile("zona", "Ciudad 1", root)["zone"]["name"] == "Ciudad 1"
+    assert pf.DEFAULT_SELECTION["zona"] == "Ciudad 1"
+
+
+def test_alias_en_config_json_y_linea_de_comandos(tmp_path, root, alias_log):
+    p = write(tmp_path / "config.json", {"profiles": {"zona": OLD_ZONA}})
+    cfg = build(p, root)
+    assert cfg["_profiles"]["zona"] == "Ciudad 1" and cfg["zone"]["name"] == "Ciudad 1"
+    assert pf.resolve_selection({}, zona=OLD_ZONA)["zona"] == "Ciudad 1"           # --zona con el nombre viejo
+    assert build(write(tmp_path / "otro.json", {}), root, zona=OLD_ZONA)["_profiles"]["zona"] == "Ciudad 1"
+    avisos = [r.getMessage() for r in alias_log.records if "ahora se llama" in r.getMessage()]
+    assert avisos == [f"El perfil de zona '{OLD_ZONA}' ahora se llama 'Ciudad 1'"]   # una sola vez
+    assert pf.resolve_selection({"profiles": {"zona": "Otra"}})["zona"] == "Otra"    # los demas nombres no se tocan
+
+
+def test_alias_en_los_ajustes_de_la_interfaz(tmp_path, root):
+    from bot.ui import controller as ctl
+    s = tmp_path / "ui_settings.json"
+    s.write_text(json.dumps({"servidor": "Guabina", "personaje": "Farfarfa", "zona": OLD_ZONA}), encoding="utf-8")
+    o = ctl.load_settings(s, ctl.available_profiles(root))
+    assert o.zona == "Ciudad 1"
+    assert json.loads(s.read_text(encoding="utf-8"))["zona"] == OLD_ZONA     # el archivo se actualiza al guardar
+    assert ctl.save_settings(o, s)
+    assert json.loads(s.read_text(encoding="utf-8"))["zona"] == "Ciudad 1"
+
+
+def test_map_name_sale_del_perfil_de_zona(tmp_path, root):
+    p = write(tmp_path / "config.json", {})
+    assert build(p, root)["spawns"]["map_name"] == "Ciudad 1"
+    otra = pf.load_profile("zona", ZONA, root)
+    pf.save_profile("zona", "Otra", otra, root)
+    assert build(p, root, zona="Otra")["spawns"]["map_name"] == "Otra"
+    otra["spawns"] = {"map_name": "Mapa X"}
+    pf.save_profile("zona", "Otra", otra, root)
+    assert build(p, root, zona="Otra")["spawns"]["map_name"] == "Mapa X"          # lo definido en el perfil manda
+
+
+def _zmap(tmp_path, name):
+    return tmp_path / "profiles" / "zonas" / f"{name}{pf.MAP_SUFFIX}"
+
+
+def test_migracion_del_mapa_desde_el_nombre_viejo(tmp_path):
+    from bot.spawns import migrate_zone_map
+    old, new = _zmap(tmp_path, OLD_ZONA), _zmap(tmp_path, "Ciudad 1")
+    old.parent.mkdir(parents=True)
+    old.write_text('{"viejo": 1}', encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "Ciudad 1.mapa.json").write_text('{"data": 1}', encoding="utf-8")
+    (tmp_path / "data" / "mapa_metin.json").write_text('{"legacy": 1}', encoding="utf-8")
+    assert migrate_zone_map(new) is True
+    assert json.loads(new.read_text(encoding="utf-8")) == {"viejo": 1}             # 1) el mapa con el nombre viejo de la zona
+    assert not old.exists() and old.with_name(old.name + ".migrado").exists()
+    assert (tmp_path / "data" / "Ciudad 1.mapa.json").exists()                      # las otras fuentes no se tocan
+    assert migrate_zone_map(new) is False                                           # ya existe: no pisa nada
+
+
+def test_migracion_del_mapa_orden_de_las_fuentes_en_data(tmp_path):
+    from bot.spawns import migrate_zone_map
+    new = _zmap(tmp_path, "Ciudad 1")
+    (tmp_path / "data").mkdir()
+    assert migrate_zone_map(new) is False and not new.exists()                      # sin fuentes no pasa nada
+    legacy = tmp_path / "data" / "mapa_metin.json"
+    legacy.write_text('{"legacy": 1}', encoding="utf-8")
+    named = tmp_path / "data" / "Ciudad 1.mapa.json"
+    named.write_text('{"data": 1}', encoding="utf-8")
+    assert migrate_zone_map(new) is True
+    assert json.loads(new.read_text(encoding="utf-8")) == {"data": 1}               # 2) data/<zona>.mapa.json antes que 3) mapa_metin.json
+    assert legacy.exists() and named.with_name(named.name + ".migrado").exists()
+    new.unlink()
+    named.with_name(named.name + ".migrado").unlink()
+    assert migrate_zone_map(new) is True
+    assert json.loads(new.read_text(encoding="utf-8")) == {"legacy": 1}
+    assert legacy.with_name("mapa_metin.json.migrado").exists()
+
+
+def test_spawn_map_from_config_migra_el_mapa_de_la_zona(tmp_path):
+    from bot.spawns import spawn_map_from_config
+    old = _zmap(tmp_path, OLD_ZONA)
+    old.parent.mkdir(parents=True)
+    old.write_text(json.dumps({"version": 1, "spots": [{"x": 450, "y": 150, "n": 2, "last_broken": 1.0, "last_visit": 0.0}]}),
+                   encoding="utf-8")
+    sp = {**DEFAULTS["spawns"], "file": str(_zmap(tmp_path, "Ciudad 1")), "map_name": "Ciudad 1"}
+    sm = spawn_map_from_config(sp)
+    assert [(s.x, s.y) for s in sm.spots] == [(450, 150)]
+    assert _zmap(tmp_path, "Ciudad 1").exists()

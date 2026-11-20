@@ -15,7 +15,7 @@ from bot.ui import validators as vd
 from bot.ui import zone_view as zv
 
 ROOT = Path(__file__).resolve().parent.parent
-ZONA = "Guabina - Oscuridad y Negro"
+ZONA = "Ciudad 1"
 
 
 # ---------------------------------------------------------------- validadores

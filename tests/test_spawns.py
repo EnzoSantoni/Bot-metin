@@ -37,7 +37,7 @@ def test_persiste_y_recarga(tmp_path):
     m = make_map(tmp_path, w)
     m.record_broken((100.0, 50.0))
     data = json.loads((tmp_path / "mapa.json").read_text(encoding="utf-8"))
-    assert data["version"] == 1 and len(data["spots"]) == 1
+    assert data["version"] == 2 and len(data["spots"]) == 1
     assert not list(tmp_path.glob("*.tmp"))
     m2 = make_map(tmp_path, w)
     assert len(m2) == 1 and m2.spots[0].xy == (100.0, 50.0) and m2.spots[0].last_broken == w.t
@@ -179,3 +179,76 @@ def test_explorar_sin_mapa_no_cambia(tmp_path):
     h = Harness(lambda h, n: perc())      # spawns.enabled False en make_cfg
     _explorar_hasta_tramo(h)
     assert h.bot._ex.spot is None and h.bot.spawns.path is None
+
+
+# ---------------------------------------------------------------------- nombre del mapa y migracion
+def _sp(**kw):
+    from bot.config import DEFAULTS
+    return {**DEFAULTS["spawns"], **kw}
+
+
+def test_guarda_el_nombre_del_mapa(tmp_path):
+    m = make_map(tmp_path, map_name="Ciudad 1")
+    m.record_broken((10.0, 10.0))
+    data = json.loads((tmp_path / "mapa.json").read_text(encoding="utf-8"))
+    assert data["mapa"] == "Ciudad 1" and data["version"] == 2
+
+
+def test_lee_archivo_version_1_sin_mapa(tmp_path, caplog):
+    (tmp_path / "mapa.json").write_text(json.dumps({"version": 1, "spots": [{"x": 1, "y": 2, "n": 3}]}), encoding="utf-8")
+    with caplog.at_level(logging.INFO):
+        m = make_map(tmp_path)
+    assert len(m) == 1 and m.spots[0].n == 3
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "Mapa de metin (Ciudad 1): 1 puntos cargados" in caplog.text
+
+
+def test_avisa_si_el_nombre_no_coincide(tmp_path, caplog):
+    (tmp_path / "mapa.json").write_text(json.dumps({"version": 2, "mapa": "Otro", "spots": [{"x": 1, "y": 2}]}), encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        m = make_map(tmp_path)
+    assert len(m) == 1   # no bloquea
+    assert any(r.levelno == logging.WARNING and "Otro" in r.getMessage() for r in caplog.records)
+
+
+def test_migra_el_mapa_viejo(tmp_path, monkeypatch, caplog):
+    import bot.spawns as sp_mod
+    new = tmp_path / "Ciudad 1.mapa.json"
+    old = tmp_path / "mapa_metin.json"
+    old.write_text(json.dumps({"version": 1, "spots": [{"x": 5, "y": 6}]}), encoding="utf-8")
+    monkeypatch.setattr(sp_mod, "resolve_path", lambda p: new)
+    with caplog.at_level(logging.INFO):
+        m = sp_mod.spawn_map_from_config(_sp())
+    assert len(m) == 1 and new.is_file() and not old.exists()
+    assert (tmp_path / "mapa_metin.json.migrado").is_file()
+    assert "migro data/mapa_metin.json a data/Ciudad 1.mapa.json" in caplog.text
+
+
+def test_no_migra_si_el_nuevo_existe(tmp_path, monkeypatch):
+    import bot.spawns as sp_mod
+    new = tmp_path / "Ciudad 1.mapa.json"
+    old = tmp_path / "mapa_metin.json"
+    new.write_text(json.dumps({"version": 2, "mapa": "Ciudad 1", "spots": []}), encoding="utf-8")
+    old.write_text(json.dumps({"version": 1, "spots": [{"x": 5, "y": 6}]}), encoding="utf-8")
+    monkeypatch.setattr(sp_mod, "resolve_path", lambda p: new)
+    m = sp_mod.spawn_map_from_config(_sp())
+    assert len(m) == 0 and old.is_file() and not (tmp_path / "mapa_metin.json.migrado").exists()
+
+
+def test_file_explicito_no_migra(tmp_path):
+    import bot.spawns as sp_mod
+    explicito = tmp_path / "mio.json"
+    old = tmp_path / "mapa_metin.json"
+    old.write_text(json.dumps({"version": 1, "spots": [{"x": 5, "y": 6}]}), encoding="utf-8")
+    m = sp_mod.spawn_map_from_config(_sp(file=str(explicito)))
+    assert len(m) == 0 and not explicito.exists() and old.is_file()
+
+
+def test_validate_config_exige_map_name():
+    import copy
+    import pytest
+    from bot.config import DEFAULTS, ConfigError, validate_config
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["spawns"]["map_name"] = " "
+    with pytest.raises(ConfigError, match="map_name"):
+        validate_config(cfg)

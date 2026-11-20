@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 
 KINDS = ("servidor", "personaje", "zona")
 KIND_DIRS = {"servidor": "servidores", "personaje": "personajes", "zona": "zonas"}
-DEFAULT_SELECTION = {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Guabina - Oscuridad y Negro"}
+DEFAULT_SELECTION = {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Ciudad 1"}
+# Nombres viejos de perfiles de zona -> nombre actual (config.json, linea de comandos y ajustes de la interfaz los siguen aceptando)
+ZONE_ALIASES = {"Guabina - Oscuridad y Negro": "Ciudad 1"}
+_alias_logged: set[str] = set()
 PROFILES_DIRNAME = "profiles"
 MAP_SUFFIX = ".mapa.json"   # mapa de metin de la zona: vive junto al perfil pero no es un perfil
 
@@ -205,6 +208,22 @@ def save_profile(kind: str, name: str, data: dict, root: str | Path | None = Non
 
 # ----------------------------------------------------------------------------- seleccion y armado
 
+def canonical_zone(name: str) -> str:
+    """Nombre actual del perfil de zona: si `name` es uno viejo (`ZONE_ALIASES`) devuelve el nuevo y avisa una sola vez."""
+    new = ZONE_ALIASES.get(name)
+    if new is None:
+        return name
+    if name not in _alias_logged:
+        _alias_logged.add(name)
+        logger.info("El perfil de zona '%s' ahora se llama '%s'", name, new)
+    return new
+
+
+def legacy_zone_names(zona: str) -> list[str]:
+    """Nombres viejos con los que se conocio el perfil de zona `zona` (para migrar su mapa de metin)."""
+    return [old for old, new in ZONE_ALIASES.items() if new == zona]
+
+
 def read_selection(raw: dict) -> dict[str, str]:
     """Seleccion guardada en el bloque `profiles` de config.json (solo lo que esta; el resto se completa despues)."""
     block = raw.get("profiles")
@@ -218,14 +237,15 @@ def read_selection(raw: dict) -> dict[str, str]:
             raise ConfigError(f"profiles.{k}: clave desconocida (usa {', '.join(KINDS)})")
         if not isinstance(v, str) or not v.strip():
             raise ConfigError(f"profiles.{k} debe ser el nombre del perfil (texto no vacio)")
-        out[k] = v
+        out[k] = canonical_zone(v) if k == "zona" else v
     return out
 
 
 def resolve_selection(raw: dict, servidor: str | None = None, personaje: str | None = None,
                       zona: str | None = None) -> dict[str, str]:
     """Argumentos > bloque `profiles` de config.json > perfiles por defecto."""
-    saved, args = read_selection(raw), {"servidor": servidor, "personaje": personaje, "zona": zona}
+    saved, args = read_selection(raw), {"servidor": servidor, "personaje": personaje,
+                                        "zona": canonical_zone(zona) if zona else zona}
     return {k: args[k] or saved.get(k) or DEFAULT_SELECTION[k] for k in KINDS}
 
 
@@ -293,6 +313,8 @@ def build_config(config_path: str | Path = "config.json", servidor: str | None =
     cfg = merge_layers([datas[k] for k in KINDS] + [raw_without_profiles(raw)])
     if not has_path(datas["zona"], ("spawns", "file")) and not has_path(raw_without_profiles(raw), ("spawns", "file")):
         cfg["spawns"]["file"] = spawns_file_for(names["zona"])   # mapa de metin propio de la zona elegida
+    if not has_path(datas["zona"], ("spawns", "map_name")) and not has_path(raw_without_profiles(raw), ("spawns", "map_name")):
+        cfg["spawns"]["map_name"] = names["zona"]   # el mapa se llama como la zona
     validate_config(cfg)
     overrides = find_overrides(raw, datas, names)
     if warn:

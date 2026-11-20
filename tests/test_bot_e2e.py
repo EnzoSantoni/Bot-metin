@@ -202,7 +202,8 @@ def test_metin_invulnerable_reclics_descarte_y_no_se_vuelve_a_elegir():
     assert env.run_until(lambda: any("descartado" in t.reason for t in env.transitions), max_s=300) == "cond"
     t_d = env.world.t
     n = len(env.world.clicks_on_metin)
-    assert n >= 1 + 2 * atk["max_unstick"]   # clic inicial + un reclic por cada intento de la escalera (dos escaleras)
+    # clic inicial + los reclics por vida quieta (max_reclicks): el personaje ya llego y no hay trabado que destrabar
+    assert n >= 1 + atk["max_reclicks"]
     assert env.run_until(max_s=atk["discard_minutes"] * 60 - 30) == "limite"
     assert len(env.world.clicks_on_metin) == n, "volvio a elegir el metin descartado"
     assert m.hp == 1.0 and env.world.t - t_d > 500

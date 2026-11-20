@@ -17,7 +17,7 @@ from typing import Any
 
 from bot.config import PROJECT_ROOT, ConfigError
 from bot.fileutil import atomic_write_text
-from bot.profiles import KINDS, build_config, list_profiles
+from bot.profiles import KINDS, build_config, canonical_zone, list_profiles
 from bot.schedule import parse_hhmm
 
 logger = logging.getLogger(__name__)
@@ -176,6 +176,7 @@ class Status:
     metins_by_type: dict = field(default_factory=dict)   # {slug: cantidad}
     pos: tuple[float, float] | None = None   # posicion del personaje en el juego (None = sin dato)
     zone_status: str = ""             # "inside" | "tolerance" | "outside" | "" (sin dato)
+    candidates: list = field(default_factory=list)   # [(x, y, tipo)] lista de candidatos de la vuelta (coords del juego)
 
 
 @dataclass
@@ -237,6 +238,17 @@ def parse_pos_status(raw: Any) -> tuple[float, float] | None:
     return float(raw[0]), float(raw[1])
 
 
+def parse_candidates_status(raw: Any) -> list[tuple[float, float, str]]:
+    """`candidates` de @@STATUS -> [(x, y, tipo)] (ignora las entradas mal formadas)."""
+    out: list[tuple[float, float, str]] = []
+    for e in raw if isinstance(raw, (list, tuple)) else []:
+        if isinstance(e, (list, tuple)) and len(e) == 3:
+            xy = parse_pos_status(list(e[:2]))
+            if xy is not None:
+                out.append((xy[0], xy[1], str(e[2])))
+    return out
+
+
 def parse_zone_status(raw: Any) -> str:
     """`zone_status` de @@STATUS -> uno de ZONE_STATUSES o '' si viene otra cosa."""
     return raw if isinstance(raw, str) and raw in ZONE_STATUSES else ""
@@ -255,7 +267,8 @@ def status_from_dict(d: dict) -> Status:
                   fight_s=_as_float(d.get("fight_s")), skills=parse_skills_status(d.get("skills")),
                   items_by_type=parse_items_status(d.get("items_by_type")),
                   metins_by_type=parse_metins_status(d.get("metins_by_type")),
-                  pos=parse_pos_status(d.get("pos")), zone_status=parse_zone_status(d.get("zone_status")))
+                  pos=parse_pos_status(d.get("pos")), zone_status=parse_zone_status(d.get("zone_status")),
+                  candidates=parse_candidates_status(d.get("candidates")))
 
 
 def log_level(text: str) -> str:
@@ -343,6 +356,7 @@ def load_settings(path: str | Path = SETTINGS_FILE, profiles: dict[str, list[str
     for k in KINDS:
         v = data.get(k)
         setattr(opts, k, v if isinstance(v, str) else "")
+    opts.zona = canonical_zone(opts.zona) if opts.zona else opts.zona   # nombre viejo -> actual (se guarda al proximo guardado)
     mm = data.get("max_minutes")
     if isinstance(mm, (int, float)) and not isinstance(mm, bool) and 0 <= mm < float("inf"):
         opts.max_minutes = float(mm)

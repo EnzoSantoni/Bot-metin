@@ -34,7 +34,12 @@
   //  respawn_s: segundos que tarda en reaparecer un metin (ESTIMADO: "a los pocos minutos").
   //  revisit_s: no volver a un punto visitado hace menos de esto. arrive_u: llegada al punto (unidades).
   //  max_walk_s: tope de caminata hacia un punto; al agotarlo se lo da por visitado.
-  "spawns": {"enabled": true, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
+  //  map_name: nombre del mapa (se guarda en el archivo y sale en los logs; si no coincide avisa). file: por defecto
+  //  "data/<nombre>.mapa.json"; si existe el viejo data/mapa_metin.json y el nuevo no, se migra solo (el viejo queda .migrado).
+  //  Con perfiles (rama desarrollo): si no se define aca ni en el perfil de zona, map_name = nombre del perfil de zona y file =
+  //  "profiles/zonas/<zona>.mapa.json" (si no existe se migra de profiles/zonas/<nombre viejo>.mapa.json, data/<zona>.mapa.json
+  //  o data/mapa_metin.json, en ese orden; la fuente queda .migrado).
+  "spawns": {"enabled": true, "map_name": "Ciudad 1", "file": "data/Ciudad 1.mapa.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
              "arrive_u": 5.0, "max_walk_s": 40},
 
   // Catalogo de tipos de objeto recogido (bot/item_catalog.py). El bot no lee el texto de la etiqueta (no hay OCR):
@@ -191,10 +196,13 @@
             // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = mirar con Q/E y caminar hacia la
             // direccion elegida con la combinacion de W/A/S/D mas cercana (sin girar) durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
             "back_s": 1.0, "look_walk_s": 1.2,
-            // Rodeado sin avanzar (en EXPLORAR, VOLVER, CENTRO y ACERCARSE): con >= monsters_min monstruos cerca y menos de
-            // min_move de movimiento en surrounded_s segundos, ESPACIO surrounded_space_s (montado empuja) y sigue en el mismo
-            // estado. Tras surrounded_max veces seguidas sin avanzar, el DESTRABAR de siempre.
-            "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
+            // TRABADO RAPIDO (EXPLORAR, VOLVER y CENTRO caminando; y ATACAR yendo al metin, ver attack): si deberia estar
+            // moviendose (W/A/S/D sostenida, clic de ataque) y las coordenadas se mueven menos de min_move durante fast_s
+            // segundos, esta trabado (objeto, borde, un bicho o un grupo). Con >= monsters_min monstruos cerca: ESPACIO
+            // surrounded_space_s (montado empuja); sin monstruos: un paso al costado (attack.sidestep_s, A/D/W+A/W+D alternando).
+            // Sigue en el mismo estado. Tras surrounded_max reacciones seguidas sin avanzar, el DESTRABAR de siempre.
+            // Reemplaza a surrounded_s y a attack.walk_stuck_s (obsoletas: si estan en config.json se ignoran con un WARNING).
+            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -247,10 +255,19 @@
              "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
              "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
                                   [15, -15]],
-             //  TRABADO YENDO AL METIN: tras el clic, coordenadas quietas (< stuck.min_move) walk_stuck_s con la vida sin bajar
-             //  (haya o no monstruos) -> 1) ESPACIO unstick_space_s + reclic en el mismo metin; 2) un paso al costado (A, D,
-             //  W+A, W+D, alternando) de sidestep_s + reclic; hasta max_unstick intentos y recien ahi DESTRABAR.
-             "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+             //  TRABADO YENDO AL METIN: tras el clic, coordenadas quietas (< stuck.min_move) stuck.fast_s con la vida sin bajar
+             //  -> con >= stuck.monsters_min monstruos cerca ESPACIO unstick_space_s + reclic en el mismo metin; sin monstruos
+             //  un paso al costado (A, D, W+A, W+D, alternando) de sidestep_s + reclic; hasta max_unstick intentos y recien ahi
+             //  DESTRABAR. No se juzga con la camara girada ni con la vida bajando; arrive_px: confirmado y con la piedra a
+             //  esa distancia (px) del personaje ya llego, quieto es normal. (walk_stuck_s es obsoleta: ahora es stuck.fast_s.)
+             "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
+             //  PUNTO DE CLIC EN EL CUERPO DE LA PIEDRA: el de la etiqueta (vision.metin.click_dy debajo de ella) cae en la base
+             //  o en el piso; se corre hacia arriba label_click_up_frac * click_dy px (medido: la piedra lejana queda ~45 px
+             //  debajo del centro de la etiqueta, click_dy 65). Con una piedra lejana asociada se usa el centro de su rect.
+             //  VERIFICACION RAPIDA: a los confirm_check_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
+             //  (piedra/etiqueta relocalizada; si cae en el mismo punto, quick_up_px mas arriba por intento), hasta quick_reclicks;
+             //  despues el flujo de siempre (confirm_timeout_s). No cuentan para max_reclicks.
+             "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
@@ -306,7 +323,25 @@
   "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
-              "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0},
+              "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0,
+              "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+              "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
+              "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
+              "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+              "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
+  //  UNA VUELTA (con el rumbo de la camara leido del cono del minimapa, vision.minimap): el barrido gira en pasos hasta sweep_deg
+  //  grados acumulados (tope: camera_steps * sweep_max_factor pasos) y arma la LISTA de candidatos con su posicion en el MAPA
+  //  (coordenadas del juego: jugador + ground_scale_u x vector de piso girado al rumbo de la camara). Al terminar elige el
+  //  mejor: etiquetas antes que piedras, el mas cercano y, a igual distancia (candidate_tie_u), el mas cerca del centro de la
+  //  zona; solo dentro de la zona o la tolerancia. Gira directo hacia el (aim_tol_deg, hasta aim_max_turns giros, mide el rumbo
+  //  logrado con el minimapa), espera la compuerta y va al candidato de pantalla mas cercano a la posicion esperada; si no
+  //  aparece camina candidate_walk_u hacia el (candidate_walk_tries veces) y vuelve a mirar. No hay otra vuelta mientras la lista
+  //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Una
+  //  etiqueta objetivo a menos de sweep_cut_floor de piso (muy pegada) corta la vuelta y se ataca. Vuelta sin nada: va al
+  //  punto listo del mapa de metin o, si no hay, al centro (si esta a mas de center_return_u) y vuelve a mirar desde ahi.
+  //  ground_scale_u (ESTIMADO de events.log/bot.log del 2026-11-20: 10-20 u por unidad de piso, mediana ~13) se afina solo
+  //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
+  //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
   // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
   //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
@@ -432,6 +467,15 @@
     //  feet_dy_px: los pies del personaje quedan tanto debajo de su punto; min_dv_px: acota (fila - horizonte) abajo.
     //  ESTIMADOS: verificados con samples/real_tres_metin_hover.png; el orden no cambia con horizon_frac 0.10-0.19.
     "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
+    // Rumbo de la camara desde el cono (abanico mas claro) del minimapa (bot/vision/minimap.py). Medido en
+    //  debug/run_20261120_121005: el minimapa tiene el norte fijo, el personaje esta en (ancho + center_dx, center_dy) y el cono
+    //  mide ~40 grados (~20 a pie). Se muestrea cada step_deg entre r_min y r_max px (sin pixeles rojos ni V < min_val, min_samples
+    //  validos por rayo); cono = arco con exceso de V sobre la mediana > max(min_excess, rel_frac x percentil 95) y ancho
+    //  width_deg [min, max]. El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el mismo marco de las coordenadas.
+    //  heading_offset_deg: correccion inicial; el bot la aprende (EMA offset_ema) contra el rumbo medido de W (keynav).
+    "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
+                "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
+                "heading_offset_deg": 0.0, "offset_ema": 0.3},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).
@@ -500,7 +544,43 @@
       // min_size_ratio: sqrt(ancho*alto) del cuerpo / distancia de la base al horizonte (perspectiva). Medido: piedras reales
       //  0.11-0.31 (la mas chica 0.113); cuerpos de monstruos abajo de la pantalla 0.045-0.05. Menos que esto se descarta.
       // max_aspect: alto/ancho maximo (piedras reales <= 1.31; un personaje de pie mide ~2.2).
-      "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9
+      "monster_label_above_px": 150, "monster_label_dx_px": 60, "min_size_ratio": 0.08, "max_aspect": 1.9,
+
+      // --- Detector por ESTRUCTURA (bot/vision/far_structure.py): piedra + aura + humo, sin depender del color. ---
+      // En otros mapas el metin puede ser verde/azul/violeta, pero siempre es una piedra con brillo saturado y humo palido arriba.
+      // "mode": "color" = solo el nucleo rojo de arriba; "estructura" = solo el nuevo; "ambos" = union sin duplicados (default:
+      //  el nuevo no esta probado en el juego; en las capturas reales encuentra todo lo que encuentra el de color y mas).
+      "mode": "ambos",
+      // Pista OPCIONAL de tono por tipo de metin ({slug: [h_min, h_max]}, OpenCV 0-179, puede envolver: [172, 18]). Si el tono del
+      // blob cae en algun rango suma "hue_bonus" al puntaje. Nunca es requisito. La escribe `calibrate.py metin` / `calibrate.py tono`.
+      "hue_hints": {},
+      "structure": {
+        // Fondo local = mediana de S y V sobre la imagen reducida (bg_scale) con ventana bg_kernel (px reducidos).
+        "bg_scale": 4, "bg_kernel": 21,
+        // Nucleo+aura: pixeles con saturacion >= core_ds sobre el fondo, brillo >= core_dv sobre el fondo y S >= core_s_min
+        // (cualquier matiz). Medido: fondo S~45 V~72; piedra+aura S 100-190, V 100-255. Bajar si el metin nuevo es menos vivo
+        // (cuesta falsos positivos: con ds=45, dv=25, s_min=75 aparecen ~7 en las capturas reales).
+        "core_ds": 55, "core_dv": 35, "core_s_min": 90,
+        "group_kernel": [9, 9],                  // dilatacion [ancho, alto] que une los trozos del blob
+        "min_core_pixels": 120, "min_w": 12, "max_w": 140, "min_h": 12, "max_h": 160,  // tamano valido del blob (px)
+        // Forma: alto/ancho >= min_aspect (el maximo es far_metin.max_aspect); relleno = pixeles / (ancho*alto) >= min_fill;
+        // aislamiento (calm) = fraccion del anillo de ring_margin px que se parece al fondo (|dS|,|dV| < calm_d) >= min_calm.
+        "min_aspect": 0.45, "min_fill": 0.38, "min_calm": 0.3,
+        "max_zone_overlap": 0.7,                 // el blob incluye el aura: es mas grande que el nucleo rojo
+        "ring_margin": 6, "calm_d": 25,
+        // Humo: pixeles con S <= smoke_s_max y brillo >= smoke_dv sobre el fondo, en la zona de arriba (misma geometria que el
+        // detector de color), al menos min_smoke_pixels repartidos en >= min_smoke_rows filas (con >= smoke_row_px cada una).
+        "smoke_s_max": 75, "smoke_dv": 20, "smoke_row_px": 3, "min_smoke_pixels": 40, "min_smoke_rows": 5,
+        "smoke_height_frac": 1.2, "smoke_side_frac": 0.5, "smoke_side_px": 8, "smoke_overlap_frac": 0.15,
+        // Sin humo (Metin Negro): se acepta solo si es grande, compacto y MUY aislado; sale con smoke=false (mas dudoso).
+        "nosmoke_enabled": true, "nosmoke_min_core": 500, "nosmoke_min_calm": 0.8, "nosmoke_min_fill": 0.5,
+        "nosmoke_aspect": [0.6, 1.5],
+        // Puntaje 0..1 = promedio ponderado de tamano del blob, humo, aura (fraccion con S >= glow_ds sobre el fondo) y
+        // aislamiento. Medido: piedras reales >= 0.53; un cuerpo de monstruo dudoso 0.45. Se exige >= min_score.
+        "glow_ds": 110, "glow_ref": 0.3, "core_ref": 700, "smoke_ref": 300,
+        "weights": {"core": 0.3, "smoke": 0.3, "aura": 0.2, "calm": 0.2},
+        "hue_bonus": 0.1, "hue_margin": 8, "min_score": 0.5
+      }
     },
 
     // Etiquetas de monstruos (bot/vision/monsters.py): "Lv XX" verde plano pegado a la izquierda de un nombre
@@ -663,7 +743,7 @@
   // `calibrate.py perfiles migrar` para pasarlo al perfil.
   //
   // Seleccion (opcional; sin este bloque se usan estos tres). Tambien: --servidor / --personaje / --zona.
-  "profiles": {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Guabina - Oscuridad y Negro"},
+  "profiles": {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Ciudad 1"},
 
   // Las tres secciones siguientes viven en los perfiles (aca se muestran con sus valores por defecto). Hoy el bot NO
   // las usa: son el lugar previsto de las fases 11 (habilidades), 12 (prioridad de metin) y 13 (modo bichos).
@@ -718,7 +798,7 @@
   //    pickup_every_s = recoger tambien cada tanto aunque queden monstruos...
   //    pickup_max_monsters = ...siempre que haya a lo sumo esta cantidad cerca (0 = ninguno).
   //    idle_s = segundos sin monstruos (y con el senuelo todavia no listo) antes de caminar un tramo corto a otro punto de la zona.
-  "zone": {"name": "Guabina - Oscuridad y Negro", "farm_mode": "metin", "metin_priority": [],
+  "zone": {"name": "Ciudad 1", "farm_mode": "metin", "metin_priority": [],
            "bichos": {"lure_key": "f4", "lure_every_s": 60, "min_monsters": 1, "space_s": 2.0, "clear_s": 3.0,
                       "pickup_every_s": 60, "pickup_max_monsters": 1, "idle_s": 20}}
 }

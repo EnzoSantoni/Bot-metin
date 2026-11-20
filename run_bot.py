@@ -24,7 +24,7 @@ from bot.bot import Bot
 from bot.config import ConfigError, load_config, resolve_path
 from bot.history import append_session, build_record
 from bot.item_catalog import ItemCatalog
-from bot.spawns import SpawnMap
+from bot.spawns import spawn_map_from_config
 from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
 from bot.input.game_input import GameInput, InputBlockedError
@@ -35,6 +35,7 @@ from bot.ui.controller import CMD_PAUSE, CMD_STOP, END_TAG, STATUS_TAG
 
 logger = logging.getLogger("run_bot")
 
+UI_MAX_CANDIDATES = 40   # tope de candidatos en cada @@STATUS
 UI_STATUS_PERIOD_S = 0.5   # en --ui, cada cuanto se emite la linea @@STATUS
 
 ALARM_POLL_S = 0.2   # tras la muerte, cada cuanto se mira si la alarma sigue o se pidio parar
@@ -235,9 +236,17 @@ class UiBridge:
                 "coords_total": getattr(getattr(st, "coords", None), "total", 0),
                 "coords_failed": getattr(getattr(st, "coords", None), "failed", 0),
                 "lures": getattr(st, "lures", 0), "fight_s": round(getattr(st, "fight_s", 0.0), 1),
-                "pos": pos, "zone_status": zone_status, "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
+                "pos": pos, "zone_status": zone_status, "candidates": self._candidates(), "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
                 "skills": self.bot.skills.snapshot() if hasattr(getattr(self.bot, "skills", None), "snapshot") else [],
                 "profiles": {k: prof.get(k) for k in ("servidor", "personaje", "zona")}}
+
+    def _candidates(self) -> list[list]:
+        """Lista de candidatos de la vuelta de busqueda: [[x, y, tipo], ...] (coords del juego). Nunca lanza."""
+        try:
+            return [[round(float(c.xy[0]), 1), round(float(c.xy[1]), 1), str(c.kind)]
+                    for c in list(self.bot.cands.items)[:UI_MAX_CANDIDATES]]
+        except Exception:  # noqa: BLE001 - un bot falso sin lista no debe romper el estado
+            return []
 
     def _items_by_type(self) -> list[dict]:
         """Objetos recogidos en la sesion por tipo: [{id, name, count}] con el nombre actual del catalogo."""
@@ -308,7 +317,7 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
     ap.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
-    ap.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Guabina - Oscuridad y Negro)")
+    ap.add_argument("--zona", default=None, help="perfil de zona (default: el de config.json o Ciudad 1)")
     dbg = ap.add_mutually_exclusive_group()
     dbg.add_argument("--debug", dest="debug", action="store_true", default=None, help="activa debug.enabled solo en esta corrida")
     dbg.add_argument("--sin-debug", dest="debug", action="store_false", help="desactiva debug.enabled solo en esta corrida")
@@ -364,9 +373,7 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     if not args.observar:   # marca de "a pie": la proxima corrida se sube si esta se corto a pie (F12)
         kwargs.setdefault("mount_marker", resolve_path(cfg["log"]["dir"]) / "a_pie.flag")
     if args.observar and cfg["spawns"]["enabled"] and "spawn_map" not in kwargs:   # observar lee el mapa pero NO lo escribe
-        sp = cfg["spawns"]
-        kwargs["spawn_map"] = SpawnMap(resolve_path(sp["file"]), float(sp["merge_u"]), respawn_s=float(sp["respawn_s"]),
-                                       revisit_s=float(sp["revisit_s"]), read_only=True)
+        kwargs["spawn_map"] = spawn_map_from_config(cfg["spawns"], read_only=True)
     if args.observar and "catalog" not in kwargs:   # observar no cuenta objetos: catalogo desactivado
         kwargs["catalog"] = ItemCatalog(None)
     bot = Bot(cfg, window, gi, control, alarm, **kwargs)

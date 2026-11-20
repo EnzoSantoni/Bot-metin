@@ -362,3 +362,52 @@ def test_validacion():
 
 def test_revive_es_perfil_de_personaje():
     assert kind_of(("revive",)) == "personaje" and kind_of(("revive", "auto_revive")) == "personaje"
+
+
+# ---------------------------------------------------------------- integracion con la vuelta de busqueda (Fase 6g)
+
+def _fake_bot(pos, death_pos, unknown=False, state=State.BUSCAR, n_cands=2):
+    from types import SimpleNamespace
+    from bot.candidates import CandidateMap
+    cands = CandidateMap(100.0, 10.0, 4.0, 0.5)
+    for i in range(n_cands):
+        cands.add((100.0 * i, 0.0), "metin_negro", True, 0.0)
+    return SimpleNamespace(state=state, _rv=None, _death_pos=death_pos, _rv_moved_unknown=unknown,
+                           tracker=SimpleNamespace(position=pos), ex={"candidate_merge_u": 12.0}, cands=cands)
+
+
+def test_revivir_aqui_no_descarta_los_candidatos():
+    b = _fake_bot(pos=(500.0, 150.0), death_pos=(503.0, 150.0))
+    Bot._check_revive_move(b)
+    assert len(b.cands) == 2 and b._death_pos is None
+
+
+def test_revivir_en_otro_lugar_descarta_los_candidatos():
+    b = _fake_bot(pos=(300.0, 90.0), death_pos=(503.0, 150.0))
+    Bot._check_revive_move(b)
+    assert len(b.cands) == 0 and b._death_pos is None
+
+
+def test_revivir_sin_saber_donde_murio_descarta_pero_espera_la_posicion():
+    b = _fake_bot(pos=None, death_pos=None, unknown=True)
+    Bot._check_revive_move(b)
+    assert len(b.cands) == 2 and b._rv_moved_unknown       # todavia no se lee la posicion
+    b.tracker.position = (500.0, 150.0)
+    Bot._check_revive_move(b)
+    assert len(b.cands) == 0 and not b._rv_moved_unknown
+
+
+def test_no_se_evalua_mientras_se_revive():
+    b = _fake_bot(pos=(300.0, 90.0), death_pos=(503.0, 150.0), state=State.REVIVIR)
+    Bot._check_revive_move(b)
+    assert len(b.cands) == 2 and b._death_pos is not None
+
+
+def test_habilidades_no_salen_durante_la_vuelta_ni_el_giro_hacia_un_candidato():
+    from types import SimpleNamespace
+    def safe(phase, walk=None):
+        b = SimpleNamespace(_scan=None, state=State.EXPLORAR, _walk=walk, _ex=SimpleNamespace(phase=phase))
+        return Bot._skill_safe(b, 0.0)
+    assert not safe("sweep") and not safe("aim")
+    assert safe("walk") and safe("cwalk")
+    assert not safe("walk", walk=object())

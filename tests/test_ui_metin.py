@@ -11,7 +11,7 @@ from bot.ui import controller as c
 from bot.ui.metin_editor import MetinEditor, metin_types, pretty_name, template_slugs
 
 ROOT = Path(__file__).resolve().parent.parent
-ZONA = "Guabina - Oscuridad y Negro"
+ZONA = "Ciudad 1"
 
 
 @pytest.fixture()
@@ -213,3 +213,28 @@ def test_humo_pestana_metin(tmp_path, profs):
             root.destroy()
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---------------------------------------------------------------- modo de deteccion lejana y candidatos en el estado
+
+def test_far_mode_se_guarda_en_el_perfil_de_servidor(profs):
+    from bot.ui import metin_editor as me
+    assert me.load_far_mode("Guabina", profs) == "ambos"            # el valor por defecto
+    path = me.save_far_mode("Guabina", "estructura", profs)
+    assert path.with_name(path.name + ".bak").exists()
+    assert load_profile("servidor", "Guabina", profs)["vision"]["far_metin"]["mode"] == "estructura"
+    assert load_profile("servidor", "Guabina", profs)["window_title"] == "Guabina"   # el resto queda igual
+    assert me.load_far_mode("Guabina", profs) == "estructura"
+    with pytest.raises(ValueError):
+        me.save_far_mode("Guabina", "otro", profs)
+    with pytest.raises(ValueError):
+        me.save_far_mode("", "color", profs)
+    assert set(me.FAR_MODE_LABELS) == {"color", "estructura", "ambos"}
+
+
+def test_parse_candidates_status():
+    assert c.parse_candidates_status([[1, 2, "piedra"], [3.5, 4, "metin_negro"]]) == [(1.0, 2.0, "piedra"), (3.5, 4.0, "metin_negro")]
+    assert c.parse_candidates_status([[1, 2], "x", [None, 1, "a"], [float("nan"), 1, "a"], [True, 1, "a"]]) == []
+    assert c.parse_candidates_status(None) == [] and c.parse_candidates_status({"a": 1}) == []
+    assert c.status_from_dict({"candidates": [[10, 20, "piedra"]]}).candidates == [(10.0, 20.0, "piedra")]
+    assert c.status_from_dict({}).candidates == []
