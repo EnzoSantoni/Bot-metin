@@ -5,13 +5,21 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 ## PARA ENZO AL LEVANTARSE (resumen de la noche del 2026-11-20)
 **Qué terminé:**
 - **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)**, con commit y push de cada uno (`103aae8`, `04fea11`, `0c66ec3`), 1167 tests. Detalle en "Fase 6d: qué cambió".
-- **`desarrollo`:**
+- **`desarrollo`** (1722 tests, último `4ed051f`):
   - Tiene todo `main` (`eb77fbc`).
   - Fase 12 parte 2, historial y objetos por tipo (`b3f3743`).
   - Fase 13, modo bichos (`e104243`).
-  - El estado de lo que vino después (Fase 14, interfaz completa, pausa automática, parada programada y revisión general) está en el PROGRESS.md de `desarrollo`.
+  - Fase 14, revivir al morir, apagado por defecto (`14e8b59`).
+  - Interfaz completa (`a289fcb`, `7ce9a7c`).
+  - Pausa automática y parada programada (`2941d4e`).
+  - Revisión general con sus correcciones (`a7ce748`).
+  - Detalle y pendientes, arriba del PROGRESS.md de `desarrollo`.
 
-**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto 1, en esta carpeta (`main`). Es lo que más cambió: elige el metin más cercano, va con hover y clic, camina con W/A/S/D sin girar la cámara y recoge sin clics.
+**Qué quedó pendiente en `main`:** 4 arreglos de la revisión general que también aplican acá (ver el PROGRESS.md de `desarrollo`) no están portados, porque pediste trabajar en `desarrollo`. Son casos raros: captcha justo mientras se sube al caballo, el tope de tiempo en medio de una recogida, y guardado de archivos no atómico.
+
+**Qué probar primero:**
+1. `PRUEBAS_ESTA_NOCHE.md`, punto 1, en esta carpeta (`main`). Es lo que más cambió: elige el metin más cercano, va con hover y clic, camina con W/A/S/D sin girar la cámara y recoge sin clics.
+2. Después, `desarrollo`: la interfaz (punto 9) y la pausa automática (punto 10).
 
 **Decisiones que tomé sin vos:** en "Decisiones tomadas sin Enzo", más abajo y en el PROGRESS.md de `desarrollo`.
 
