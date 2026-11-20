@@ -600,7 +600,7 @@ SUMMARY: list[tuple[str, list[tuple[str, str]]]] = [
         ("attack.discard_radius", "radio (u) para recordar un metin descartado: debug"),
         ("pickup.empty_confirm_cycles", "ciclos sin objetos antes de dar por terminado: cuanto tardan en aparecer"),
         ("pickup.max_seconds", "tope de la recogida: cronometra una real"),
-        ("pickup.press_interval_ms", "pausa entre Z: la mas corta con la que el juego recoge todo"),
+        ("pickup.z_interval_s", "pausa entre Z: la mas corta con la que el juego recoge sin perder pulsaciones"),
     ]),
 ]
 

@@ -177,7 +177,7 @@ class SimWorld(SimGame):
                  pickup_radius: float = 8.0, drop_radius: float = 4.0, drop_spec=DEFAULT_DROPS,
                  label_dist: float = 60.0, click_tol_px: float = 45.0, rotate_rate: float = math.radians(60),
                  far_dist: float = 150.0, mirror_ad: bool = False, turn_noise: tuple[float, float] | None = None,
-                 drifts=()) -> None:
+                 drifts=(), z_needed: int = 1) -> None:
         super().__init__(A0, phi, start, speed=speed, obstacles=obstacles, rng=rng, rotate_rate=rotate_rate)
         self.t = 0.0
         self.far_dist = far_dist               # las piedras se ven (sin etiqueta) hasta esta distancia
@@ -212,6 +212,8 @@ class SimWorld(SimGame):
         self.captcha_until = 0.0
         self.dead = False
         self.z_presses = 0
+        self.z_needed = z_needed           # retraso de la Z: Z seguidas estando cerca que necesita cada objeto
+        self._z_streak: dict[int, int] = {}
         self.events: list[tuple[float, object]] = []
         self.on_step: list[object] = []
 
@@ -335,8 +337,15 @@ class SimWorld(SimGame):
             return
         near = [i for i in self.items if i.kind == "item" and not i.reserved_other
                 and math.dist(i.pos, self.pos) <= self.pickup_radius]
+        if not near:
+            self._z_streak = {}
         if near:
             it = min(near, key=lambda i: math.dist(i.pos, self.pos))
+            n = self._z_streak.get(id(it), 0) + 1
+            self._z_streak = {id(it): n}   # Z seguidas sobre el mismo objeto; otra Z lejos o sobre otro lo reinicia
+            if n < self.z_needed:
+                return
+            self._z_streak = {}
             self.items.remove(it)
             self.picked.append(it)
 

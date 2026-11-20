@@ -543,7 +543,7 @@ def test_dismount_emparejado_aunque_haya_timeout():
             return perc(items=[item()])      # nunca se van: sale por timeout
         return perc(metins=[metin()] if State.RECOGER not in h.states() else [])
 
-    h = Harness(script, pickup={"dismount": True, "max_seconds": 1.0, "press_interval_ms": 100})
+    h = Harness(script, pickup={"dismount": True, "max_seconds": 1.0, "z_interval_s": 0.1})
     h.run_until(lambda: State.RECOGER in h.states() and h.bot.state is State.BUSCAR)
     assert h.keys("g") == 2 and h.keys("ctrl") == 2
     assert h.be.events.index(("key_down", "g")) < h.be.events.index(("key_down", "z"))

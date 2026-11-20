@@ -190,20 +190,28 @@ class _KeyLeg:
 
 
 @dataclass
+class _Cur:
+    """Objeto que se esta recogiendo (fijo hasta que desaparece o se abandona). `point` = ultimo click_point visto."""
+    point: tuple[int, int]
+    start_t: float                                  # desde que se empezo con este objeto (tope item_max_s)
+    z: int = 0                                      # Z apretadas sobre el
+    z_t: float = -math.inf                          # instante del ultimo Z
+    rep_t: float | None = None                      # desde cuando se espera (llegada o ultimo reacomodo)
+    repos: bool = False                             # reacomodandose: radio de llegada mas chico
+    gone: int = 0                                   # capturas seguidas sin verlo
+    moved: bool = False                             # el ciclo anterior camino: la etiqueta pudo correrse en pantalla
+
+
+@dataclass
 class _Pickup:
     """Recogida en curso a pie. Fase "look" (mirando si hay objetos validos, sin bajarse) y fase "collect"."""
     start_t: float                     # inicio de la fase vigente (el tope max_seconds cuenta desde que empieza a recoger)
     phase: str = "look"
     presses: int = 0
     empty: int = 0
-    last_n: int | None = None
-    last_action_t: float = -math.inf
-    tries: list = field(default_factory=list)       # [[punto, Z intentadas]] de objetos elegidos
-    ignored: list = field(default_factory=list)     # puntos de pantalla de objetos que no se pudieron juntar
-    anchor: tuple[int, int] | None = None           # posicion del jugador a la que valen `tries` e `ignored`
-    best_d: float = math.inf                        # menor distancia (px) del objeto mas cercano a los pies desde el ultimo avance
-    no_gain: int = 0                                # tramos seguidos sin acercarse `stall_gain_px`
-    nudge: bool = False                             # el ultimo Z no junto el objeto: antes del proximo, un tramo corto hacia el
+    cur: _Cur | None = None
+    ignored: list = field(default_factory=list)     # puntos de pantalla de objetos abandonados
+    anchor: tuple[int, int] | None = None           # posicion del jugador a la que vale `ignored`
 
 
 @dataclass
@@ -1416,17 +1424,12 @@ class Bot:
         valid = self._valid_items(p)
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
-        n = len(valid)
-        if k.last_n is not None and n < k.last_n:
-            self.stats.items += k.last_n - n
-            k.best_d, k.no_gain, k.nudge = math.inf, 0, False   # algo se junto: el siguiente objeto empieza de cero
-        k.last_n = n
         pos = self.tracker.position
         if k.anchor is not None and pos is not None and math.dist(pos, k.anchor) > float(self.pk["same_spot_u"]):
-            k.tries, k.ignored, k.anchor = [], [], None   # el jugador se movio: los puntos de pantalla ya no valen
+            k.ignored, k.anchor = [], None   # el jugador se movio: los puntos de pantalla ya no valen
         track = float(self.pk["track_px"])
         pending = [i for i in valid if not any(math.dist(i.click_point, q) <= track for q in k.ignored)]
-        k.empty = 0 if pending else k.empty + 1
+        k.empty = 0 if (pending or k.cur is not None) else k.empty + 1
         if k.empty >= int(self.pk["empty_confirm_cycles"]):
             return self._end_pickup(back, "no quedan objetos")
         if k.presses >= int(self.pk["max_presses"]):
@@ -1435,8 +1438,7 @@ class Bot:
             return self._end_pickup(back, "tiempo maximo recogiendo")
         if self._zone_status() is ZoneStatus.OUTSIDE:
             return self._end_pickup(State.VOLVER, "fuera de la zona recogiendo")
-        if pending:
-            self._pickup_step(k, p, t, pos, pending)
+        self._pickup_step(k, p, t, pos, pending)
         return None
 
     def _pickup_look(self, k: _Pickup, t: float, valid: list, back: State) -> Transition:
@@ -1458,78 +1460,84 @@ class Bot:
         k.phase, k.empty, k.start_t = "collect", 0, self.clock()   # el tiempo maximo cuenta desde que empieza a recoger
         return None
 
-    def _pickup_press(self, k: _Pickup, t: float, why: str) -> None:
-        """Z (cuenta para `max_presses`); `why` = motivo de llegada."""
-        logger.info("Recoger: llegue (%s) -> Z", why)
-        self.gi.press("pickup")
-        k.presses += 1
-        k.last_action_t = t
-
-    def _pickup_count_try(self, k: _Pickup, point: tuple[int, int], pos: tuple[int, int] | None) -> None:
-        track = float(self.pk["track_px"])
-        for e in k.tries:
-            if math.dist(e[0], point) <= track:
-                e[0], e[1] = point, e[1] + 1
-                break
-        else:
-            k.tries.append([point, 1])
-        if k.anchor is None:
-            k.anchor = pos
-
     def _item_point(self, it: Any) -> tuple[float, float]:
         """Punto del objeto en pantalla: centro inferior de su etiqueta mas `pickup.item_below_label_px`."""
         r = it.rect
         return r.x + r.w / 2.0, r.y + r.h + float(self.pk["item_below_label_px"])
 
+    def _pickup_follow(self, cur: _Cur, pending: list) -> Any | None:
+        """Etiqueta del objeto actual en esta captura (la mas cercana a su ultimo punto) o None. Tras caminar la etiqueta
+        se corre en pantalla: radio `track_px` + `full_step_px`."""
+        lim = float(self.pk["track_px"]) + (float(self.pk["full_step_px"]) if cur.moved else 0.0)
+        near = [i for i in pending if math.dist(i.click_point, cur.point) <= lim]
+        if not near:
+            return None
+        return min(near, key=lambda i: math.dist(i.click_point, cur.point))
+
     def _pickup_step(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
-        """Un ciclo de recogida (sin clics): el objeto pendiente mas cercano (distancia de piso) a <= `arrive_px` de los
-        pies -> Z; si no, un tramo corto con W/A/S/D hacia el. Tras un Z que no junto el objeto, un tramo corto antes
-        del proximo."""
-        feet, cfg = feet_of(p.player_xy, self.cfg), self.cfg
-        track, max_tries = float(self.pk["track_px"]), int(self.pk["tries_per_item"])
-        ranked = sorted(((self._item_point(i), i) for i in pending), key=lambda e: ground_dist(feet, e[0], p.shape, cfg))
-        for pt, it in ranked:
-            tries = next((e[1] for e in k.tries if math.dist(e[0], pt) <= track), 0)
-            if tries >= max_tries:
-                logger.info("Recoger: objeto en (%d, %d) no se puede juntar (%d intentos): lo ignoro", pt[0], pt[1], tries)
-                k.ignored.append(it.click_point)
-                if k.anchor is None:
-                    k.anchor = pos
-                continue
-            d = math.dist(pt, feet)
-            if d <= float(self.pk["arrive_px"]):
-                if t - k.last_action_t < float(self.pk["press_interval_ms"]) / 1000:
-                    return   # esperando que el ultimo Z haga efecto
-                if k.nudge:
-                    k.nudge = False
-                    self._pickup_walk(k, p, pt, d, nudge=True)
-                    return
-                self._pickup_count_try(k, it.click_point, pos)
-                self._pickup_press(k, t, f"objeto a {d:.0f} px")
-                k.nudge = True
+        """Un ciclo de recogida (sin clics) sobre el objeto actual: Z cada `z_interval_s` mientras su etiqueta siga; si no
+        desaparece, reacomodo a los `reposition_s` y abandono a los `item_max_s`."""
+        cur = k.cur
+        if cur is not None and t - cur.start_t >= float(self.pk["item_max_s"]):
+            logger.info("Recoger: me rindo con el objeto (%d, %d) tras %.0f s", cur.point[0], cur.point[1], t - cur.start_t)
+            k.ignored.append(cur.point)
+            if k.anchor is None:
+                k.anchor = pos
+            track = float(self.pk["track_px"])
+            pending = [i for i in pending if math.dist(i.click_point, cur.point) > track]
+            k.cur = cur = None
+        it = None
+        if cur is not None:
+            it = self._pickup_follow(cur, pending)
+            if it is None:
+                if cur.moved or cur.z == 0:
+                    k.cur = cur = None   # se perdio de vista caminando (o sin Z): se vuelve a elegir
+                else:
+                    cur.gone += 1
+                    if cur.gone < int(self.pk["gone_cycles"]):
+                        return   # puede ser un parpadeo: espero otra captura
+                    self.stats.items += 1
+                    logger.info("Recoger: objeto (%d, %d) recogido tras %d Z (%.1f s)", cur.point[0], cur.point[1],
+                                cur.z, t - cur.start_t)
+                    k.cur = cur = None
+        feet = feet_of(p.player_xy, self.cfg)
+        if cur is None:
+            if not pending:
                 return
-            k.nudge = False
-            self._pickup_stall(k, it.click_point, pos, d)
-            self._pickup_walk(k, p, pt, d, nudge=False)
+            it = min(pending, key=lambda i: ground_dist(feet, self._item_point(i), p.shape, self.cfg))
+            k.cur = cur = _Cur(it.click_point, t)
+        cur.point, cur.gone = it.click_point, 0
+        pt = self._item_point(it)
+        d = math.dist(pt, feet)
+        arrive = float(self.pk["arrive_px"]) * (float(self.pk["reposition_frac"]) if cur.repos else 1.0)
+        if d > arrive:
+            cur.moved = True
+            self._pickup_walk(p, pt, d)
             return
+        cur.moved = False
+        if cur.rep_t is None or cur.repos:
+            cur.rep_t, cur.repos = t, False
+        elif t - cur.rep_t >= float(self.pk["reposition_s"]):
+            logger.info("Recoger: reacomodo sobre el objeto (%d, %d)", cur.point[0], cur.point[1])
+            cur.rep_t = t
+            if d > float(self.pk["arrive_px"]) * float(self.pk["reposition_frac"]):
+                cur.repos, cur.moved = True, True
+                self._pickup_walk(p, pt, d)
+                return
+        if t - cur.z_t < float(self.pk["z_interval_s"]):
+            return   # esperando que el ultimo Z haga efecto
+        cur.z += 1
+        cur.z_t = t
+        k.presses += 1
+        logger.info("Recoger: objeto (%d, %d): Z (%d) esperando que desaparezca", cur.point[0], cur.point[1], cur.z)
+        self.gi.press("pickup")
 
-    def _pickup_stall(self, k: _Pickup, point: tuple[int, int], pos: tuple[int, int] | None, d: float) -> None:
-        """`stall_steps` tramos sin acercarse `stall_gain_px` al objeto cuentan como un intento."""
-        if d < k.best_d - float(self.pk["stall_gain_px"]):
-            k.best_d, k.no_gain = d, 0
-            return
-        k.no_gain += 1
-        if k.no_gain >= int(self.pk["stall_steps"]):
-            logger.info("Recoger: %d tramos sin acercarme al objeto en %s: cuenta como intento", k.no_gain, point)
-            self._pickup_count_try(k, point, pos)
-            k.best_d, k.no_gain = math.inf, 0
-
-    def _pickup_walk(self, k: _Pickup, p: Perception, pt: tuple[float, float], d: float, nudge: bool) -> None:
+    def _pickup_walk(self, p: Perception, pt: tuple[float, float], d: float) -> None:
         """Un tramo hacia el objeto en `pt` (a `d` px de los pies): sector de 45 grados de su direccion sobre el piso ->
         combinacion de teclas; dura `step_s` (proporcional a `d` hasta `full_step_px`, minimo `min_step_s`)."""
         combo = combo_toward_ground(feet_of(p.player_xy, self.cfg), pt, p.shape, self.cfg)
         lo, step = float(self.pk["min_step_s"]), float(self.pk["step_s"])
-        secs = lo if nudge else max(lo, min(step, step * d / float(self.pk["full_step_px"])))
+        secs = max(lo, min(step, step * d / float(self.pk["full_step_px"])))
         logger.info("Recoger: camino %s %.2f s hacia objeto (%d, %d) a %.0f px", combo, secs, pt[0], pt[1], d)
         self._hold_chunked(lambda s: self.gi.hold_keys(COMBO_ACTIONS[combo], s), secs)
 
