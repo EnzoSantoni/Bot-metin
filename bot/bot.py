@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from bot.capture import WindowMinimizedError, WindowNotFoundError
+from bot.config import resolve_path
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
@@ -25,6 +26,7 @@ from bot.ground import Goal, feet_of, ground_dist, rank_goals
 from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
+from bot.spawns import Spot, SpawnMap
 from bot.tracking import CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
@@ -183,6 +185,7 @@ class _Explore:
     steps: int = 0
     target: Xy | None = None
     walk_start: float = 0.0
+    spot: Spot | None = None           # punto del mapa de metin al que va este tramo (None = tramo al azar)
 
 
 @dataclass
@@ -236,13 +239,19 @@ class Bot:
                  sleep_fn: Callable[[float], None] | None = None, rng: random.Random | None = None,
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
                  coords_fn: Callable[[Any, dict], Any] = read_coords,
-                 mount_marker: Path | None = None) -> None:
+                 mount_marker: Path | None = None, spawn_map: SpawnMap | None = None) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
         self._sleep = sleep_fn or control.sleep
         self.rng = rng or random.Random()
         self.zone = FarmZone.from_config(cfg)
+        sp = cfg["spawns"]
+        if spawn_map is None:   # sin mapa inyectado: el del perfil si esta habilitado; si no, uno desactivado
+            spawn_map = SpawnMap(resolve_path(sp["file"]) if sp["enabled"] else None, float(sp["merge_u"]),
+                                 respawn_s=float(sp["respawn_s"]), revisit_s=float(sp["revisit_s"]))
+        self.spawns = spawn_map
+        self.sp = sp
         self.tracker = CoordTracker(cfg)
         self.camera = CameraModel(cfg)
         self.navigator = Navigator(cfg, self.zone, self.camera, self.rng)
@@ -952,6 +961,7 @@ class Bot:
         if broken:
             self.stats.metins += 1
             self._atk = None
+            self._record_spawn()
             if self._zone_status() is ZoneStatus.TOLERANCE:
                 self.pending_return = True
             return State.RECOGER, "metin roto"
@@ -1275,8 +1285,37 @@ class Bot:
     def _new_sweep(self) -> None:
         self._ex = _Explore(dir=self.rng.choice(("left", "right")))
 
+    def _record_spawn(self) -> None:
+        """Metin roto: guarda la posicion del personaje (pegado a la piedra) en el mapa de metin."""
+        pos = self.tracker.position
+        if pos is None or self.spawns.path is None:
+            return
+        s = self.spawns.record_broken(pos)
+        logger.info("Mapa de metin: guardo punto (%.0f, %.0f) (%d puntos conocidos)", s.x, s.y, len(self.spawns))
+
+    def _spawn_leg(self, x: _Explore, t: float) -> bool:
+        """Si hay un punto conocido listo, el tramo va hacia el: True. Si no, False (exploracion al azar)."""
+        pos = self.tracker.position
+        if pos is None or not len(self.spawns):
+            return False
+        spot = self.spawns.next_target(pos, self.zone.accepts)
+        if spot is None:
+            wait = self.spawns.seconds_until_ready(self.zone.accepts)
+            if wait is not None:
+                logger.info("Mapa de metin: ningun punto listo (proximo en %.0f s): exploro", wait)
+            return False
+        now = self.spawns.now()
+        logger.info("Mapa de metin: voy al punto (%.0f, %.0f) a %.0f u (roto hace %.1f min, visto hace %.1f min)",
+                    spot.x, spot.y, math.dist(pos, spot.xy), (now - spot.last_broken) / 60, (now - spot.last_visit) / 60)
+        x.spot, x.target, x.phase, x.walk_start = spot, spot.xy, "walk", t
+        self._dest = x.target
+        return True
+
     def _new_leg(self, x: _Explore, t: float) -> None:
         """Elige el proximo tramo recto: destino a `explore.border_margin` del borde y rumbo distinto de los recientes."""
+        x.spot = None
+        if self._spawn_leg(x, t):
+            return
         pos = self.tracker.position
         if pos is None:
             x.target = self.navigator.exploration_target()
@@ -1321,14 +1360,24 @@ class Bot:
                     return State.VOLVER, "barrido completo sin ver nada util cerca del borde"
                 self._new_leg(x, t)
             return None
-        res = self._walk_toward(p, t, x.target)
+        if x.spot is not None:
+            pos = self.tracker.position
+            res = ("arrived" if pos is not None and math.dist(pos, x.spot.xy) <= float(self.sp["arrive_u"])
+                   else self._walk_toward(p, t, x.target))
+            limit = float(self.sp["max_walk_s"])
+        else:
+            res, limit = self._walk_toward(p, t, x.target), float(self.ex["leg_s"])
         if res == "arrived":
             self._close_episode("llego al destino")
         if res == "stuck":
+            if x.spot is not None:   # no insistir con un punto al que no se puede llegar
+                self.spawns.mark_visited(x.spot)
             return self._stuck_transition(State.EXPLORAR, t, "trabado explorando")
-        timeout = t - x.walk_start >= float(self.ex["leg_s"])
+        timeout = t - x.walk_start >= limit
         if res in ("arrived", "blocked", "nocoords") or timeout:
             logger.info("Fin del tramo de exploracion (%s)", "tiempo" if timeout and res == "moving" else res)
+            if x.spot is not None:   # llegado o agotado: visitado; sigue el barrido de camara
+                self.spawns.mark_visited(x.spot)
             if self._walk is not None:   # parar antes del barrido
                 self._brake(p)
                 self._walk = None

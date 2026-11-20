@@ -21,6 +21,9 @@ DEFAULTS: dict[str, Any] = {
     "expected_client_size": [1858, 1057],
     "window": {"settle_ms": 500, "unobstructed_poll_ms": 50},
     "log": {"level": "INFO", "dir": "logs", "file": "bot.log"},
+    # Mapa de metin: puntos donde se rompio un metin (persisten entre sesiones). Ver config.example.jsonc.
+    "spawns": {"enabled": True, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
+               "arrive_u": 5.0, "max_walk_s": 40.0},
     # explore_every_s: cada cuanto guarda una imagen periodica mientras explora; max_images: tope por corrida;
     # jpeg_quality 1-100; max_per_kind: tope de imagenes por tipo de evento (estado, descarte, destrabe, ignorada,
     # equivocada, bloqueado, explorar = la periodica); reason_memory_s: un motivo de descarte que vuelve a aparecer antes
@@ -782,6 +785,14 @@ def validate_config(cfg: dict) -> None:
         raise ConfigError(f"log.level invalido: {level!r} (usa DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     _require_text(log.get("dir"), "log.dir")
     _require_text(log.get("file"), "log.file")
+    sp = _require_dict(cfg.get("spawns"), "spawns")
+    if not isinstance(sp.get("enabled"), bool):
+        raise ConfigError("spawns.enabled debe ser true o false")
+    _require_text(sp.get("file"), "spawns.file")
+    for k in ("merge_u", "respawn_s", "revisit_s", "arrive_u", "max_walk_s"):
+        v = sp.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"spawns.{k} debe ser un numero > 0")
     debug = _require_dict(cfg.get("debug"), "debug")
     if not isinstance(debug.get("enabled"), bool):
         raise ConfigError("debug.enabled debe ser true o false")

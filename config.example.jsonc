@@ -26,6 +26,17 @@
     "file": "bot.log"
   },
 
+  // Mapa de metin: al romper un metin se guarda la posicion del personaje (pegado a la piedra) con la hora. Cuando no
+  //  se ve ningun metin, el bot va al punto conocido mas cercano que ya reaparecio y no visito hace poco, en vez de
+  //  explorar al azar. Persiste entre sesiones (archivo JSON; borralo para empezar de cero). Con --observar no escribe.
+  //  enabled: usar el mapa. file: ruta (relativa al proyecto; la carpeta data/ esta en .gitignore).
+  //  merge_u: un metin roto a esta distancia (unidades) o menos de un punto conocido es el mismo punto.
+  //  respawn_s: segundos que tarda en reaparecer un metin (ESTIMADO: "a los pocos minutos").
+  //  revisit_s: no volver a un punto visitado hace menos de esto. arrive_u: llegada al punto (unidades).
+  //  max_walk_s: tope de caminata hacia un punto; al agotarlo se lo da por visitado.
+  "spawns": {"enabled": true, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
+             "arrive_u": 5.0, "max_walk_s": 40},
+
   "debug": {
     // true guarda capturas anotadas con lo detectado. Activalo solo para depurar: ocupa disco.
     "enabled": false,

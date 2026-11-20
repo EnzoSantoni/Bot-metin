@@ -71,6 +71,7 @@ class FakeAlarm:
 def make_cfg(**over):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
+    cfg["spawns"]["enabled"] = False
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     cfg["explore"].update(camera_steps=2, camera_step_s=0.01)
