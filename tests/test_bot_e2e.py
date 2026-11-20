@@ -218,9 +218,9 @@ def test_max_minutes_corta_con_motivo_tiempo():
 
 
 # ---------------------------------------------------------------- 12. robustez
-def random_world(seed):
+def random_world(seed, cfg=None):
     r = random.Random(seed)
-    env = SimEnv(seed, phi=r.uniform(-math.pi, math.pi), start=(r.uniform(470, 700), r.uniform(130, 185)),
+    env = SimEnv(seed, cfg=cfg, phi=r.uniform(-math.pi, math.pi), start=(r.uniform(470, 700), r.uniform(130, 185)),
                  a0=make_a0(r.uniform(0.15, 0.25), r.uniform(0.5, 1.0), r.random() < 0.3, r.random() < 0.3),
                  coords_noise=0.02 if seed % 2 else 0.0)
     z = env.zone
@@ -253,6 +253,20 @@ def test_robustez_mundos_aleatorios(seed):
     assert len(env.world.broken) >= 1 or any(t.new == "EXPLORAR" for t in env.transitions)
     for st, secs in env.max_state_seconds(ignore=("CAPTCHA", "EXPLORAR")).items():
         assert secs <= RANDOM_LIMITS.get(st, 5), (st, secs)
+    assert env.backend.pressed == ([], [])
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_robustez_mundos_aleatorios_con_teclado(seed):
+    """Mismos mundos al azar (camaras giradas, espejadas, inclinadas) con la caminata por coordenadas: VOLVER vuelve al tope
+    de 25 s (a ciegas por clic tardaba 40-46 s en 2 de 20 mundos)."""
+    env = random_world(seed, make_cfg(navigation={"mode": "teclado"}))
+    dist = env.track_zone()
+    assert env.run_until(max_s=300) == "limite"
+    assert max(dist) <= tol(env)
+    assert len(env.world.broken) >= 1 or any(t.new == "EXPLORAR" for t in env.transitions)
+    for st, secs in env.max_state_seconds(ignore=("CAPTCHA", "EXPLORAR")).items():
+        assert secs <= LIMITS.get(st, 5), (st, secs)
     assert env.backend.pressed == ([], [])
 
 

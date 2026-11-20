@@ -21,8 +21,8 @@ from bot.capture import WindowMinimizedError, WindowNotFoundError
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
-from bot.ground import Goal, rank_goals
-from bot.keynav import MAX_LEARN_TURN, KeyboardNav, screen_angle
+from bot.ground import Goal, feet_of, ground_dist, rank_goals
+from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
 from bot.tracking import CoordTracker, StuckEpisode
@@ -55,9 +55,9 @@ class State(Enum):
 # Partes de la percepcion que necesita cada estado (ventanas, mascara, captcha y muerte se calculan siempre).
 PARTS = {
     State.BUSCAR: {"metins", "coords", "far", "monsters"}, State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
-    State.RECOGER: {"items", "coords", "monsters"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
+    State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters"},
-    State.VOLVER: {"coords", "metins", "monsters"}, State.CENTRO: {"coords", "metins", "monsters"},
+    State.VOLVER: {"coords"}, State.CENTRO: {"coords"},   # volver al centro se guia solo por coordenadas
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
     State.MUERTO: set(), State.FIN: set(),
 }
@@ -69,9 +69,8 @@ END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
 LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
-SCREEN_LEARN_MIN = math.radians(25.0)   # giro por pantalla minimo para detectar Q/E al reves
-SCREEN_LEARN_GAP = math.radians(10.0)   # cuanto tiene que crecer el desvio tras girar para decir "al reves"
-MIN_TURN_RAD = math.radians(5.0)        # giros menores no se hacen
+SCREEN_COMBO_VEC = {"W": (0.0, -1.0), "W+D": (1.0, -1.0), "D": (1.0, 0.0), "S+D": (1.0, 1.0), "S": (0.0, 1.0),
+                    "S+A": (-1.0, 1.0), "A": (-1.0, 0.0), "W+A": (-1.0, -1.0)}   # direccion de pantalla de cada combinacion
 
 
 class _AvoidMask:
@@ -152,8 +151,9 @@ class _Walk:
 
 @dataclass
 class _KeyLeg:
-    """Un tramo de W ('up') o S ('down') ya hecho, pendiente de evaluar con la posicion del ciclo siguiente (teclado)."""
-    key: str
+    """Un tramo de teclas de movimiento ya hecho (`combo` = 'W', 'W+D', ...), pendiente de evaluar con la posicion del ciclo
+    siguiente (teclado)."""
+    combo: str
     before: tuple[int, int]
     seconds: float                     # segundos que la tecla estuvo sostenida
     end_t: float
@@ -161,21 +161,19 @@ class _KeyLeg:
 
 @dataclass
 class _Pickup:
-    """Recogida en curso. Fase "look" (mirando si hay objetos validos, sin bajarse) y fase "collect"."""
+    """Recogida en curso a pie. Fase "look" (mirando si hay objetos validos, sin bajarse) y fase "collect"."""
     start_t: float                     # inicio de la fase vigente (el tope max_seconds cuenta desde que empieza a recoger)
     phase: str = "look"
     presses: int = 0
     empty: int = 0
     last_n: int | None = None
     last_action_t: float = -math.inf
-    tgt: tuple[int, int] | None = None   # etiqueta clickeada y todavia en camino (punto de clic, se sigue entre ciclos)
-    click_t: float = 0.0
-    last_pos: tuple[int, int] | None = None   # ultima posicion distinta del jugador (para "quieto")
-    still_since: float = 0.0
     tries: list = field(default_factory=list)       # [[punto, Z intentadas]] de objetos elegidos
     ignored: list = field(default_factory=list)     # puntos de pantalla de objetos que no se pudieron juntar
     anchor: tuple[int, int] | None = None           # posicion del jugador a la que valen `tries` e `ignored`
-    warned_monster: bool = False
+    best_d: float = math.inf                        # menor distancia (px) del objeto mas cercano a los pies desde el ultimo avance
+    no_gain: int = 0                                # tramos seguidos sin acercarse `stall_gain_px`
+    nudge: bool = False                             # el ultimo Z no junto el objeto: antes del proximo, un tramo corto hacia el
 
 
 @dataclass
@@ -283,6 +281,7 @@ class Bot:
         self._vl_since: float | None = None   # entrada al VOLVER/CENTRO vigente (None fuera de ellos)
         self._vl_acc = 0.0                 # tiempo en VOLVER/CENTRO de tramos anteriores de la misma vuelta
         self._vl_mark: float | None = None    # medida de progreso al empezar el tramo
+        self._vl_margin = 0.0              # margen al borde con que termina el VOLVER en curso (0 = el comun, explore_margin)
         self._wrong: list[list] = []       # [posicion, veces] de selecciones equivocadas por metin
         self._zero_streak = 0
         self._last_click_vec: Xy | None = None
@@ -293,7 +292,6 @@ class Bot:
         self.kb = self.nav["keyboard"]
         self.keynav = KeyboardNav(cfg)
         self._leg: _KeyLeg | None = None
-        self._scr_turn: tuple[float, float] | None = None   # (angulo de pantalla ordenado, hora) del ultimo giro hacia una piedra
         self._target_slugs = target_slugs(cfg)
         self._frames = 0                   # percepciones completas hechas (para la compuerta de giros de busqueda)
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
@@ -409,6 +407,8 @@ class Bot:
             return
         logger.info("%s -> %s: %s", old.name, new.name, reason)
         self.state = new
+        if old is State.VOLVER and new is not State.DESTRABAR:
+            self._vl_margin = 0.0
         if old in (State.VOLVER, State.CENTRO) and self._vl_since is not None:
             self._vl_acc += self.clock() - self._vl_since
             self._vl_since = None
@@ -416,7 +416,7 @@ class Bot:
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
         self._walk = None
         if new not in WALKING_STATES and new is not State.DESTRABAR:
-            self._leg = self._scr_turn = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
+            self._leg = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
         if new not in (State.ACERCARSE, State.DESTRABAR):
             self._apr = None
         if new is State.BUSCAR:
@@ -465,7 +465,7 @@ class Bot:
             camline = (f"camara phi={math.degrees(cam.phi):.0f} escala={lo:.2f}-{hi:.2f} lista={cam.ready} "
                        f"giros={cam.rotations}")
             if self.kmode:
-                camline = "teclado " + self.keynav.describe()
+                camline = "teclado " + self.keynav.describe(full=True)
             dest = None if self._dest is None else (round(self._dest[0]), round(self._dest[1]))
             p = self.last_perception
             lines = [f"[{kind}] pos={pos} {zone}", camline, f"destino={dest} clic={self._planned}",
@@ -1146,17 +1146,6 @@ class Bot:
     def _valid_items(self, p: Perception) -> list:
         return [i for i in p.items if i.kind == "item" and not i.reserved_other and i.allowed]
 
-    def _monster_stuck(self, it: Any, p: Perception) -> bool:
-        """La etiqueta del objeto esta pegada a un nombre de monstruo (un clic ahi atacaria al monstruo)."""
-        gap, r = float(self.pk["monster_gap_px"]), it.rect
-        for m in p.monsters:
-            q = m.rect
-            dx = max(q.x - (r.x + r.w), r.x - (q.x + q.w), 0)
-            dy = max(q.y - (r.y + r.h), r.y - (q.y + q.h), 0)
-            if math.hypot(dx, dy) <= gap:
-                return True
-        return False
-
     def _do_recoger(self, p: Perception, t: float) -> Transition:
         k = self._pk
         if k is None:
@@ -1168,6 +1157,7 @@ class Bot:
         n = len(valid)
         if k.last_n is not None and n < k.last_n:
             self.stats.items += k.last_n - n
+            k.best_d, k.no_gain, k.nudge = math.inf, 0, False   # algo se junto: el siguiente objeto empieza de cero
         k.last_n = n
         pos = self.tracker.position
         if k.anchor is not None and pos is not None and math.dist(pos, k.anchor) > float(self.pk["same_spot_u"]):
@@ -1181,10 +1171,10 @@ class Bot:
             return self._end_pickup(back, "tope de pulsaciones de Z")
         if t - k.start_t >= float(self.pk["max_seconds"]):
             return self._end_pickup(back, "tiempo maximo recogiendo")
-        if k.tgt is not None:
-            self._pickup_walking(k, p, t, pos, pending)
-        elif pending and t - k.last_action_t >= float(self.pk["press_interval_ms"]) / 1000:
-            self._pickup_choose(k, p, t, pos, pending)
+        if self._zone_status() is ZoneStatus.OUTSIDE:
+            return self._end_pickup(State.VOLVER, "fuera de la zona recogiendo")
+        if pending:
+            self._pickup_step(k, p, t, pos, pending)
         return None
 
     def _pickup_look(self, k: _Pickup, t: float, valid: list, back: State) -> Transition:
@@ -1206,36 +1196,12 @@ class Bot:
         k.phase, k.empty, k.start_t = "collect", 0, self.clock()   # el tiempo maximo cuenta desde que empieza a recoger
         return None
 
-    def _pickup_press(self, k: _Pickup, t: float, why: str | None) -> None:
-        """Z (cuenta para `max_presses`); `why` = motivo de llegada (None: Z a ciegas, sin objeto clickeable)."""
-        if why is not None:
-            logger.info("Recoger: llegue (%s) -> Z", why)
+    def _pickup_press(self, k: _Pickup, t: float, why: str) -> None:
+        """Z (cuenta para `max_presses`); `why` = motivo de llegada."""
+        logger.info("Recoger: llegue (%s) -> Z", why)
         self.gi.press("pickup")
         k.presses += 1
-        k.last_action_t, k.tgt = t, None
-
-    def _pickup_walking(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
-        """Esperando llegar al objeto clickeado: Z cuando se cumple alguna condicion de llegada."""
-        if pos is not None and (k.last_pos is None or math.dist(pos, k.last_pos) >= 1.0):
-            k.last_pos, k.still_since = pos, t
-        track, still = float(self.pk["track_px"]), float(self.pk["still_s"])
-        near = [i for i in pending if math.dist(i.click_point, k.tgt) <= track]
-        lab = min(near, key=lambda i: math.dist(i.click_point, k.tgt)) if near else None
-        if lab is not None:
-            k.tgt = lab.click_point   # se sigue la etiqueta aunque la camara se mueva
-        if lab is None:
-            why = "se junto sola"
-        elif math.dist(lab.click_point, p.player_xy) <= float(self.pk["arrive_px"]):
-            why = "cerca de la etiqueta"
-        elif t - k.click_t >= still and t - k.still_since >= still:
-            why = "jugador quieto"
-        elif t - k.click_t >= float(self.pk["walk_timeout_s"]):
-            why = "tiempo de caminata"
-        else:
-            return
-        if lab is not None:
-            self._pickup_count_try(k, lab.click_point, pos)
-        self._pickup_press(k, t, why)
+        k.last_action_t = t
 
     def _pickup_count_try(self, k: _Pickup, point: tuple[int, int], pos: tuple[int, int] | None) -> None:
         track = float(self.pk["track_px"])
@@ -1248,34 +1214,62 @@ class Bot:
         if k.anchor is None:
             k.anchor = pos
 
-    def _pickup_choose(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
-        """Elige el objeto clickeable mas cercano al jugador (o solo Z si ninguno lo es)."""
+    def _item_point(self, it: Any) -> tuple[float, float]:
+        """Punto del objeto en pantalla: centro inferior de su etiqueta mas `pickup.item_below_label_px`."""
+        r = it.rect
+        return r.x + r.w / 2.0, r.y + r.h + float(self.pk["item_below_label_px"])
+
+    def _pickup_step(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
+        """Un ciclo de recogida (sin clics): el objeto pendiente mas cercano (distancia de piso) a <= `arrive_px` de los
+        pies -> Z; si no, un tramo corto con W/A/S/D hacia el. Tras un Z que no junto el objeto, un tramo corto antes
+        del proximo."""
+        feet, cfg = feet_of(p.player_xy, self.cfg), self.cfg
         track, max_tries = float(self.pk["track_px"]), int(self.pk["tries_per_item"])
-        clickable = [i for i in pending if not self._monster_stuck(i, p)]
-        if len(clickable) < len(pending) and not k.warned_monster:
-            k.warned_monster = True
-            logger.info("Etiqueta con monstruo pegado: no la clickeo")
-        if not clickable:
-            self._pickup_press(k, t, None)   # validos pero ninguno clickeable: solo Z
-            return
-        for it in sorted(clickable, key=lambda i: math.dist(i.click_point, p.player_xy)):
-            tries = next((e[1] for e in k.tries if math.dist(e[0], it.click_point) <= track), 0)
+        ranked = sorted(((self._item_point(i), i) for i in pending), key=lambda e: ground_dist(feet, e[0], p.shape, cfg))
+        for pt, it in ranked:
+            tries = next((e[1] for e in k.tries if math.dist(e[0], pt) <= track), 0)
             if tries >= max_tries:
-                logger.info("Recoger: objeto en %s no se puede juntar (%d intentos): lo ignoro", it.click_point, tries)
+                logger.info("Recoger: objeto en (%d, %d) no se puede juntar (%d intentos): lo ignoro", pt[0], pt[1], tries)
                 k.ignored.append(it.click_point)
                 if k.anchor is None:
                     k.anchor = pos
                 continue
-            d = math.dist(it.click_point, p.player_xy)
-            if d <= float(self.pk["arrive_px"]):   # ya esta encima: no hace falta caminar
+            d = math.dist(pt, feet)
+            if d <= float(self.pk["arrive_px"]):
+                if t - k.last_action_t < float(self.pk["press_interval_ms"]) / 1000:
+                    return   # esperando que el ultimo Z haga efecto
+                if k.nudge:
+                    k.nudge = False
+                    self._pickup_walk(k, p, pt, d, nudge=True)
+                    return
                 self._pickup_count_try(k, it.click_point, pos)
-                self._pickup_press(k, t, "ya estaba cerca")
+                self._pickup_press(k, t, f"objeto a {d:.0f} px")
+                k.nudge = True
                 return
-            logger.info("Recoger: clic en objeto (%d, %d) a %.0f px", it.click_point[0], it.click_point[1], d)
-            self._dbg("recoger", f"clic en objeto a {d:.0f} px")
-            self.gi.click_at(*it.click_point, p.mask)
-            k.tgt, k.click_t, k.last_pos, k.still_since = it.click_point, t, pos, t
+            k.nudge = False
+            self._pickup_stall(k, it.click_point, pos, d)
+            self._pickup_walk(k, p, pt, d, nudge=False)
             return
+
+    def _pickup_stall(self, k: _Pickup, point: tuple[int, int], pos: tuple[int, int] | None, d: float) -> None:
+        """`stall_steps` tramos sin acercarse `stall_gain_px` al objeto cuentan como un intento."""
+        if d < k.best_d - float(self.pk["stall_gain_px"]):
+            k.best_d, k.no_gain = d, 0
+            return
+        k.no_gain += 1
+        if k.no_gain >= int(self.pk["stall_steps"]):
+            logger.info("Recoger: %d tramos sin acercarme al objeto en %s: cuenta como intento", k.no_gain, point)
+            self._pickup_count_try(k, point, pos)
+            k.best_d, k.no_gain = math.inf, 0
+
+    def _pickup_walk(self, k: _Pickup, p: Perception, pt: tuple[float, float], d: float, nudge: bool) -> None:
+        """Un tramo hacia el objeto en `pt` (a `d` px de los pies): sector de 45 grados de su direccion sobre el piso ->
+        combinacion de teclas; dura `step_s` (proporcional a `d` hasta `full_step_px`, minimo `min_step_s`)."""
+        combo = combo_toward_ground(feet_of(p.player_xy, self.cfg), pt, p.shape, self.cfg)
+        lo, step = float(self.pk["min_step_s"]), float(self.pk["step_s"])
+        secs = lo if nudge else max(lo, min(step, step * d / float(self.pk["full_step_px"])))
+        logger.info("Recoger: camino %s %.2f s hacia objeto (%d, %d) a %.0f px", combo, secs, pt[0], pt[1], d)
+        self._hold_chunked(lambda s: self.gi.hold_keys(COMBO_ACTIONS[combo], s), secs)
 
     # ------------------------------------------------------------------ EXPLORAR
     def _new_sweep(self) -> None:
@@ -1306,6 +1300,9 @@ class Bot:
         if st is not None and st is not ZoneStatus.INSIDE:
             # La franja de tolerancia es para terminar un metin, no para explorar: un sondeo ciego alla puede salir.
             return State.VOLVER, "explorando fuera del poligono"
+        why = self._edge_return(x)
+        if why is not None:
+            return State.VOLVER, why
         idle = t - self._no_target_t
         if idle >= float(self.ex["max_without_metin_s"]):
             return State.CENTRO, f"sin ningun objetivo en {idle:.0f} s"
@@ -1318,6 +1315,10 @@ class Bot:
                 self._search_turn(x.dir, float(self.ex["camera_step_s"]))
                 x.steps += 1
             else:
+                pos = self.tracker.position
+                if pos is not None and self.zone.signed_distance(pos) < float(self.ex["border_margin"]):
+                    self._vl_margin = float(self.ex["border_margin"])   # esta vuelta termina bien adentro, no solo a explore_margin
+                    return State.VOLVER, "barrido completo sin ver nada util cerca del borde"
                 self._new_leg(x, t)
             return None
         res = self._walk_toward(p, t, x.target)
@@ -1332,6 +1333,24 @@ class Bot:
                 self._brake(p)
                 self._walk = None
             self._new_sweep()
+        return None
+
+    def _edge_return(self, x: _Explore) -> str | None:
+        """Motivo para volver al centro (por coordenadas) si el jugador esta adentro a menos de `explore.edge_return_u` del
+        borde y el tramo en curso se aleja del poligono; None si no."""
+        pos = self.tracker.position
+        if pos is None or x.phase != "walk" or x.target is None:
+            return None
+        reach = float(self.ex["edge_return_u"])
+        sd = self.zone.signed_distance(pos)
+        if sd >= reach:
+            return None
+        n = math.dist(pos, x.target)
+        if n < HOLD_EPS:
+            return None
+        ahead = (pos[0] + (x.target[0] - pos[0]) / n * reach, pos[1] + (x.target[1] - pos[1]) / n * reach)
+        if self.zone.signed_distance(ahead) < sd:
+            return "cerca del borde con el tramo alejandose del poligono"
         return None
 
     # ------------------------------------------------------------------ VOLVER y CENTRO
@@ -1357,7 +1376,8 @@ class Bot:
         target = self.navigator.return_target(pos)
         self._dest = target
         if kind is State.VOLVER:
-            arrived = self._inside_with_margin(pos) or self.navigator.arrived(pos, target)
+            arrived = (self.zone.signed_distance(pos) >= max(float(self.nav["explore_margin"]), self._vl_margin)
+                       or self.navigator.arrived(pos, target))
         else:
             arrived = math.dist(pos, target) <= float(self.ctr["arrive_dist"])
         if arrived:
@@ -1385,6 +1405,7 @@ class Bot:
 
     def _arrive_back(self, kind: State, t: float) -> Transition:
         self.pending_return = False
+        self._vl_margin = 0.0
         self._reset_return()
         self._close_episode("llego al destino")
         self._no_target_t = t   # el reloj de "sin objetivo" arranca de cero desde que se llega
@@ -1397,7 +1418,7 @@ class Bot:
         """Un ciclo de caminata: 'moving' | 'done' (tramo terminado) | 'cut' (tramo cortado: rumbo o zona) | 'arrived' |
         'stuck' | 'blocked' | 'nocoords'. Con `screen_vec` el clic va en esa direccion de PANTALLA (ACERCARSE)."""
         if self.kmode:
-            return self._walk_keys(p, t, target, screen_vec)
+            return self._walk_keys(p, t, target)
         pos = self.tracker.position
         if pos is None:
             return "nocoords"
@@ -1494,10 +1515,6 @@ class Bot:
         return "done"
 
     # ------------------------------------------------------------------ caminata con teclado
-    def _just_turned(self) -> bool:
-        """Hubo un giro de la vista hacia una piedra hace poco (todavia no se evaluo en `_walk_screen`)."""
-        return self._scr_turn is not None and self.clock() - self._scr_turn[1] <= LEG_MAX_AGE_S
-
     def _key_name(self, direction: str) -> str:
         return str(self.cfg["controls"]["camera_" + direction]).upper()
 
@@ -1509,14 +1526,14 @@ class Bot:
             self._after_leg(leg, pos)
 
     def _after_leg(self, leg: _KeyLeg, pos: tuple[int, int]) -> str | None:
-        """Evalua un tramo de W/S con la posicion de ahora: alimenta a `keynav` (rumbo, velocidad, sentido de Q/E) y
-        cuenta los tramos sin avance. Devuelve 'stuck' (varios tramos sin moverse), 'cut' (zona) o None."""
+        """Evalua un tramo de teclas con la posicion de ahora: alimenta a `keynav` (cam_h, A/D, velocidad, sentido de Q/E)
+        y cuenta los tramos sin avance. Devuelve 'stuck' (varios tramos sin moverse), 'cut' (zona) o None."""
         kn, limit = self.keynav, self.navigator.guard_limit()
         delta = (pos[0] - leg.before[0], pos[1] - leg.before[1])
         sd, sd0 = self.zone.signed_distance(pos), self.zone.signed_distance(leg.before)
-        if leg.key == "up" and leg.seconds > 0:
+        if leg.seconds > 0:
             edge = min(sd, sd0) < limit   # pasado de la guardia: no hay lugar para tramos largos, se mide con poco
-            ev = kn.observe(delta, leg.seconds, float(self.kb["edge_measure_u"]) if edge else None)
+            ev = kn.observe(delta, leg.seconds, float(self.kb["edge_measure_u"]) if edge else None, leg.combo)
             if ev == "externo":
                 self.camera.on_camera_rotated()
         need = min(float(self.stuck["min_move"]), 0.4 * kn.speed * leg.seconds)
@@ -1528,15 +1545,16 @@ class Bot:
             return "cut"
         return None
 
-    def _run_leg(self, key: str, seconds: float, pos: tuple[int, int]) -> str:
-        """W ('up') o S ('down') durante `seconds`, en tramos de `stuck.forward_chunk_s` con la zona chequeada entre tramos
-        (se corta si pasa de `guard_limit` y empeora), y deja el tramo para evaluarlo despues. 'ok' | 'guard' | 'captcha'
-        | 'blocked'."""
+    def _run_leg(self, combo: str, seconds: float, pos: tuple[int, int], bearing: float | None = None) -> str:
+        """Mantiene la combinacion `combo` ('W', 'W+D', ..., 'S') durante `seconds`, en tramos de `stuck.forward_chunk_s` con
+        la zona chequeada entre tramos (se corta si pasa de `guard_limit` y empeora), y deja el tramo para evaluarlo
+        despues. `bearing` (rumbo buscado, solo para el log). 'ok' | 'guard' | 'captcha' | 'blocked'."""
         limit = self.navigator.guard_limit()
         best, done = [self.zone.signed_distance(pos)], [0.0]
+        desc = self.keynav.describe(bearing=bearing)
 
         def hold(s: float) -> bool:
-            ok = self.gi.move_key(key, s)
+            ok = self.gi.hold_keys(COMBO_ACTIONS[combo], s)
             if ok:
                 done[0] += s
             return ok
@@ -1551,23 +1569,24 @@ class Bot:
 
         res = self._hold_chunked(hold, seconds, float(self.stuck["forward_chunk_s"]), guard)
         if done[0] > 0:
-            self._leg = _KeyLeg(key, pos, done[0], self.clock())
+            self._leg = _KeyLeg(combo, pos, done[0], self.clock())
             if done[0] > self.tracker.max_dt:   # un tramo largo: la proxima lectura puede estar mas lejos de lo que el filtro permite
                 self.tracker.forget_reference()
-            logger.info("Tramo: %s %.2f s | %s", "W" if key == "up" else "S", done[0], self.keynav.describe())
+            logger.info("Tramo: %s %.2f s | %s", combo, done[0], desc)
         return res
 
-    def _w_seconds(self, pos: tuple[int, int], secs: float) -> float | None:
-        """Segundos de W que no se pasan de la guardia de zona. Con rumbo medido se predice el punto final y se acorta el
-        tramo (None si ni el minimo entra); si no, se limita a lo que alcanza antes del limite en el peor caso."""
+    def _leg_seconds(self, pos: tuple[int, int], secs: float, combo: str) -> float | None:
+        """Segundos de `combo` que no se pasan de la guardia de zona. Con cam_h medido se predice el punto final y se acorta
+        el tramo (None si ni el minimo entra); si no, se limita a lo que alcanza antes del limite en el peor caso."""
         kn = self.keynav
         min_s, limit, sd = float(self.kb["min_step_s"]), self.navigator.guard_limit(), self.zone.signed_distance(pos)
         if kn.heading is not None and kn.measured:
+            ang = kn.heading + kn.offset(combo)
             for f in self.navigator.factors:
                 s = secs * f
                 if s < min_s - 1e-9:
                     break
-                end = (pos[0] + math.cos(kn.heading) * kn.speed * s, pos[1] + math.sin(kn.heading) * kn.speed * s)
+                end = (pos[0] + math.cos(ang) * kn.speed * s, pos[1] + math.sin(ang) * kn.speed * s)
                 e = self.zone.signed_distance(end)
                 if e >= limit or e >= sd:
                     return s
@@ -1575,26 +1594,19 @@ class Bot:
         room = sd - limit
         return max(min_s, room / kn.speed) if kn.speed * secs > room else secs
 
-    def _forward(self, pos: tuple[int, int], secs: float) -> str:
-        s = self._w_seconds(pos, max(secs, float(self.kb["min_step_s"])))
+    def _step(self, pos: tuple[int, int], combo: str, secs: float, bearing: float | None) -> str:
+        """Un tramo de `combo` (acortado por la guardia de zona). 'moving' | 'blocked' (ni el minimo entra)."""
+        s = self._leg_seconds(pos, max(secs, float(self.kb["min_step_s"])), combo)
         if s is None:
             return "blocked"
-        self._run_leg("up", s, pos)
+        self._run_leg(combo, s, pos, bearing)
         return "moving"
 
-    def _turn_view(self, delta: float, screen: bool = False) -> str:
-        """Gira la vista `delta` rad (positivo = derecha) con Q/E."""
-        direction, secs = self.keynav.plan_turn(delta)
-        logger.info("Tramo: giro %s %.2f s (%.0f grados) | %s", self._key_name(direction), secs, math.degrees(delta),
-                    self.keynav.describe())
-        self._rotate_camera(direction, secs)
-        if screen:
-            self._scr_turn = (delta, self.clock())
-        return "moving"
-
-    def _walk_keys(self, p: Perception, t: float, target: Xy, screen_vec: Xy | None) -> str:
-        """`_walk_toward` con teclado: a lo sumo UNA accion por ciclo (girar con Q/E o W unos segundos); la percepcion
-        corre entre tramos. Mismo contrato de retorno que el modo clic ('done' no se usa: el tramo siguiente arranca en el
+    def _walk_keys(self, p: Perception, t: float, target: Xy) -> str:
+        """`_walk_toward` con teclado, SIN girar la camara y sin mirar la imagen: a lo sumo UNA accion por ciclo (W/A/S/D
+        unos segundos); la lectura de coordenadas corre entre tramos. Elige la combinacion de las 8 cuyo cam_h + desvio
+        queda mas cerca del rumbo al destino; con cam_h desconocido (o estimado y A/D sin verificar) hace un tramo de
+        prueba con W. Mismo contrato de retorno que el modo clic ('done' no se usa: el tramo siguiente arranca en el
         mismo ciclo en que se evalua el anterior)."""
         pos = self.tracker.position
         if pos is None:
@@ -1604,33 +1616,15 @@ class Bot:
             res = self._after_leg(leg, pos)
             if res is not None:
                 return res
-        kn = self.keynav
-        if screen_vec is not None:
-            return self._walk_screen(pos, screen_vec)
         if self.navigator.arrived(pos, target):
             return "arrived"
-        if kn.heading is None:   # no se sabe hacia donde apunta W: un tramo corto para medirlo
-            return self._forward(pos, float(self.kb["probe_s"]))
-        diff = _wrap(math.atan2(target[1] - pos[1], target[0] - pos[0]) - kn.heading)
-        if abs(diff) > kn.align:
-            return self._turn_view(diff)
-        return self._forward(pos, min(float(self.kb["chunk_s"]), math.dist(pos, target) / kn.speed))
-
-    def _walk_screen(self, pos: tuple[int, int], vec: Xy) -> str:
-        """ACERCARSE con teclado: gira la vista hacia la piedra (angulo de pantalla) y camina con W. Si despues de girar
-        la piedra queda mas lejos del frente que antes, Q/E estan al reves: se corrige."""
         kn = self.keynav
-        th = screen_angle(vec)
-        prev, self._scr_turn = self._scr_turn, None
-        if prev is not None and self.clock() - prev[1] <= LEG_MAX_AGE_S and abs(prev[0]) >= SCREEN_LEARN_MIN \
-                and abs(prev[0]) <= math.radians(150.0):
-            real = _wrap(prev[0] - th)   # lo que se giro de verdad, con el signo del giro ordenado
-            if real * prev[0] < 0 and abs(real) > SCREEN_LEARN_GAP:
-                logger.warning("Q/E giran al reves de lo supuesto (la piedra quedo mas lejos del frente), corrijo")
-                kn.flip_keys()
-        if abs(th) > kn.align:
-            return self._turn_view(th, screen=True)
-        return self._forward(pos, float(self.kb["chunk_s"]))
+        bearing = math.atan2(target[1] - pos[1], target[0] - pos[0])
+        plan = kn.plan_walk(bearing)
+        combo = "W" if plan is None else plan[0]
+        if kn.needs_probe(combo):
+            return self._step(pos, "W", float(self.kb["probe_s"]), bearing)
+        return self._step(pos, combo, min(float(self.kb["chunk_s"]), math.dist(pos, target) / kn.speed), bearing)
 
     def _unstuck_keys_back(self, ep: StuckEpisode) -> str:
         """ATRAS con teclado: S durante `stuck.back_s`, en tramos con la zona chequeada."""
@@ -1640,21 +1634,18 @@ class Bot:
         ang = math.pi / 2   # abajo en pantalla
         ep.add_dir(self.camera.rotations, ang, self._game_angle(ang))
         self._mem = (self.clock(), self._mem_dirs(ep), ep.last_strategy)
-        return self._run_leg("down", float(self.stuck["back_s"]), pos)
+        return self._run_leg("S", float(self.stuck["back_s"]), pos)
 
     def _unstuck_keys_look(self, ep: StuckEpisode, ang: float) -> None:
-        """MIRAR con teclado: gira la vista hacia `ang` (angulo de pantalla) y camina con W `stuck.look_walk_s`."""
+        """MIRAR con teclado: camina `stuck.look_walk_s` hacia `ang` (angulo de pantalla) con la combinacion de W/A/S/D
+        mas cercana, sin girar la vista."""
         pos = self.tracker.position
+        combo = combo_for_screen_angle(screen_angle((math.cos(ang), math.sin(ang))))
+        ang = math.atan2(SCREEN_COMBO_VEC[combo][1], SCREEN_COMBO_VEC[combo][0])   # direccion de pantalla realmente caminada
         ep.add_dir(self.camera.rotations, ang, self._game_angle(ang))
         self._mem = (self.clock(), self._mem_dirs(ep), ep.last_strategy)
-        th = screen_angle((math.cos(ang), math.sin(ang)))
-        if abs(th) >= MIN_TURN_RAD:
-            direction, secs = self.keynav.plan_turn(th)
-            logger.info("MIRAR: giro %s %.2f s", self._key_name(direction), secs)
-            if not self._rotate_camera(direction, secs):
-                return   # captcha
         if pos is not None:
-            self._run_leg("up", float(self.stuck["look_walk_s"]), pos)
+            self._run_leg(combo, float(self.stuck["look_walk_s"]), pos)
 
     # ------------------------------------------------------------------ episodios de traba
     def _progress_metric(self, state: State, pos: tuple[int, int] | None = None) -> float | None:
@@ -1845,7 +1836,8 @@ class Bot:
         conoce el rumbo)."""
         if self.kmode:
             h = self.keynav.heading
-            return None if h is None else _wrap(h + screen_angle((math.cos(screen_ang), math.sin(screen_ang))))
+            return None if h is None else _wrap(
+                h + self.keynav.side * screen_angle((math.cos(screen_ang), math.sin(screen_ang))))
         if not self.camera.ready:
             return None
         g = self.camera.screen_to_game((math.cos(screen_ang), math.sin(screen_ang)))

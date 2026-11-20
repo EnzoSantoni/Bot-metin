@@ -189,7 +189,7 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
     assert h.bot.stats.metins == 1 and h.bot.stats.items == 1
     assert h.clicks() == 1 and h.keys("z") == 2 and h.keys("g") == 2   # 1 clic del ataque; el objeto esta encima: solo Z
     # las partes de percepcion que pide cada estado
-    assert ({"items", "coords", "monsters"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
+    assert ({"items", "coords"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
     assert all("panel" in c[1] for c in h.calls if c[0] is State.ATACAR)
 
 

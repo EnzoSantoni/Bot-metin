@@ -114,6 +114,7 @@ class SimBackend(FakeBackend):
         self.k_cam = {parse_keys(c["camera_left"])[0]: +1, parse_keys(c["camera_right"])[0]: -1}
         self.k_move = {parse_keys(c[f"move_{d}"])[0]: d for d in ("up", "down", "left", "right")}
         self.cursor = (0, 0)
+        self._move_held: set[str] = set()   # direcciones de movimiento apretadas (varias a la vez: W+D, etc.)
 
     def _log(self, *ev) -> None:
         self.events.append(ev)
@@ -142,9 +143,10 @@ class SimBackend(FakeBackend):
         elif key == self.k_mount[-1] and all(k in self._keys_down for k in self.k_mount):
             w.toggle_mount()
         elif key in self.k_cam:
-            w.rot_dir = self.k_cam[key]
+            w.start_rotate(self.k_cam[key])
         elif key in self.k_move:
-            w.key_move(self.k_move[key])
+            self._move_held.add(self.k_move[key])
+            w.set_move_keys(self._move_held)
         elif key == self.k_space:
             w.space_held = True
             if w.t - w.space_up_t > w.space_gap_tol:   # soltarla un instante entre tramos no corta el empujon
@@ -155,7 +157,8 @@ class SimBackend(FakeBackend):
         if key in self.k_cam:
             self.world.rot_dir = 0
         elif key in self.k_move:
-            self.world.key_move(None)
+            self._move_held.discard(self.k_move[key])
+            self.world.set_move_keys(self._move_held)
         elif key == self.k_space:
             self.world.space_held, self.world.space_up_t = False, self.world.t
 

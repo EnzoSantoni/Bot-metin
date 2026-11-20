@@ -176,10 +176,15 @@ class SimWorld(SimGame):
     def __init__(self, A0, phi: float, start, *, rng, speed: float = 10.0, obstacles=(), reach: float = 3.0,
                  pickup_radius: float = 8.0, drop_radius: float = 4.0, drop_spec=DEFAULT_DROPS,
                  label_dist: float = 60.0, click_tol_px: float = 45.0, rotate_rate: float = math.radians(60),
-                 far_dist: float = 150.0) -> None:
+                 far_dist: float = 150.0, mirror_ad: bool = False, turn_noise: tuple[float, float] | None = None,
+                 drifts=()) -> None:
         super().__init__(A0, phi, start, speed=speed, obstacles=obstacles, rng=rng, rotate_rate=rotate_rate)
         self.t = 0.0
         self.far_dist = far_dist               # las piedras se ven (sin etiqueta) hasta esta distancia
+        self.mirror_ad = mirror_ad             # A y D espejadas: A camina a la derecha y D a la izquierda
+        self.turn_noise = turn_noise           # (min, max): cada giro de camara real = factor al azar x lo pedido
+        self.rot_factor = 1.0
+        self.drifts = list(drifts)             # [(Box, (dx, dy))]: bajada que arrastra al personaje a dx, dy u/s
         # Monstruos que rodean al personaje: con >= 2 pegados no puede avanzar ni pegarle al metin hasta que mantiene
         # ESPACIO `space_needed_s`: los empuja `push_dist` unidades y abre un hueco de `gap_s` segundos.
         self.surround = 0
@@ -345,14 +350,31 @@ class SimWorld(SimGame):
 
     def key_move(self, direction: str | None) -> None:
         """Empieza (o termina con None) a caminar con W/A/S/D: 'up' = hacia donde apunta la camara (arriba en pantalla)."""
-        if direction is None:
+        self.set_move_keys(set() if direction is None else {direction})
+
+    def set_move_keys(self, dirs: set[str]) -> None:
+        """Teclas de movimiento apretadas ahora ('up' | 'down' | 'left' | 'right'): la direccion es la suma normalizada de
+        la direccion de juego de cada tecla (relativa a la camara), asi que W+D camina a 45 grados de W y de D."""
+        if not dirs:
             self.held_move = None
             return
-        sv = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}[direction]
-        g = self._m() @ np.asarray(sv, dtype=float)
-        n = float(np.hypot(*g))
-        self.held_move = g / n if n > 1e-9 else None
+        mirror = {"left": "right", "right": "left"} if self.mirror_ad else {}
+        total = np.zeros(2)
+        for d in dirs:
+            sv = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}[mirror.get(d, d)]
+            g = self._m() @ np.asarray(sv, dtype=float)
+            n = float(np.hypot(*g))
+            if n > 1e-9:
+                total += g / n
+        n = float(np.hypot(*total))
+        self.held_move = total / n if n > 1e-9 else None
         self.dest, self.chase = None, None
+
+    def start_rotate(self, direction: int) -> None:
+        """Empieza a girar la camara (+1 / -1); con `turn_noise`, el giro real sale de un factor al azar por pulsacion."""
+        self.rot_dir = direction
+        if self.turn_noise is not None:
+            self.rot_factor = self.rng.uniform(*self.turn_noise)
 
     # --- tiempo ---
     def advance(self, dt: float) -> None:
@@ -370,7 +392,7 @@ class SimWorld(SimGame):
 
     def _physics(self, h: float) -> None:
         if self.rot_dir:
-            self.rotate(h, self.rot_dir)
+            self.rotate(h, self.rot_dir * self.rot_factor)
         if self.space_held:
             self.space_t += h
             if self.surrounded and self.space_t >= self.space_needed_s:
@@ -381,6 +403,7 @@ class SimWorld(SimGame):
             nxt = self.pos + self.held_move * self.speed * h
             if not self.hits(*nxt):
                 self.pos = nxt
+            self._drift(h)
             return
         ch = self.chase
         if ch is not None:
@@ -400,6 +423,14 @@ class SimWorld(SimGame):
         super().advance(h)
         if ch is not None and self.chase is ch:
             self.dest = None   # se recalcula en cada subpaso
+
+    def _drift(self, h: float) -> None:
+        """Bajada: dentro de la caja de cada `drifts` se arrastra al personaje."""
+        for box, (dx, dy) in self.drifts:
+            if box.contains(*self.pos):
+                nxt = self.pos + np.array([dx, dy], dtype=float) * h
+                if not self.hits(*nxt):
+                    self.pos = nxt
 
     def _hit(self, m: SimMetin, h: float) -> None:
         if not m.alive or m.invulnerable:
