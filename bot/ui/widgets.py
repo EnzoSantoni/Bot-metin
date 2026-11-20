@@ -77,9 +77,19 @@ def tab_frame(notebook: ttk.Notebook, title: str) -> ttk.Frame:
     return f
 
 
-def note(parent: tk.Misc, text: str, style: str = "Muted.TLabel", wrap: int = WRAP) -> ttk.Label:
-    """Texto explicativo corto (varias lineas, color atenuado)."""
-    return ttk.Label(parent, text=text, style=style, wraplength=wrap, justify="left")
+def note(parent: tk.Misc, text: str, style: str = "Muted.TLabel", wrap: int = WRAP, fluid: bool = False) -> ttk.Label:
+    """Texto explicativo corto (varias lineas, color atenuado). Con `fluid` (para los que van con pack fill="x") el
+    ajuste de linea sigue el ancho de la ventana."""
+    lab = ttk.Label(parent, text=text, style=style, wraplength=wrap, justify="left")
+    if fluid:
+        make_fluid(lab)
+    return lab
+
+
+def make_fluid(label: ttk.Label) -> ttk.Label:
+    """Hace que el ajuste de linea de `label` siga su ancho real (para los que van con fill="x" o sticky="ew")."""
+    label.bind("<Configure>", lambda e: label.configure(wraplength=max(120, e.width - 4)))
+    return label
 
 
 class Tooltip:
@@ -160,7 +170,7 @@ class ValidatedEntry(ttk.Frame):
         self.entry = ttk.Entry(self, textvariable=self.var, width=width)
         self.entry.pack(fill="x")
         self.msg = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.msg, style="Error.TLabel").pack(fill="x")
+        self._msg_label = ttk.Label(self, textvariable=self.msg, style="Error.TLabel")   # solo se ve con error
         self.error: str | None = None
         if tooltip:
             add_tooltip(self.entry, tooltip)
@@ -182,5 +192,118 @@ class ValidatedEntry(ttk.Frame):
         self.error = self.validator(self.var.get())
         self.entry.configure(style="Invalid.TEntry" if self.error else "TEntry")
         self.msg.set(self.error or "")
+        if self.error:
+            self._msg_label.pack(fill="x")
+        else:
+            self._msg_label.pack_forget()
         if self.on_change is not None:
             self.on_change()
+
+
+COLOR_BANNER_BG = "#fff3cd"
+COLOR_BANNER_FG = "#664d03"
+COLOR_BANNER_BORDER = "#e0b000"
+
+
+class OverrideStrip(tk.Frame):
+    """Franja amarilla de aviso ("config.json pisa estas claves") con el botón de migrar. Se muestra solo si tiene texto.
+    `anchor_pack` son las opciones de pack con las que se ubica cuando aparece (por ejemplo `before=notebook`)."""
+
+    def __init__(self, parent: tk.Misc, on_migrate: Callable[[], None], *, pack_opts: dict | None = None) -> None:
+        super().__init__(parent, background=COLOR_BANNER_BG, highlightthickness=1, highlightbackground=COLOR_BANNER_BORDER,
+                         padx=PAD, pady=GAP_S)
+        self.pack_opts = {"fill": "x", "pady": (0, GAP), **(pack_opts or {})}
+        self.label = tk.Label(self, text="", background=COLOR_BANNER_BG, foreground=COLOR_BANNER_FG, justify="left",
+                              anchor="w", wraplength=700)
+        self.label.pack(side="left", fill="x", expand=True)
+        self.button = ttk.Button(self, text="Migrar config.json a los perfiles", command=on_migrate)
+        self.button.pack(side="right", padx=(PAD, 0))
+        add_tooltip(self.button, "Mueve a los perfiles lo que config.json define, para poder editarlo desde acá. "
+                                 "Pide confirmación y guarda config.json.bak.")
+        self.bind("<Configure>", lambda e: self.label.configure(wraplength=max(200, e.width - self.button.winfo_reqwidth() - 4 * PAD)))
+        self.visible = False
+
+    def set_text(self, text: str) -> None:
+        """Muestra la franja con `text` o la oculta si está vacío."""
+        self.label.configure(text=text)
+        if text and not self.visible:
+            self.pack(**self.pack_opts)
+            self.visible = True
+        elif not text and self.visible:
+            self.pack_forget()
+            self.visible = False
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.button.configure(state="normal" if enabled else "disabled")
+
+
+class ScrollFrame(ttk.Frame):
+    """Marco con barra de scroll vertical (se usa en las pestañas largas para que la ventana pueda achicarse).
+    Los widgets van en `.body`; la rueda del mouse mueve el scroll mientras el puntero está encima."""
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent)
+        self.canvas = tk.Canvas(self, background=COLOR_BG, highlightthickness=0, borderwidth=0)
+        self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.vbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.body = ttk.Frame(self.canvas)
+        self._win = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.body.bind("<Configure>", lambda _e: self._update())
+        self.canvas.bind("<Configure>", self._on_canvas)
+        self.canvas.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._wheel))
+        self.canvas.bind("<Leave>", lambda _e: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _on_canvas(self, event: tk.Event) -> None:
+        self.canvas.itemconfigure(self._win, width=event.width)
+        self._update()
+
+    def _update(self) -> None:
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        need = self.body.winfo_reqheight() > self.canvas.winfo_height() > 1
+        if not need:
+            self.canvas.yview_moveto(0)
+
+    def _wheel(self, event: tk.Event) -> None:
+        if self.body.winfo_reqheight() > self.canvas.winfo_height():
+            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+
+def heading_tooltips(tree: ttk.Treeview, tips: dict[str, str]) -> Tooltip:
+    """Tooltip por columna al pasar el mouse por el encabezado de una tabla. `tips`: id de columna ("#0" para la del árbol)
+    -> texto. Devuelve el Tooltip (su `show`/`hide` se pueden usar a mano)."""
+    tip = Tooltip(tree, "")
+    state: dict[str, str | None] = {"col": None}
+
+    def column_id(event: tk.Event) -> str | None:
+        if tree.identify_region(event.x, event.y) != "heading":
+            return None
+        num = tree.identify_column(event.x)
+        if num == "#0":
+            return "#0"
+        try:
+            return str(tree.cget("displaycolumns")[int(num[1:]) - 1]) if tree.cget("displaycolumns") != ("#all",) \
+                else str(tree.cget("columns")[int(num[1:]) - 1])
+        except (ValueError, IndexError, tk.TclError):
+            return None
+
+    def on_motion(event: tk.Event) -> None:
+        col = column_id(event)
+        if col == state["col"]:
+            return
+        state["col"] = col
+        text = tips.get(col or "")
+        if text:
+            tip.show(event.x_root + 12, event.y_root + 18, text)
+        else:
+            tip.hide()
+
+    def on_leave(_event: tk.Event) -> None:
+        state["col"] = None
+        tip.hide()
+
+    tree.bind("<Motion>", on_motion, add="+")
+    tree.bind("<Leave>", on_leave, add="+")
+    tip.heading_column = lambda event: column_id(event)   # type: ignore[attr-defined]  # para probarlo sin mouse real
+    return tip

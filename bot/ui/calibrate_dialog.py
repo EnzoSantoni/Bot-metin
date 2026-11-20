@@ -1,4 +1,4 @@
-"""Ventana tkinter que corre `calibrate.py metin|zona` como subproceso: instrucciones paso a paso, salida en vivo y las
+"""Ventana tkinter que corre `calibrate.py` (metin, zona, personaje, migrar) como subproceso: instrucciones paso a paso, salida en vivo y las
 preguntas del script respondibles desde la ventana (Si/No o texto por stdin). La logica pura esta en calibrate_runner.py."""
 from __future__ import annotations
 
@@ -24,7 +24,8 @@ class CalibrateDialog:
 
     def __init__(self, parent: tk.Misc, title: str, steps: tuple[str, ...], command_factory: Callable[[str], list[str]],
                  on_finish: Callable[[int | None], None], *, name_label: str = "",
-                 name_validator: Callable[[str], str | None] | None = None, process: ctl.BotProcess | None = None) -> None:
+                 name_validator: Callable[[str], str | None] | None = None, process: ctl.BotProcess | None = None,
+                 name_tooltip: str = "", autostart: bool = False) -> None:
         self.command_factory, self.on_finish = command_factory, on_finish
         self.proc = process or ctl.BotProcess()
         self.started = False
@@ -47,7 +48,7 @@ class CalibrateDialog:
         if name_validator is not None:
             ttk.Label(row, text=name_label or "Nombre:").pack(side="left")
             self.name_entry = ValidatedEntry(row, name_validator, width=32, on_change=self._refresh_start,
-                                             tooltip="Nombre del tipo de metin tal como se ve en el juego, por ejemplo Metin de Hielo.")
+                                             tooltip=name_tooltip or "Nombre del tipo de metin tal como se ve en el juego, por ejemplo Metin de Hielo.")
             self.name_entry.pack(side="left", padx=GAP)
         self.btn_start = ttk.Button(row, text="Empezar", command=self.start)
         self.btn_start.pack(side="left")
@@ -76,6 +77,8 @@ class CalibrateDialog:
         self.btn_send = ttk.Button(self.answer_row, text="Enviar", command=lambda: self.answer(self.text_var.get()))
         self.text_entry.bind("<Return>", lambda _e: self.answer(self.text_var.get()))
         self._refresh_start()
+        if autostart:
+            self.start()
 
     # ------------------------------------------------------------------ estado
     def _refresh_start(self) -> None:

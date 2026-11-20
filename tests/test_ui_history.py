@@ -50,7 +50,7 @@ def test_humo_pestanas_historial_objetos_y_en_vivo(tmp_path):
         assert tabs == ["Control", "Metin", "Zona", "Modo bichos", "Personaje", "Habilidades", "Historial", "Objetos"]
         # historial: la mas nueva arriba, totales y detalle de la elegida
         assert app.hist_tree.get_children() == ("1", "0")
-        assert "Hoy: 1 sesion" in app.hist_today.get() and "Total: 2 sesiones" in app.hist_total.get()
+        assert "Hoy: 1 sesión" in app.hist_today.get() and "Total: 2 sesiones" in app.hist_total.get()
         app.hist_tree.selection_set("1")
         app.root.update()
         detail = app.hist_detail.get("1.0", "end")

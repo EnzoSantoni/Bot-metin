@@ -36,6 +36,28 @@ ZONA_STEPS = (
 )
 
 
+PERSONAJE_TITLE = "Crear un personaje (nombre amarillo)"
+PERSONAJE_CAPTURE_TITLE = "Capturar el nombre amarillo"
+PERSONAJE_STEPS = (
+    "1. Poné el juego al frente y dejá en el piso un objeto reservado para tu personaje (de un metin que rompiste o que "
+    "tiraste vos), de modo que se vea su nombre amarillo (\"Nombre's\") encima y sin nada tapándolo.",
+    "2. Poné el mouse cerca de ese nombre amarillo y apretá F9. Acá abajo aparece lo que eligió el programa: respondé Sí "
+    "si es correcto o No para elegir otro (mové el mouse y F9 de nuevo).",
+    "3. Respondé Sí a guardar: se crea (o actualiza) el perfil con la plantilla del nombre amarillo.",
+    "4. Opcional: el programa pide también el nombre del panel de arriba (clic en tu personaje y F9). F10 saltea este paso. "
+    "Si pregunta si dejar el perfil como activo en config.json, respondé como prefieras.",
+    "F12 cancela todo sin guardar. Esta ventana no manda teclas ni clics al juego.",
+)
+
+MIGRAR_TITLE = "Migrar config.json a los perfiles"
+MIGRAR_STEPS = (
+    "Esta ventana muestra el plan: qué valores de config.json pasan a cada perfil y qué queda en config.json.",
+    "Antes de escribir se guarda config.json.bak (y un .bak de cada perfil que cambia). Si la migración cambiara la "
+    "configuración con la que corre el bot, no se hace nada.",
+    "Cuando el programa pregunte, respondé Sí para migrar o No para dejar todo como está. Al terminar se recarga todo.",
+)
+
+
 def validate_metin_name(name: str, existing: list[str]) -> str | None:
     """None si el nombre sirve para un tipo nuevo; si no, el mensaje. `existing` = nombres de los tipos que ya hay."""
     name = name.strip()
@@ -51,19 +73,24 @@ def validate_metin_name(name: str, existing: list[str]) -> str | None:
 def build_calibrate_command(sub: str, *, nombre: str | None = None, servidor: str = "", personaje: str = "", zona: str = "",
                             config: str | None = None, python: str | None = None,
                             script: str | Path = CALIBRATE) -> list[str]:
-    """Linea de comandos de `calibrate.py <metin|zona> --ui --en-perfil` con los perfiles elegidos. Sin `--si`: las
-    preguntas las responde la persona desde la ventana."""
-    if sub not in ("metin", "zona"):
+    """Linea de comandos de `calibrate.py <metin|zona|personaje|perfiles-migrar> --ui` con los perfiles elegidos. Sin
+    `--si`: las preguntas las responde la persona desde la ventana. `personaje` no pasa `--personaje` (el nombre es
+    el del perfil, que puede no existir todavia); `perfiles-migrar` corre `perfiles migrar`."""
+    if sub not in ("metin", "zona", "personaje", "perfiles-migrar"):
         raise ValueError(f"subcomando no soportado desde la interfaz: {sub}")
-    cmd = [python or ctl.gui_python(), "-u", str(script), sub]
-    if sub == "metin":
+    cmd = [python or ctl.gui_python(), "-u", str(script)]
+    cmd += ["perfiles", "migrar"] if sub == "perfiles-migrar" else [sub]
+    if sub in ("metin", "personaje"):
         if not nombre or not nombre.strip():
-            raise ValueError("falta el nombre del metin")
+            raise ValueError("falta el nombre del metin" if sub == "metin" else "falta el nombre del personaje")
+        if nombre.strip().startswith("-"):
+            raise ValueError("el nombre no puede empezar con un guion")
         cmd.append(nombre.strip())
-    cmd += ["--ui", "--en-perfil"]
+    cmd += ["--ui"] if sub in ("personaje", "perfiles-migrar") else ["--ui", "--en-perfil"]
     if config:
         cmd += ["--config", config]
-    for flag, value in (("--servidor", servidor), ("--personaje", personaje), ("--zona", zona)):
+    flags = (("--servidor", servidor), ("--zona", zona)) if sub == "personaje" else         (("--servidor", servidor), ("--personaje", personaje), ("--zona", zona))
+    for flag, value in flags:
         if value:
             cmd += [flag, value]
     return cmd

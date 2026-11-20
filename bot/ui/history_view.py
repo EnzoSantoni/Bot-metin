@@ -91,7 +91,7 @@ def session_detail(session: dict, catalog: ItemCatalog) -> str:
 
 def summary_text(label: str, s: Summary) -> str:
     """Texto de los totales (Hoy / Total)."""
-    head = f"{label}: {s.sessions} sesion{'es' if s.sessions != 1 else ''}, {format_duration(s.duration_s)}, " \
+    head = f"{label}: {s.sessions} sesi{'ón' if s.sessions == 1 else 'ones'}, {format_duration(s.duration_s)}, " \
            f"{s.metins} metin, {s.items} objetos"
     parts = []
     if s.metins_by_type:

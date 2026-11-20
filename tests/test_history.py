@@ -113,7 +113,7 @@ def test_detalle_y_totales_texto(cat):
     assert "S / P / Z" in d and "Metin de oscuridad: 2" in d and "Objeto 1: 3" in d and "Objeto sin identificar: 1" in d
     assert "tope de tiempo" in d and "habilidades: 6" in d
     hoy, total = hv.totals_texts([r], cat, now=T0 + timedelta(hours=1))
-    assert hoy.startswith("Hoy: 1 sesion, 10 min 00 s, 3 metin, 4 objetos") and "Objeto 1 3" in total
+    assert hoy.startswith("Hoy: 1 sesión, 10 min 00 s, 3 metin, 4 objetos") and "Objeto 1 3" in total
     assert hv.totals_texts([r], cat, now=T0 + timedelta(days=2))[0].startswith("Hoy: 0 sesiones")
     assert hv.session_detail({"inicio": "2026-11-20T10:00:00"}, cat)       # sesion minima no rompe
 

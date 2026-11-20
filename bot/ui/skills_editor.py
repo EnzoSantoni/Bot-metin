@@ -44,7 +44,7 @@ def validate_skill(skill: dict) -> list[str]:
     except ConfigError as e:
         msg = str(e).replace("character.skills[0].", "")
         if msg.endswith("usa la tecla de panico o de pausa"):
-            msg = msg.replace("usa la tecla de panico o de pausa", "choca con F11 o F12 (pausa y panico del bot)")
+            msg = msg.replace("usa la tecla de panico o de pausa", "choca con F11 o F12 (pausa y pánico del bot)")
         return [msg]
     return []
 
@@ -83,17 +83,19 @@ def parse_seconds(text: str, what: str) -> float:
     try:
         v = float(str(text).strip().replace(",", "."))
     except ValueError as e:
-        raise ValueError(f"{what} tiene que ser un numero.") from e
+        raise ValueError(f"{what} tiene que ser un número.") from e
     if v != v or v in (float("inf"), float("-inf")):
-        raise ValueError(f"{what} tiene que ser un numero finito.")
+        raise ValueError(f"{what} tiene que ser un número finito.")
     return v
 
 
 def remaining_text(remaining_s: float) -> str:
-    """Tiempo restante para mostrar: 'ya' si vencio, si no mm:ss (redondeado hacia arriba)."""
-    if remaining_s <= 0:
+    """Tiempo restante para mostrar: 'ya' si vencio, si no mm:ss (h:mm:ss desde la hora), redondeado hacia arriba."""
+    if remaining_s != remaining_s or remaining_s <= 0:
         return "ya"
     s = int(remaining_s) + (0 if remaining_s == int(remaining_s) else 1)
+    if s >= 3600:
+        return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
     return f"{s // 60:02d}:{s % 60:02d}"
 
 

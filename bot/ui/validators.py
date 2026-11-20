@@ -58,3 +58,26 @@ def game_key(text: str) -> str | None:
             return "Choca con F11 o F12 (pausa y pánico del bot)."
         return f"La tecla {text!r} no existe."
     return None
+
+
+def positive_int(text: str) -> str | None:
+    """Entero mayor o igual que 1."""
+    try:
+        v = int(str(text).strip())
+    except ValueError:
+        return "Tiene que ser un número entero."
+    return None if v >= 1 else "Tiene que ser 1 o más."
+
+
+def optional_game_key(text: str) -> str | None:
+    """Como `game_key`, pero vacío vale (significa "no usar")."""
+    return None if not str(text).strip() else game_key(text)
+
+
+def optional_file(text: str) -> str | None:
+    """Ruta de un archivo que existe, o vacío ("no usar"). Las rutas relativas se toman desde la carpeta del proyecto."""
+    from bot.config import resolve_path
+    text = str(text).strip()
+    if not text:
+        return None
+    return None if resolve_path(text).is_file() else "No existe ese archivo."

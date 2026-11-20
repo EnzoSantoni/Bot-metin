@@ -52,7 +52,7 @@ def validate_options(opts: UiOptions) -> list[str]:
     errors = []
     mm = opts.max_minutes
     if not isinstance(mm, (int, float)) or isinstance(mm, bool) or mm != mm or mm < 0 or mm == float("inf"):
-        errors.append("El tiempo maximo tiene que ser 0 (sin limite) o mayor que 0.")
+        errors.append("El tiempo máximo tiene que ser 0 (sin límite) o mayor que 0.")
     for k in KINDS:
         if not getattr(opts, k):
             errors.append(f"Falta elegir el perfil de {k}.")
@@ -64,9 +64,9 @@ def parse_minutes(text: str) -> float:
     try:
         v = float(str(text).strip().replace(",", "."))
     except ValueError as e:
-        raise ValueError("El tiempo maximo tiene que ser un numero (0 = sin limite).") from e
+        raise ValueError("El tiempo máximo tiene que ser un número (0 = sin límite).") from e
     if v != v or v < 0 or v == float("inf"):
-        raise ValueError("El tiempo maximo tiene que ser 0 (sin limite) o mayor que 0.")
+        raise ValueError("El tiempo máximo tiene que ser 0 (sin límite) o mayor que 0.")
     return v
 
 
@@ -315,7 +315,7 @@ def override_warnings(opts: UiOptions, config_path: str | Path = "config.json",
         cfg = build_config(config_path, opts.servidor or None, opts.personaje or None, opts.zona or None,
                            profiles_root_dir=profiles_root_dir, warn=False)
     except ConfigError as e:
-        return [f"Config invalida: {e}"]
+        return [f"Config inválida: {e}"]
     except Exception as e:  # noqa: BLE001 - la ventana no debe romperse por esto
         return [f"No se pudo leer la config: {e}"]
     return [o["message"] for o in (cfg.get("_profiles") or {}).get("overrides", [])]

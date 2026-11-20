@@ -43,7 +43,7 @@ def test_validar_ok():
     ("bichos", "", "60", "Falta la tecla"),
     ("bichos", "f4", "0", "mayores que 0"),
     ("bichos", "f4", "-3", "mayores que 0"),
-    ("bichos", "f4", "abc", "tiene que ser un numero"),
+    ("bichos", "f4", "abc", "tiene que ser un número"),
     ("bichos", "f4", "nan", "finito"),
     ("bichos", "f12", "60", "F11 o F12"),
     ("bichos", "f11", "60", "F11 o F12"),

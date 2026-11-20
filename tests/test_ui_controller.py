@@ -175,7 +175,7 @@ def test_avisos_perfil_inexistente(tmp_path):
     cfg = tmp_path / "config.json"
     cfg.write_text("{}", encoding="utf-8")
     w = c.override_warnings(c.UiOptions("S", "P", "NoExiste"), cfg, prof)
-    assert len(w) == 1 and "Config invalida" in w[0]
+    assert len(w) == 1 and "Config inválida" in w[0]
 
 
 # ---------------------------------------------------------------- integracion con el bot falso
