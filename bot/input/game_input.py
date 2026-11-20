@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 JITTER_TRIES = 10   # intentos de variacion aleatoria antes de usar el punto original
 HOLD_STEP_S = 0.05   # `hold` se parte en tramos de este tamano para detectar pausa/foco perdido
+DRAG_STEPS = 6   # pasos de movimiento de un arrastre (`GameInput.drag`)
 CAMERA_ACTIONS = {"left": "camera_left", "right": "camera_right"}
 MOVE_ACTIONS = {"up": "move_up", "down": "move_down", "left": "move_left", "right": "move_right"}
 
@@ -268,5 +269,44 @@ class GameInput:
             self.control.sleep(self._rand_s("move_settle_ms"))
             self.control.check()
             self.backend.scroll(int(clicks))
+            self._delay()
+            return True
+
+    def drag(self, button: str, x: int, y: int, dx: int, dy: int, mask: ScreenMask | None, seconds: float,
+             steps: int = DRAG_STEPS) -> bool:
+        """Arrastra con `button` desde (x, y) de cliente hasta (x+dx, y+dy): mouse_down, movimiento en `steps` pasos durante
+        `seconds` y mouse_up (siempre se suelta, aunque falle o se pare). `mask` es obligatorio: tienen que estar permitidos
+        el punto inicial y el final. Sirve para el angulo vertical de la camara (clic derecho)."""
+        if mask is None:
+            raise ValueError("drag requiere la mascara de la captura actual")
+        if button not in ("left", "right", "middle"):
+            raise ValueError(f"boton invalido: {button!r}")
+        with self._action() as ready:
+            if not ready or not self._window_unchanged():
+                return False
+            ex, ey = x + int(dx), y + int(dy)
+            for px, py, what in ((x, y, "inicial"), (ex, ey, "final")):
+                if not mask.allows(px, py):
+                    logger.warning("Arrastre rechazado: el punto %s (%d, %d) no esta permitido", what, px, py)
+                    return False
+            try:
+                sx, sy = self.window.client_to_screen(x, y, strict=True)
+                tx, ty = self.window.client_to_screen(ex, ey, strict=True)
+            except ValueError:
+                logger.warning("Arrastre rechazado: (%d, %d) -> (%d, %d) fuera del cliente", x, y, ex, ey)
+                return False
+            n = max(1, int(steps))
+            self.control.check()
+            self.backend.move_to(sx, sy)
+            self.control.sleep(self._rand_s("move_settle_ms"))
+            self.control.check()
+            self.backend.mouse_down(button)
+            try:
+                for i in range(1, n + 1):
+                    self.control.check()
+                    self.backend.move_to(round(sx + (tx - sx) * i / n), round(sy + (ty - sy) * i / n))
+                    self.control.sleep(max(0.0, float(seconds)) / n)
+            finally:
+                self.backend.mouse_up(button)
             self._delay()
             return True

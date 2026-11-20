@@ -29,6 +29,11 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 **Decisiones que tomé sin vos:** en "Decisiones tomadas sin Enzo", más abajo y en el PROGRESS.md de `desarrollo`.
 
+## Angulo vertical de la camara y busqueda mientras se ataca (2026-11-20)
+- **Angulo vertical** (`bot/vision/pitch.py`, `bot/camera_pitch.py`, `calibrate.py camara`): se mide la fila del horizonte (donde termina el piso) en una franja central; `camera_pitch.ref_horizon_frac` (null = no corrige) es el angulo que Enzo quiere. Corrige con arrastres del clic derecho (`GameInput.drag`) despues de romper y recoger, cada `camera_pitch.every_s` explorando, al final de cada barrido y durante la busqueda mientras ataca. El sentido y la ganancia del arrastre se aprenden solos. Para calibrar: dejar la camara como le gusta y correr `.venv\Scripts\python.exe calibrate.py camara`.
+- **Buscar el proximo metin mientras ataca** (`Bot._scan_*`, `Bot._go_next`, claves `attack.scan_*` / `next_keep_s`): con la vida bajando desde hace 5 s gira Q/E de a un paso, recuerda el primer metin objetivo que ve (sin ningun clic), vuelve la camara y, al terminar RECOGER, gira hacia el y va directo. Si girar corta el ataque (la vida deja de bajar), vuelve la camara y no busca mas mientras ataca en esa corrida (WARNING en el log).
+- Sin probar en el juego: el sentido del arrastre vertical, si Q/E cortan el ataque y los valores de la medicion del horizonte con terreno en pendiente.
+
 ## Estado actual (2026-11-20, noche)
 **Fase 6d (los 6 puntos de la prueba de las 01:15) en `main`. PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1).
 

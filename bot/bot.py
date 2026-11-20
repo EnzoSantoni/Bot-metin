@@ -17,6 +17,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from bot.camera_pitch import CameraPitch
 from bot.capture import WindowMinimizedError, WindowNotFoundError
 from bot.config import resolve_path
 from bot.control import BotControl, PanicStop
@@ -147,6 +148,7 @@ class _Attack:
     gone: int = 0                               # ciclos seguidos con vida baja, sin panel y sin piedra a la vista
     wait_t: float | None = None                 # desde cuando la vida esta baja pero la piedra sigue a la vista
     reclick_t: float = -math.inf                # hora del ultimo reclic
+    first_drop_t: float | None = None           # hora de la primera baja de vida (desde ahi "viene pegando")
 
 
 @dataclass
@@ -222,6 +224,7 @@ class _Explore:
     target: Xy | None = None
     walk_start: float = 0.0
     spot: Spot | None = None           # punto del mapa de metin al que va este tramo (None = tramo al azar)
+    pitch_checked: bool = False        # el angulo vertical ya se reviso al final de este barrido
 
 
 @dataclass
@@ -265,6 +268,26 @@ class _Unstuck:
     cam_dir: str = "left"
     acted_t: float | None = None
     tried: Any = None                  # `TriedDir` de este intento (se completa con el angulo de juego al terminar)
+
+
+@dataclass
+class _Scan:
+    """Barrido de busqueda del proximo metin mientras se ataca (camara girada de a un paso de Q/E)."""
+    dir: str                           # sentido de giro de ida ("left" | "right")
+    r0: float                          # distancia en pantalla del metin en curso al personaje al empezar
+    phase: str = "out"                 # "out" (girando y mirando) | "back" (volviendo a la posicion original)
+    steps: int = 0                     # pasos de giro que la camara lleva en `dir` respecto de la posicion original
+
+
+@dataclass
+class _Next:
+    """Proximo metin encontrado mientras se atacaba el actual."""
+    rel: int                           # pasos de camara desde la posicion original (+ = "right", - = "left")
+    point: tuple[int, int]             # punto de pantalla con la camara girada `rel` pasos
+    kind: str                          # tipo (nombre de la etiqueta) o "piedra"
+    dist: float                        # distancia de piso al personaje cuando se lo vio
+    t: float                           # hora en que se lo vio
+    turned: bool = False               # ya se giro la camara hacia el
 
 
 class Bot:
@@ -342,6 +365,12 @@ class Bot:
         self._frames = 0                   # percepciones completas hechas (para la compuerta de giros de busqueda)
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
         self._turn_frame = -10**9          # valor de `_frames` en ese giro (el primero no espera)
+        self.pitch = CameraPitch(cfg)      # angulo vertical de la camara (referencia + correccion con clic derecho)
+        self._scan: _Scan | None = None    # barrido de busqueda en curso mientras se ataca
+        self._scan_off = False             # girar la camara cortaba el ataque: no se busca mas mientras se ataca
+        self._scan_t = -math.inf           # hora en que empezo el ultimo barrido
+        self._scan_flip = False            # alterna el sentido del barrido
+        self._next: _Next | None = None    # proximo metin encontrado mientras se atacaba
         self._new_sweep()
 
     # ------------------------------------------------------------------ ciclo
@@ -461,8 +490,17 @@ class Bot:
             self._vl_since = None
         if old is State.CAPTCHA and self._cur is not None:
             self._cur.last_seen_t = self.clock()   # el tiempo del captcha no cuenta para soltar el metin en curso
+        if old is State.ATACAR and self._scan is not None:   # no se sale de ATACAR con la camara girada
+            if new in (State.CAPTCHA, State.MUERTO, State.FIN):
+                self._scan = None
+            else:
+                self._scan_restore(f"salgo de ATACAR ({reason})")
+        if new in (State.VOLVER, State.CENTRO, State.DESTRABAR):
+            self._next = None   # el personaje se va a mover lejos: los pasos de camara recordados ya no valen
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
+            if self.state is new:
+                self._fix_pitch(None, self.clock(), "metin roto y recogido")
         if self.state is not new:
             return   # un captcha durante la subida ya cambio el estado: no se ejecuta el bloque de `new`
         self._walk = None
@@ -833,24 +871,32 @@ class Bot:
             out = self._pick_current(ranked, p, t, attack_why)
             if out is not None or self._cur is not None:
                 return out   # con un metin en curso no se elige otro
-        for i, (g, _) in enumerate(ranked):
-            if g.kind == "etiqueta":
-                c: _Cand = g.ref
-                if not self._click_attack(c.det.click_point, c.gp, p, t):
-                    continue
-                self._log_choice(ranked, i)
-                self._no_target_t = t
-                return State.ATACAR, attack_why
-            fc: _FarCand = g.ref
-            spot = self._register_approach(fc, p, t)
-            if spot is None:   # demasiadas aproximaciones a esa posicion: ya quedo ignorada
-                continue
+        for i in range(len(ranked)):
+            out = self._take_goal(ranked, i, p, t, attack_why)
+            if out is not None:
+                return out
+        return None
+
+    def _take_goal(self, ranked: list[tuple[Goal, float]], i: int, p: Perception, t: float, attack_why: str) -> Transition:
+        """Va por la meta `ranked[i]`: etiqueta -> clic y ATACAR; piedra -> ACERCARSE. None si no se pudo (clic rechazado o
+        demasiadas aproximaciones a esa posicion)."""
+        g = ranked[i][0]
+        if g.kind == "etiqueta":
+            c: _Cand = g.ref
+            if not self._click_attack(c.det.click_point, c.gp, p, t):
+                return None
             self._log_choice(ranked, i)
             self._no_target_t = t
-            self._apr = _Approach(t, fc.gp, fc.far.center, spot=spot, point=fc.far.rect.center)
-            est = "" if fc.gp is None else f", est. ({fc.gp[0]:.0f}, {fc.gp[1]:.0f})"
-            return State.ACERCARSE, f"piedra lejana en {fc.far.center}{est}"
-        return None
+            return State.ATACAR, attack_why
+        fc: _FarCand = g.ref
+        spot = self._register_approach(fc, p, t)
+        if spot is None:   # demasiadas aproximaciones a esa posicion: ya quedo ignorada
+            return None
+        self._log_choice(ranked, i)
+        self._no_target_t = t
+        self._apr = _Approach(t, fc.gp, fc.far.center, spot=spot, point=fc.far.rect.center)
+        est = "" if fc.gp is None else f", est. ({fc.gp[0]:.0f}, {fc.gp[1]:.0f})"
+        return State.ACERCARSE, f"piedra lejana en {fc.far.center}{est}"
 
     # ------------------------------------------------------------------ metin en curso
     def _current_dist(self, screen: tuple[int, int], gp: Xy | None) -> float | None:
@@ -907,6 +953,7 @@ class Bot:
                 c.gp = gp
             return
         lab = self._label_of(point, p)
+        self._next = None   # un metin nuevo en curso: lo recordado era del anterior
         self._cur = _CurrentMetin(point, gp, lab.name if lab is not None else None, t, t, self.camera.rotations)
 
     def _touch_current(self, a: _Attack, p: Perception, t: float) -> None:
@@ -963,6 +1010,10 @@ class Bot:
                 self.pending_return = False
             else:
                 return State.VOLVER, "vuelta pendiente"
+        if self._next is not None:
+            handled, out = self._go_next(p, t)
+            if handled:
+                return out
         out = self._pick_goal(p, t, "metin elegido")
         if out is not None:
             return out
@@ -1067,9 +1118,13 @@ class Bot:
         self._update_walk(a, pos, t)
         panel = p.panel
         kind = panel.kind if panel is not None and panel.present else None
-        if kind == "target_metin" or not a.confirmed:   # sin panel el punto queda quieto (no saltar a un metin vecino)
+        if self._scan is not None and self._scan_guard(a, kind, t):
+            return None   # barrido cortado o terminado: la captura de este ciclo es de la camara girada
+        rotated = self._scan is not None and self._scan.steps != 0   # camara girada: el metin en curso no se sigue en pantalla
+        if (kind == "target_metin" or not a.confirmed) and not rotated:   # sin panel el punto queda quieto (no saltar a un vecino)
             self._track_click(a, p)
-        self._touch_current(a, p, t)
+        if not rotated:
+            self._touch_current(a, p, t)
         if kind == "target_metin":
             self._read_panel(a, panel, t)
         if a.pending is not None:   # ESPACIO / paso al costado ya hecho en el ciclo anterior: ahora el reclic, con captura fresca
@@ -1117,7 +1172,10 @@ class Bot:
         if t - a.start_t > float(self.atk["max_seconds"]):
             return self._discard(a, "tiempo maximo de ataque", p, t)
         if kind == "target_metin" and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
+            self._scan_while_attacking(a, p, t)   # pegando: es el momento de mirar alrededor
             return None   # esta pegando (la vida baja): no se reclickea por ningun motivo
+        if self._scan is not None and self._scan.steps != 0:
+            return None   # camara girada y la vida sin bajar: ni reclic ni destrabe; `_scan_guard` corta el barrido enseguida
         if kind == "target_metin" or not a.confirmed:
             quiet = t - max(a.move_t, a.last_click_t)
             if quiet >= float(self.atk["walk_stuck_s"]) and t - a.hp_down_t >= float(self.atk["walk_stuck_s"]):
@@ -1160,6 +1218,8 @@ class Bot:
                 a.min_hp, a.last_drop_t = hp, t
             elif hp < a.min_hp:
                 a.min_hp, a.last_drop_t, a.hp_down_t = hp, t, t
+                if a.first_drop_t is None:
+                    a.first_drop_t = t
                 if c is not None:
                     c.unstick_n = c.deselects = 0   # avanza: las escaleras de destrabe y de reclics vuelven a empezar
         a.zero = a.zero + 1 if hp is not None and hp <= 0 else 0
@@ -1314,6 +1374,12 @@ class Bot:
         return None
 
     def _reclick(self, a: _Attack, why: str, p: Perception, t: float, count: bool = True) -> Transition:
+        if self._scan is not None and self._scan.steps != 0:   # el reclic solo con la camara en su posicion original
+            if why == "la vida no baja":
+                self._scan_cut("la vida dejo de bajar con la camara girada")
+            else:
+                self._scan_restore(f"hace falta un reclic ({why})")
+            return None
         if p.panel is not None and p.panel.present and p.panel.kind == "target_metin" \
                 and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
             logger.info("Sin reclic (%s): la vida del metin esta bajando", why)   # pegando no se reclickea
@@ -1347,6 +1413,205 @@ class Bot:
         if stones:
             return min(stones, key=lambda f: math.dist(f.rect.center, a.click)).rect.center
         return cands[0].det.click_point if cands else None
+
+    # ------------------------------------------------------------------ angulo vertical de la camara
+    def _pitch_capture(self) -> Any:
+        """Captura nueva para medir el angulo despues de un arrastre. None si no se puede (minimizada) o aparecio un captcha
+        (ya esta en CAPTCHA)."""
+        img = self._peek()
+        if img is not None and self._captcha_fn(img, self.cfg) is not None:
+            logger.warning("Captcha detectado despues de arrastrar la camara: se suelta todo")
+            self.gi.release_all()
+            self._enter(State.CAPTCHA, "panel Bot Verify detectado durante una accion")
+            return None
+        return img
+
+    def _fix_pitch(self, p: Perception | None, t: float, why: str, max_steps: int | None = None) -> bool:
+        """Vuelve el angulo vertical de la camara a la referencia (si hay) con arrastres del clic derecho. `p` None = percibe
+        una captura nueva (para tener etiquetas y mascara). True si arrastro algo. Despues de arrastrar marca la compuerta de
+        giros (la imagen cambio: hay que analizarla antes de seguir girando)."""
+        cp = self.pitch
+        if not cp.active:
+            return False
+        img = self._peek()
+        if img is None:
+            return False
+        if p is None:
+            p = self._perceive(img, self.cfg, parts=PARTS[State.BUSCAR])
+        cp.last_check_t = t
+        before = cp.drags
+        cp.correct(p, img, self.gi, self._pitch_capture, lambda: self._sleep(float(self.ex["settle_s"])), why, max_steps)
+        moved = cp.drags > before
+        if moved:
+            self._turn_t, self._turn_frame = self.clock(), self._frames
+        return moved
+
+    # ------------------------------------------------------------------ buscar el proximo metin mientras se ataca
+    def _scan_allowed(self, a: _Attack, t: float) -> bool:
+        """Hay que empezar un barrido: habilitado, no desactivado, ataque confirmado con la vida bajando desde hace
+        `attack.scan_after_s` y sin un proximo metin reciente ni otro barrido en los ultimos `attack.next_keep_s`."""
+        if not self.atk["scan_enabled"] or self._scan_off or not a.confirmed or a.pending is not None:
+            return False
+        if a.first_drop_t is None or t - a.first_drop_t < float(self.atk["scan_after_s"]):
+            return False
+        keep = float(self.atk["next_keep_s"])
+        if self._next is not None and t - self._next.t < keep:
+            return False
+        return t - self._scan_t >= keep
+
+    def _scan_while_attacking(self, a: _Attack, p: Perception, t: float) -> None:
+        """Se llama SOLO con la vida bajando (pegando). Un paso por vez, con la compuerta de giros: mira lo que hay (y corrige el
+        angulo vertical); si no hay un metin objetivo gira un paso mas (hasta `attack.scan_steps`); al encontrarlo o agotar los
+        pasos vuelve la misma cantidad a la posicion original. Nunca hace clic."""
+        s = self._scan
+        if s is None:
+            if not self._scan_allowed(a, t) or not self._turn_ready():
+                return
+            c = self._cur
+            r0 = math.dist(c.screen, p.player_xy) if c is not None else 0.0
+            self._scan_flip = not self._scan_flip   # alterna el sentido (sin tocar el rng del resto del bot)
+            self._scan = s = _Scan("right" if self._scan_flip else "left", r0)
+            self._scan_t = t
+            logger.info("Mientras ataco: la vida baja desde hace %.0f s, miro alrededor con la camara (%s)",
+                        t - (a.first_drop_t or t), s.dir)
+        if not self._turn_ready():
+            return
+        step_s = float(self.ex["camera_step_s"])
+        if s.phase == "out":
+            found = self._scan_find(p, t, s)
+            if found is not None:
+                self._next = found
+                s.phase = "back"
+            elif s.steps >= int(self.atk["scan_steps"]):
+                logger.info("Mientras ataco: no encontre otro metin en %d pasos", s.steps)
+                s.phase = "back"
+            else:
+                if self.pitch.active and self.pitch.out_of_tolerance(self.pitch.measure(self._img, p)) \
+                        and self._fix_pitch(p, t, "mientras ataco", max_steps=1):
+                    return
+                if self._search_turn(s.dir, step_s):
+                    s.steps += 1
+                return
+        if s.steps <= 0:
+            self._scan_finish()
+            return
+        back = "left" if s.dir == "right" else "right"
+        if self._search_turn(back, step_s):
+            s.steps -= 1
+            if s.steps <= 0:
+                self._scan_finish()
+
+    def _scan_find(self, p: Perception, t: float, s: _Scan) -> _Next | None:
+        """Metin objetivo (etiqueta o piedra lejana que pasan los filtros de BUSCAR) distinto del metin en curso, o None.
+        Con la camara girada el metin en curso se ve en otro lugar (orbita alrededor del personaje): se descartan los que
+        estan a <= `s.r0` + `attack.relocate_px` del personaje en pantalla, y los que `_is_current` reconoce."""
+        cands, _ = self._label_view(p, t)
+        far, _ = self._far_view(p, t)
+        lim = s.r0 + float(self.atk["relocate_px"])
+        for g, d in self._goals(cands, far, p):
+            if g.kind == "etiqueta":
+                gp = g.ref.gp
+                point = g.ref.det.click_point
+            else:
+                gp = g.ref.gp
+                point = g.ref.far.center
+            if math.dist(point, p.player_xy) <= lim or self._is_current(point, gp):
+                continue
+            n = s.steps if s.dir == "right" else -s.steps
+            kind = g.name if g.kind == "etiqueta" else "piedra"
+            logger.info("Mientras ataco: encontre %s a %d pasos (%d, %d)", kind, s.steps, point[0], point[1])
+            return _Next(n, point, kind, d, t)
+        return None
+
+    def _scan_finish(self) -> None:
+        """Barrido terminado con la camara en su posicion original."""
+        self._scan = None
+        if self._cur is not None:
+            self._cur.rot = self.camera.rotations   # el metin en curso quedo donde estaba: su punto de pantalla vale otra vez
+
+    def _scan_restore(self, why: str) -> None:
+        """Vuelve la camara a su posicion original ya (sin esperar la compuerta) y termina el barrido."""
+        s, self._scan = self._scan, None
+        if s is None or s.steps == 0:
+            return
+        back = "left" if s.dir == "right" else "right"
+        logger.info("Mientras ataco: vuelvo la camara %d pasos (%s)", s.steps, why)
+        for _ in range(s.steps):
+            if not self._search_turn(back, float(self.ex["camera_step_s"])):
+                return   # captcha
+        if self._cur is not None:
+            self._cur.rot = self.camera.rotations
+
+    def _scan_cut(self, why: str) -> None:
+        """Girar la camara corta el ataque: vuelve la camara y no busca mas mientras ataca en esta corrida."""
+        self._scan_restore(why)
+        if not self._scan_off:
+            self._scan_off = True
+            logger.warning("Girar la camara corta el ataque: no busco mientras ataco")
+
+    def _scan_guard(self, a: _Attack, kind: str | None, t: float) -> bool:
+        """Chequeos de un barrido en curso, antes de procesar el ciclo. True si se corto (la camara ya volvio)."""
+        s = self._scan
+        if s is None:
+            return False
+        if kind != "target_metin":   # el panel del metin se perdio: puede haberse roto (o deseleccionado)
+            if s.steps != 0:
+                low = a.last_hp is not None and a.last_hp <= float(self.atk["broken_hp_ratio"])
+                if low:
+                    self._scan_restore("se perdio el panel con la vida baja (se rompio?)")
+                else:
+                    self._scan_cut("se perdio el panel del metin con la camara girada")
+            else:
+                self._scan = None
+            return True
+        limit = float(self.atk["hp_progress_s"]) + float(self.atk["scan_hp_margin_s"])
+        if s.steps != 0 and t - a.hp_down_t >= limit:
+            self._scan_cut(f"la vida no baja hace {t - a.hp_down_t:.0f} s")
+            return True
+        return False
+
+    def _go_next(self, p: Perception, t: float) -> tuple[bool, Transition]:
+        """BUSCAR con un metin recordado de cuando se atacaba el anterior: gira la camara los pasos guardados, espera la
+        compuerta y va directo al candidato a <= `attack.relocate_px` del punto recordado (hover/clic como siempre). (True,
+        transicion) si esta ocupado con eso; (False, None) si no queda nada recordado (eleccion normal)."""
+        n = self._next
+        if n is None:
+            return False, None
+        keep = float(self.atk["next_keep_s"])
+        if t - n.t >= keep:
+            logger.info("El metin que encontre mientras atacaba se vencio (hace %.0f s): eleccion normal", t - n.t)
+            self._next = None
+            return False, None
+        if not n.turned:
+            n.turned = True
+            if n.rel != 0:
+                logger.info("Voy al metin que encontre mientras atacaba (%s, a %d pasos de camara)", n.kind, abs(n.rel))
+                direction = "right" if n.rel > 0 else "left"
+                for _ in range(abs(n.rel)):
+                    if not self._search_turn(direction, float(self.ex["camera_step_s"])):
+                        return True, None   # captcha
+                return True, None   # la compuerta de giros espera a que se analice lo que aparecio
+        if not self._turn_ready():
+            return True, None
+        self._next = None   # se usa una sola vez: si no aparece, eleccion normal
+        cands, _ = self._label_view(p, t)
+        far, _ = self._far_view(p, t)
+        ranked = self._goals(cands, far, p)
+        lim = float(self.atk["relocate_px"])
+
+        def where(g: Goal) -> float:
+            pt = g.ref.det.click_point if g.kind == "etiqueta" else g.ref.far.center
+            return math.dist(pt, n.point)
+        near = sorted((i for i, (g, _) in enumerate(ranked) if where(g) <= lim), key=lambda i: where(ranked[i][0]))
+        for i in near:
+            out = self._take_goal(ranked, i, p, t, "metin encontrado mientras atacaba")
+            if out is not None:
+                if n.rel == 0:
+                    logger.info("Voy al metin que encontre mientras atacaba (%s)", n.kind)
+                return True, out
+        logger.info("El metin que encontre mientras atacaba (%s) no aparece a <= %.0f px de (%d, %d): eleccion normal",
+                    n.kind, lim, n.point[0], n.point[1])
+        return False, None
 
     # ------------------------------------------------------------------ RECOGER
     def _set_dismounted(self, value: bool, why: str) -> None:
@@ -1610,10 +1875,16 @@ class Bot:
         if x.phase == "sweep":
             if not self._turn_ready():   # el paso anterior todavia se esta analizando (tiempo y capturas)
                 return None
+            if self.pitch.active and self.pitch.due(t) and self._fix_pitch(p, t, "periodico"):
+                return None   # el arrastre cambio la imagen: se analiza antes de girar
             if x.steps < int(self.ex["camera_steps"]):
                 self._search_turn(x.dir, float(self.ex["camera_step_s"]))
                 x.steps += 1
             else:
+                if self.pitch.active and not x.pitch_checked:
+                    x.pitch_checked = True
+                    if self._fix_pitch(p, t, "fin del barrido"):
+                        return None
                 pos = self.tracker.position
                 if pos is not None and self.zone.signed_distance(pos) < float(self.ex["border_margin"]):
                     self._vl_margin = float(self.ex["border_margin"])   # esta vuelta termina bien adentro, no solo a explore_margin

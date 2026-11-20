@@ -1,6 +1,6 @@
 """Herramienta de calibracion (pasiva: lee la pantalla y escucha hotkeys, NUNCA manda teclas ni clics al juego).
 
-Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|zonas|resumen> [opciones]
+Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|zonas|camara|resumen> [opciones]
 Los que escriben config.json piden confirmacion (s/n, o --si), hacen config.json.bak y validan antes de guardar.
 F12 o Ctrl+C cancelan sin guardar.
 """
@@ -10,7 +10,7 @@ import sys
 from bot import calibration as cal
 from bot.config import ConfigError, load_config
 
-NEEDS_GAME = {"zona", "velocidad", "metin", "zonas"}   # subcomandos que capturan el juego
+NEEDS_GAME = {"zona", "velocidad", "metin", "zonas", "camara"}   # subcomandos que capturan el juego
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("metin", parents=[common], help="agregar un tipo de metin (plantillas de etiqueta y panel)")
     p.add_argument("nombre", help='nombre del metin, ej. "Metin de Oscuridad"')
     sub.add_parser("zonas", parents=[common], help="guardar debug/calibrate_zonas.png para revisar las zonas excluidas")
+    sub.add_parser("camara", parents=[common], help="medir el angulo vertical de la camara (horizonte) y guardarlo como referencia")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
     return ap
 
@@ -56,6 +57,8 @@ def run(args: argparse.Namespace, s: cal.Session) -> int:
         return cal.cmd_metin(s, args.nombre)
     if args.cmd == "zonas":
         return cal.cmd_zonas(s)
+    if args.cmd == "camara":
+        return cal.cmd_camara(s)
     return cal.cmd_resumen(s)
 
 

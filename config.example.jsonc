@@ -201,7 +201,16 @@
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
-             "relocate_px": 150, "target_keep_s": 25.0},
+             "relocate_px": 150, "target_keep_s": 25.0,
+             //  Buscar el proximo metin MIENTRAS se ataca: con scan_enabled, la vida del metin bajando desde hace scan_after_s y el
+             //  panel confirmado, la camara gira de a un paso de Q/E (explore.camera_step_s) hasta scan_steps pasos o hasta ver un
+             //  metin objetivo (distinto del que se ataca) y vuelve la misma cantidad de pasos a su posicion original. Entre paso y
+             //  paso espera la compuerta explore.settle_s / settle_frames y comprueba que la vida siga bajando: si un giro corta el
+             //  ataque (la vida deja de bajar hp_progress_s + scan_hp_margin_s), vuelve la camara, avisa y no busca mas mientras ataca en esta
+             //  corrida. NUNCA hace clic en otro metin hasta romper el actual y recoger. Lo encontrado se recuerda next_keep_s
+             //  segundos: al terminar RECOGER gira esos pasos y va directo a el (a <= relocate_px del punto recordado).
+             "scan_enabled": true, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+             "scan_hp_margin_s": 2.0},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
@@ -242,6 +251,29 @@
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
               "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0},
+
+  // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
+  //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
+  //  Enzo quiere conservar: null = no corrige (se mide con `calibrate.py camara`, que lo guarda aca). Con referencia, despues de
+  //  romper cada metin (antes de buscar), cada every_s mientras explora y durante la busqueda mientras ataca, si el horizonte
+  //  se fue mas de tolerance, arrastra con el CLIC DERECHO en vertical (drag_s s, drag_steps pasos) desde un punto libre del piso
+  //  (a >= drag_clear_px de etiquetas, piedras y personaje). dy = gain * (medido - ref), tope max_drag_px, hasta max_steps
+  //  arrastres por correccion; gain (px por unidad de horizon_frac; gain_px_per_frac es el inicial) se aprende solo, con signo,
+  //  comparando antes y despues de cada arrastre (promedio gain_ema; se ignora si el horizonte se movio menos de
+  //  min_gain_move_frac). Medicion con confianza < min_confidence: no corrige. calib_samples / calib_pause_s: capturas de
+  //  `calibrate.py camara`.
+  //  Medicion: franja central de +-strip_half_frac del ancho; el color del piso sale de una muestra a sample_top_px..sample_bottom_px
+  //  debajo del personaje; un pixel es piso si su tono difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila
+  //  es piso con >= row_floor_frac de pixeles piso (descartando UI y el rectangulo del personaje player_box_px = [medio ancho,
+  //  arriba, abajo]); el horizonte es la primera fila que deja de serlo run_rows seguidas. min_valid_px: pixeles utiles minimos por
+  //  fila; min_floor_rows: menos filas de piso que eso = medicion dudosa. (Medidos sobre samples/, ver PROGRESS.md.)
+  "camera_pitch": {"enabled": true, "ref_horizon_frac": null, "tolerance": 0.04, "gain_px_per_frac": 600.0,
+                   "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
+                   "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
+                   "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+                   "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
+                   "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
+                   "min_valid_px": 20, "min_floor_rows": 40},
 
   // ACERCARSE: confirmar el tipo de una piedra lejana (sin etiqueta) con HOVER. Entra desde BUSCAR/EXPLORAR cuando la
   //  piedra elegida (la mas cercana al personaje, ver vision.ground) no tiene etiqueta: mueve el mouse sobre su cuerpo

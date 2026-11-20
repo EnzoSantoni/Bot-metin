@@ -27,6 +27,7 @@ from bot.debug_draw import annotate, draw_panel_coords
 from bot.vision.coords import read_coords
 from bot.vision.metin import find_label_candidates, slugify, target_slugs
 from bot.vision.panel import find_frame, read_panel
+from bot.vision.pitch import draw_horizon, measure_horizon
 from bot.vision.screen_mask import anchor_rect, build_screen_mask, find_ui_windows
 
 logger = logging.getLogger(__name__)
@@ -550,6 +551,45 @@ def cmd_zonas(s: Session) -> int:
         s.say(f"  {z['name']}: anchor={z['anchor']} dx={z['dx']} dy={z['dy']} w={z['w']} h={z['h']}  "
               f"-> rect ({r.x}, {r.y}, {r.w}x{r.h})")
     return 0
+
+
+# ----------------------------------------------------------------------------- camara
+
+def cmd_camara(s: Session) -> int:
+    """Mide el horizonte (angulo vertical de la camara) en varias capturas con la camara como le gusta a Enzo y guarda el
+    promedio en camera_pitch.ref_horizon_frac. Pasivo: no manda nada al juego."""
+    c = s.cfg["camera_pitch"]
+    n = int(c["calib_samples"])
+    vals: list[float] = []
+    last, last_res = None, None
+    for i in range(n):
+        img = s.grab()
+        res = measure_horizon(img, s.cfg)
+        if res is not None and res.confidence >= float(c["min_confidence"]):
+            vals.append(res.horizon_frac)
+            last, last_res = img, res
+            s.say(f"  captura {i + 1}/{n}: horizonte {res.horizon_frac:.3f} (fila {res.horizon_row}, confianza {res.confidence:.2f})")
+        else:
+            s.say(f"  captura {i + 1}/{n}: no se pudo medir"
+                  + ("" if res is None else f" (confianza {res.confidence:.2f})"))
+        if i + 1 < n:
+            s.sleep(float(c["calib_pause_s"]))
+    if len(vals) < max(1, (n + 1) // 2):
+        s.say(f"Solo {len(vals)} de {n} capturas se pudieron medir (hace falta piso a la vista debajo del personaje). "
+              "No se guardo nada.")
+        return 1
+    ref = round(statistics.mean(vals), 3)
+    spread = max(vals) - min(vals)
+    s.say(f"Horizonte medido: {ref:.3f} (promedio de {len(vals)} capturas, dispersion {spread:.3f}).")
+    if spread > float(c["tolerance"]):
+        s.say("Ojo: las capturas difieren mas que la tolerancia (animaciones, monstruos tapando el piso). Si dudas, repeti.")
+    if any(v <= 0 for v in vals):
+        s.say("Ojo: en alguna captura el piso llega hasta el borde de arriba (camara muy inclinada hacia abajo): el valor es "
+              "aproximado.")
+    path = _debug_path(s, "calibrate_camara.png")
+    cv2.imwrite(str(path), draw_horizon(last, last_res, ref, float(c["tolerance"])))
+    s.say(f"Imagen con la linea del horizonte (verde = medido, amarillo = referencia +- tolerancia) en {path}")
+    return 0 if apply_changes(s, [Change(("camera_pitch", "ref_horizon_frac"), ref)]) else 1
 
 
 # ----------------------------------------------------------------------------- resumen

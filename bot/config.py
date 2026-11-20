@@ -107,7 +107,11 @@ DEFAULTS: dict[str, Any] = {
                "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
-               "relocate_px": 150, "target_keep_s": 25.0},
+               "relocate_px": 150, "target_keep_s": 25.0,
+               # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
+               # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
+               "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+               "scan_hp_margin_s": 2.0},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
     # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
     # su etiqueta desaparezca (gone_cycles capturas sin verla). A los reposition_s sigue ahi: reacomodo (llegada a
@@ -116,6 +120,15 @@ DEFAULTS: dict[str, Any] = {
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
                "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
+    # Angulo vertical de la camara (bot/vision/pitch.py, bot/camera_pitch.py). ref_horizon_frac = null: no corrige (se mide con
+    # `calibrate.py camara`). Ver config.example.jsonc.
+    "camera_pitch": {"enabled": True, "ref_horizon_frac": None, "tolerance": 0.04, "gain_px_per_frac": 600.0,
+                     "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
+                     "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
+                     "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+                     "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
+                     "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
+                     "min_valid_px": 20, "min_floor_rows": 40},
     # EXPLORAR: barrido de camara (pasos de Q/E) y caminata hacia un punto aleatorio del poligono.
     # border_margin: destino de cada tramo a >= esta distancia del borde; leg_s / leg_units: tope de tiempo y largo de un
     # tramo recto; max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO; min_leg_sep_deg / recent_legs: el
@@ -712,6 +725,29 @@ def _validate_controls_safety_input(cfg: dict) -> None:
             raise ConfigError(f"input.{k} debe ser [min, max] con 0 <= min <= max")
 
 
+def _validate_camera_pitch(cfg: dict) -> None:
+    """camera_pitch: angulo vertical de la camara (referencia opcional + parametros de la medicion y del arrastre)."""
+    c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
+    if not isinstance(c.get("enabled"), bool):
+        raise ConfigError("camera_pitch.enabled debe ser true o false")
+    ref = c.get("ref_horizon_frac")
+    if ref is not None and (not isinstance(ref, (int, float)) or isinstance(ref, bool) or not 0 <= ref <= 1):
+        raise ConfigError("camera_pitch.ref_horizon_frac debe ser null o un numero entre 0 y 1")
+    positive = ("tolerance", "gain_px_per_frac", "max_drag_px", "max_steps", "every_s", "drag_s", "drag_steps",
+                "calib_samples", "gain_ema", "drag_clear_px", "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val",
+                "row_floor_frac", "run_rows", "min_valid_px")
+    nonneg = ("min_confidence", "calib_pause_s", "min_gain_move_frac", "sample_top_px", "min_sat", "min_floor_rows")
+    for k in positive + nonneg:
+        v = c.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
+            raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
+    if not 0 < c["gain_ema"] <= 1 or not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5:
+        raise ConfigError("camera_pitch.gain_ema y row_floor_frac deben estar en (0, 1] y strip_half_frac en (0, 0.5]")
+    if c["sample_top_px"] >= c["sample_bottom_px"]:
+        raise ConfigError("camera_pitch.sample_top_px debe ser menor que sample_bottom_px")
+    _require_numbers(c.get("player_box_px"), "camera_pitch.player_box_px", 3)
+
+
 def _validate_tracking_navigation(cfg: dict) -> None:
     """coords_filter, stuck, loop, attack, pickup, explore, captcha_wait y navigation."""
     def nums(sec: str, keys: tuple[str, ...], positive: tuple[str, ...] = ()) -> dict:
@@ -742,12 +778,16 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
                     "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
-                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s"),
+                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
+                    "next_keep_s", "scan_hp_margin_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
-          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s"))
+          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
+          "next_keep_s"))
     a = cfg["attack"]
+    if not isinstance(a.get("scan_enabled"), bool):
+        raise ConfigError("attack.scan_enabled debe ser true o false")
     if not 0 < a["broken_hp_ratio"] <= 1:
         raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
     offs = a["clear_offsets_px"]
@@ -766,6 +806,7 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                      "settle_s", "settle_frames", "edge_return_u"),
          ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
     nums("volver", ("max_seconds",), ("max_seconds",))
+    _validate_camera_pitch(cfg)
     nums("captcha_wait", ("poll_s", "clear_confirm"), ("poll_s", "clear_confirm"))
     n = nums("navigation", ("probe_radius_px", "arrive_dist", "explore_margin", "min_segment_px", "min_segment_game",
                             "min_sin", "fit_segments", "max_ratio_error", "relearn_after_rejects", "phi_smooth_deg",
