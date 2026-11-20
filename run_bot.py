@@ -17,7 +17,7 @@ from typing import Any, Callable
 from bot.alarm import Alarm
 from bot.bot import Bot
 from bot.config import ConfigError, load_config, resolve_path
-from bot.spawns import SpawnMap
+from bot.spawns import spawn_map_from_config
 from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
 from bot.input.game_input import GameInput, InputBlockedError
@@ -180,9 +180,7 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     if not args.observar:   # marca de "a pie": la proxima corrida se sube si esta se corto a pie (F12)
         kwargs.setdefault("mount_marker", resolve_path(cfg["log"]["dir"]) / "a_pie.flag")
     if args.observar and cfg["spawns"]["enabled"] and "spawn_map" not in kwargs:   # observar lee el mapa pero NO lo escribe
-        sp = cfg["spawns"]
-        kwargs["spawn_map"] = SpawnMap(resolve_path(sp["file"]), float(sp["merge_u"]), respawn_s=float(sp["respawn_s"]),
-                                       revisit_s=float(sp["revisit_s"]), read_only=True)
+        kwargs["spawn_map"] = spawn_map_from_config(cfg["spawns"], read_only=True)
     bot = Bot(cfg, window, gi, control, alarm, **kwargs)
 
     control.add_stop_callback(gi.release_all)

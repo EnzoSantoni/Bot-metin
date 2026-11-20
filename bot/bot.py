@@ -28,7 +28,7 @@ from bot.ground import Goal, feet_of, ground_dist, rank_goals
 from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
-from bot.spawns import Spot, SpawnMap
+from bot.spawns import Spot, SpawnMap, spawn_map_from_config
 from bot.tracking import CoordStats, CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
@@ -336,8 +336,7 @@ class Bot:
         self.zone = FarmZone.from_config(cfg)
         sp = cfg["spawns"]
         if spawn_map is None:   # sin mapa inyectado: el del perfil si esta habilitado; si no, uno desactivado
-            spawn_map = SpawnMap(resolve_path(sp["file"]) if sp["enabled"] else None, float(sp["merge_u"]),
-                                 respawn_s=float(sp["respawn_s"]), revisit_s=float(sp["revisit_s"]))
+            spawn_map = spawn_map_from_config(sp) if sp["enabled"] else SpawnMap(None, float(sp["merge_u"]))
         self.spawns = spawn_map
         self.sp = sp
         self.tracker = CoordTracker(cfg, clock=self.clock)

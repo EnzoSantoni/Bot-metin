@@ -34,7 +34,9 @@
   //  respawn_s: segundos que tarda en reaparecer un metin (ESTIMADO: "a los pocos minutos").
   //  revisit_s: no volver a un punto visitado hace menos de esto. arrive_u: llegada al punto (unidades).
   //  max_walk_s: tope de caminata hacia un punto; al agotarlo se lo da por visitado.
-  "spawns": {"enabled": true, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
+  //  map_name: nombre del mapa (se guarda en el archivo y sale en los logs; si no coincide avisa). file: por defecto
+  //  "data/<nombre>.mapa.json"; si existe el viejo data/mapa_metin.json y el nuevo no, se migra solo (el viejo queda .migrado).
+  "spawns": {"enabled": true, "map_name": "Ciudad 1", "file": "data/Ciudad 1.mapa.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
              "arrive_u": 5.0, "max_walk_s": 40},
 
   "debug": {

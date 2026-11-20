@@ -15,11 +15,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from bot.config import DEFAULTS, resolve_path
 from bot.fileutil import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2   # v2 agrega "mapa" (nombre); la v1 se lee igual
+LEGACY_FILE = "mapa_metin.json"   # default anterior (junto al archivo nuevo)
 Xy = tuple[float, float]
 
 
@@ -37,11 +39,38 @@ class Spot:
         return (self.x, self.y)
 
 
+def migrate_legacy_map(path: Path) -> bool:
+    """Si `path` no existe y hay un `mapa_metin.json` viejo al lado, lo copia y deja el viejo como .migrado."""
+    legacy = path.parent / LEGACY_FILE
+    if path.exists() or not legacy.is_file():
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, legacy.read_text(encoding="utf-8"))
+        os.replace(legacy, legacy.with_name(legacy.name + ".migrado"))
+    except OSError as e:
+        logger.warning("Mapa de metin: no se pudo migrar %s a %s: %s", legacy, path, e)
+        return False
+    logger.info("Mapa de metin: migro data/%s a data/%s", LEGACY_FILE, path.name)
+    return True
+
+
+def spawn_map_from_config(sp: dict, *, read_only: bool = False) -> SpawnMap:
+    """Arma el SpawnMap desde cfg["spawns"]. Migra el archivo viejo solo si `file` es el default (no explicito)."""
+    path = resolve_path(sp["file"])
+    if sp["file"] == DEFAULTS["spawns"]["file"]:
+        migrate_legacy_map(path)
+    return SpawnMap(path, float(sp["merge_u"]), respawn_s=float(sp["respawn_s"]), revisit_s=float(sp["revisit_s"]),
+                    read_only=read_only, map_name=sp["map_name"])
+
+
 class SpawnMap:
     """Puntos conocidos + elegibilidad por reaparicion y revisita. `respawn_s` / `revisit_s` por atributo."""
 
     def __init__(self, path: Path | None, merge_u: float, *, respawn_s: float = 240.0, revisit_s: float = 120.0,
-                 clock_wall: Callable[[], float] = time.time, read_only: bool = False) -> None:
+                 clock_wall: Callable[[], float] = time.time, read_only: bool = False,
+                 map_name: str = "Ciudad 1") -> None:
+        self.map_name = map_name
         self.path = Path(path) if path is not None else None
         self.merge_u, self.respawn_s, self.revisit_s = float(merge_u), float(respawn_s), float(revisit_s)
         self.now = clock_wall
@@ -59,13 +88,16 @@ class SpawnMap:
             return
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            saved = data.get("mapa") if isinstance(data, dict) else None   # None: archivo version 1
             self.spots = [Spot(float(d["x"]), float(d["y"]), int(d.get("n", 1)), float(d.get("last_broken", 0.0)),
                                float(d.get("last_visit", 0.0))) for d in data["spots"]]
         except (OSError, ValueError, KeyError, TypeError) as e:
             logger.warning("Mapa de metin: no se pudo leer %s (%s): empiezo vacio", self.path, e)
             self.spots, self._broken_file = [], True
             return
-        logger.info("Mapa de metin: %d puntos cargados de %s", len(self.spots), self.path)
+        if saved is not None and saved != self.map_name:
+            logger.warning("Mapa de metin (%s): el archivo %s es del mapa %r", self.map_name, self.path, saved)
+        logger.info("Mapa de metin (%s): %d puntos cargados de %s", self.map_name, len(self.spots), self.path)
 
     def save(self) -> None:
         """Guardado atomico (temporal + os.replace). Un archivo ilegible se renombra a .bak antes."""
@@ -78,7 +110,7 @@ class SpawnMap:
                 os.replace(self.path, bak)
                 logger.warning("Mapa de metin: archivo ilegible respaldado en %s", bak)
                 self._broken_file = False
-            data = {"version": FORMAT_VERSION,
+            data = {"version": FORMAT_VERSION, "mapa": self.map_name,
                     "spots": [{"x": round(s.x, 2), "y": round(s.y, 2), "n": s.n, "last_broken": round(s.last_broken, 1),
                                "last_visit": round(s.last_visit, 1)} for s in self.spots]}
             atomic_write_text(self.path, json.dumps(data, indent=2))

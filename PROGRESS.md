@@ -121,7 +121,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 6. **Commits:** los puntos 3 y 5 van en el mismo commit porque comparten las teclas combinadas.
 7. **Tests del modo "clic":** el tope de VOLVER en los mundos al azar quedó en 50 s, porque ese modo no cambió. En modo teclado el tope sigue en 25 s.
 8. **Mapa de metin:**
-   - En `main`, que no tiene perfiles, el archivo es `data/mapa_metin.json` (ignorado por git). En `desarrollo` va junto al perfil de zona.
+   - En `main`, que no tiene perfiles, el archivo es `data/Ciudad 1.mapa.json` (antes `data/mapa_metin.json`, se migra solo) (ignorado por git). En `desarrollo` va junto al perfil de zona.
    - `respawn_s` 240 s es estimado ("a los pocos minutos").
    - Un punto al que no pudo llegar porque se trabó queda marcado como visitado, para no insistir con él en bucle.
 
