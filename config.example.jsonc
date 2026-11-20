@@ -164,12 +164,20 @@
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
              "wrong_monsters_min": 1, "blocked_window_frac": 0.8},
 
-  // RECOGER. Z cada press_interval_ms; tras presses_before_click Z seguidas con objetos todavia a la vista, un clic en la
-  //  etiqueta. Termina tras empty_confirm_cycles ciclos seguidos sin objetos validos (los objetos tardan en aparecer),
-  //  o al llegar a max_presses / max_seconds. dismount: bajarse del caballo al entrar y subirse al salir.
-  //  mount_wait_s: espera tras cada Ctrl+G.
-  "pickup": {"press_interval_ms": 350, "presses_before_click": 3, "empty_confirm_cycles": 5, "max_presses": 30,
-             "max_seconds": 20.0, "dismount": false, "mount_wait_s": 2.0},
+  // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
+  //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
+  //  cada objeto (el mas cercano al personaje primero), clic en su etiqueta y Z al llegar, hasta que no queden.
+  //  dismount: true = se baja del caballo para recoger y se sube al terminar; false = recoge montado (mismo flujo).
+  //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha). press_interval_ms: pausa tras cada Z.
+  //  Llego cuando: la etiqueta esta a <= arrive_px del personaje o desaparecio, o el personaje no cambia de coordenadas
+  //  en still_s (tras al menos still_s del clic), o pasaron walk_timeout_s. track_px: tolerancia para seguir una etiqueta
+  //  entre ciclos. tries_per_item: Z por objeto antes de ignorarlo (valido mientras el personaje no se mueva same_spot_u
+  //  unidades). monster_gap_px: no se clickea una etiqueta a <= esto de un nombre de monstruo (solo Z).
+  //  Termina tras empty_confirm_cycles ciclos sin objetos validos, max_presses Z o max_seconds (cuenta desde que
+  //  empieza a recoger).
+  "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+             "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "monster_gap_px": 12, "arrive_px": 70,
+             "track_px": 80, "still_s": 0.6, "walk_timeout_s": 4.0, "tries_per_item": 2, "same_spot_u": 3.0},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...

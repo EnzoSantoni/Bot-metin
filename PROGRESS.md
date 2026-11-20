@@ -2,8 +2,26 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
-## Estado actual (2026-11-19, noche)
-**Fase 6c (correcciones tras la prueba de la 6b de las 22:43) en `main`: 980 tests pasan. PRÓXIMO PASO: Enzo repite la prueba de la 6b** (ver `PRUEBAS_ESTA_NOCHE.md`, punto 1).
+## Estado actual (2026-11-20)
+**Fase 6c + recoger a pie en `main`: 992 tests pasan. PRÓXIMO PASO: Enzo repite la prueba de la 6b y prueba la recogida** (ver `PRUEBAS_ESTA_NOCHE.md`, puntos 1 y 1b).
+
+### Recoger a pie (pedido de Enzo, 2026-11-20)
+- **RECOGER en dos fases** (`Bot._do_recoger`):
+  - **"Mirar":** hasta `pickup.look_s` (1 s) y `empty_confirm_cycles` ciclos. Si no ve objetos válidos (kind "item", ni yang ni de otro jugador, `allowed`), NO se baja y vuelve a BUSCAR.
+  - **Con objetos válidos:** Ctrl+G y espera `mount_wait_s` (solo si `pickup.dismount`).
+  - **Recoger, objeto por objeto:** elige el más cercano, clic en su etiqueta y Z al llegar. "Llegar" es que la etiqueta esté a ≤ `arrive_px`, que desaparezca, que el jugador quede quieto `still_s`, o que pasen `walk_timeout_s`. Si la etiqueta ya está a ≤ `arrive_px`, aprieta Z sin clic.
+  - **Etiquetas con un nombre de monstruo pegado** (≤ `monster_gap_px`): no se clickean; solo Z.
+  - **Objetos que no se pueden juntar:** se ignoran después de `tries_per_item` intentos.
+  - **Al terminar:** Ctrl+G y espera, y vuelve a BUSCAR (o a VOLVER).
+- **Una sola cuenta de montado:**
+  - `Bot._set_dismounted` es el único lugar que cambia `_dismounted`. `_dismount` y `_remount` nunca repiten el Ctrl+G.
+  - Las esperas de la animación miran si aparece el captcha. Si el captcha sale estando a pie, al irse el panel se sube antes de seguir.
+- **F12 a pie:**
+  - Mientras está a pie existe `logs/a_pie.flag`. `run_bot.py` pasa `mount_marker` (salvo con `--observar`).
+  - La corrida siguiente ve la marca, se sube primero y la borra. Si Enzo se sube a mano después de un F12, tiene que borrar el archivo.
+- **`pickup.dismount` (true por defecto) = recoger a pie**; false = recoge montado con el mismo flujo de clic + Z. Claves nuevas: `look_s`, `monster_gap_px`, `arrive_px`, `track_px`, `still_s`, `walk_timeout_s`, `tries_per_item` y `same_spot_u`. `presses_before_click` se eliminó: si una config vieja lo trae, se ignora.
+
+**Antes (2026-11-19, noche): Fase 6c** (correcciones tras la prueba de la 6b de las 22:43) en `main`, con 980 tests.
 
 ### Fase 6c: qué cambió (pedido de Enzo tras la prueba de las 22:43)
 - **Diagnóstico de la prueba:** el jugador estaba en (689, 107), ADENTRO del polígono a 5,7 u del borde norte. La zona estaba bien. Lo que falló fue la regla: sin cámara calibrada exigía que el jugador estuviera a ≥ 15 u del borde (`explore_margin`).

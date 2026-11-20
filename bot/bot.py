@@ -14,6 +14,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable
 
 from bot.capture import WindowMinimizedError, WindowNotFoundError
@@ -53,7 +54,7 @@ class State(Enum):
 # Partes de la percepcion que necesita cada estado (ventanas, mascara, captcha y muerte se calculan siempre).
 PARTS = {
     State.BUSCAR: {"metins", "coords", "far", "monsters"}, State.ATACAR: {"panel", "coords", "metins", "monsters"},
-    State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
+    State.RECOGER: {"items", "coords", "monsters"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters"},
     State.VOLVER: {"coords", "metins", "monsters"}, State.CENTRO: {"coords", "metins", "monsters"},
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
@@ -154,12 +155,21 @@ class _KeyLeg:
 
 @dataclass
 class _Pickup:
-    start_t: float
+    """Recogida en curso. Fase "look" (mirando si hay objetos validos, sin bajarse) y fase "collect"."""
+    start_t: float                     # inicio de la fase vigente (el tope max_seconds cuenta desde que empieza a recoger)
+    phase: str = "look"
     presses: int = 0
-    since_click: int = 0
     empty: int = 0
     last_n: int | None = None
     last_action_t: float = -math.inf
+    tgt: tuple[int, int] | None = None   # etiqueta clickeada y todavia en camino (punto de clic, se sigue entre ciclos)
+    click_t: float = 0.0
+    last_pos: tuple[int, int] | None = None   # ultima posicion distinta del jugador (para "quieto")
+    still_since: float = 0.0
+    tries: list = field(default_factory=list)       # [[punto, Z intentadas]] de objetos elegidos
+    ignored: list = field(default_factory=list)     # puntos de pantalla de objetos que no se pudieron juntar
+    anchor: tuple[int, int] | None = None           # posicion del jugador a la que valen `tries` e `ignored`
+    warned_monster: bool = False
 
 
 @dataclass
@@ -219,7 +229,8 @@ class Bot:
                  perceive_fn: Callable[..., Perception] = perceive, clock: Callable[[], float] = time.monotonic,
                  sleep_fn: Callable[[float], None] | None = None, rng: random.Random | None = None,
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
-                 coords_fn: Callable[[Any, dict], Any] = read_coords) -> None:
+                 coords_fn: Callable[[Any, dict], Any] = read_coords,
+                 mount_marker: Path | None = None) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
@@ -268,7 +279,8 @@ class Bot:
         self._zero_streak = 0
         self._last_click_vec: Xy | None = None
         self._clear = 0
-        self._dismounted = False
+        self._dismounted = False          # UNICA verdad de "estoy a pie" (se cambia solo con `_set_dismounted`)
+        self._mount_marker = mount_marker   # archivo que existe mientras se esta a pie (sobrevive a F12 / cortes)
         self.kmode = self.nav["mode"] == "teclado"   # caminar solo con W/A/S/D y girar con Q/E (sin clics en el piso)
         self.kb = self.nav["keyboard"]
         self.keynav = KeyboardNav(cfg)
@@ -287,6 +299,7 @@ class Bot:
         self._t_start = self._last_t = self.clock()
         limit = None if max_minutes is None else float(max_minutes) * 60
         try:
+            self._remount_if_marked()
             while self.state is not State.FIN:
                 if limit is not None and self.state is not State.CAPTCHA and self.clock() - self._t_start >= limit:
                     self._remount_quiet()
@@ -965,21 +978,44 @@ class Bot:
         return None
 
     # ------------------------------------------------------------------ RECOGER
-    def _start_pickup(self) -> None:
-        if self.pk["dismount"] and not self._dismounted and self.gi.press("mount"):
-            self._dismounted = True
-            self._sleep(float(self.pk["mount_wait_s"]))
-        self._pk = _Pickup(self.clock())   # el tiempo maximo cuenta despues de bajarse
-
-    def _remount(self) -> None:
-        """Se sube de nuevo si se bajo para recoger (siempre emparejado)."""
-        if not self._dismounted:
+    def _set_dismounted(self, value: bool, why: str) -> None:
+        """UNICO lugar que cambia `_dismounted`: ademas escribe (a pie) o borra (montado) la marca `mount_marker`."""
+        self._dismounted = value
+        m = self._mount_marker
+        if m is None:
             return
-        if self.gi.press("mount"):
-            self._dismounted = False
-            self._sleep(float(self.pk["mount_wait_s"]))
-        else:
+        try:
+            if value:
+                m.parent.mkdir(parents=True, exist_ok=True)
+                m.write_text(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {why}\n", encoding="utf-8")
+            else:
+                m.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("No se pudo actualizar la marca de a pie %s: %s", m, e)
+
+    def _mount_wait(self) -> bool:
+        """Espera la animacion de Ctrl+G mirando el captcha. False si aparecio (ya se entro a CAPTCHA)."""
+        return self._hold_chunked(lambda s: self._sleep(s) or True, float(self.pk["mount_wait_s"])) != "captcha"
+
+    def _dismount(self, why: str) -> bool:
+        """Se baja del caballo (nunca dos bajadas seguidas). False si un captcha interrumpio la espera."""
+        if self._dismounted:
+            return True
+        if not self.gi.press("mount"):
+            logger.warning("No se pudo bajar del caballo; se recoge igual")
+            return True
+        self._set_dismounted(True, why)
+        return self._mount_wait()
+
+    def _remount(self) -> bool:
+        """Se sube de nuevo si se bajo (siempre emparejado). False si un captcha interrumpio la espera."""
+        if not self._dismounted:
+            return True
+        if not self.gi.press("mount"):
             logger.warning("No se pudo volver a montar; se reintenta en la proxima salida")
+            return True
+        self._set_dismounted(False, "subida")
+        return self._mount_wait()
 
     def _remount_quiet(self) -> None:
         try:
@@ -987,35 +1023,156 @@ class Bot:
         except Exception:  # noqa: BLE001
             logger.exception("Fallo al volver a montar")
 
+    def _remount_if_marked(self) -> None:
+        """Al empezar una corrida: si la anterior termino a pie (marca presente) se sube antes de seguir."""
+        m = self._mount_marker
+        if m is None or not m.exists():
+            return
+        logger.warning("La corrida anterior termino a pie (F12 o corte): me subo al caballo")
+        self._set_dismounted(True, "marca previa")
+        self._remount()
+
+    def _start_pickup(self) -> None:
+        self._pk = _Pickup(self.clock())
+
+    def _end_pickup(self, back: State, reason: str) -> Transition:
+        if self._dismounted:
+            logger.info("Termine de recoger (%s): me subo al caballo", reason)
+        return back, reason
+
+    def _valid_items(self, p: Perception) -> list:
+        return [i for i in p.items if i.kind == "item" and not i.reserved_other and i.allowed]
+
+    def _monster_stuck(self, it: Any, p: Perception) -> bool:
+        """La etiqueta del objeto esta pegada a un nombre de monstruo (un clic ahi atacaria al monstruo)."""
+        gap, r = float(self.pk["monster_gap_px"]), it.rect
+        for m in p.monsters:
+            q = m.rect
+            dx = max(q.x - (r.x + r.w), r.x - (q.x + q.w), 0)
+            dy = max(q.y - (r.y + r.h), r.y - (q.y + q.h), 0)
+            if math.hypot(dx, dy) <= gap:
+                return True
+        return False
+
     def _do_recoger(self, p: Perception, t: float) -> Transition:
         k = self._pk
         if k is None:
             return State.BUSCAR, "sin recogida en curso"
-        valid = [i for i in p.items if i.kind == "item" and not i.reserved_other]
+        back = State.VOLVER if self.pending_return else State.BUSCAR
+        valid = self._valid_items(p)
+        if k.phase == "look":
+            return self._pickup_look(k, t, valid, back)
         n = len(valid)
         if k.last_n is not None and n < k.last_n:
             self.stats.items += k.last_n - n
         k.last_n = n
-        k.empty = 0 if n else k.empty + 1
-        back = State.VOLVER if self.pending_return else State.BUSCAR
+        pos = self.tracker.position
+        if k.anchor is not None and pos is not None and math.dist(pos, k.anchor) > float(self.pk["same_spot_u"]):
+            k.tries, k.ignored, k.anchor = [], [], None   # el jugador se movio: los puntos de pantalla ya no valen
+        track = float(self.pk["track_px"])
+        pending = [i for i in valid if not any(math.dist(i.click_point, q) <= track for q in k.ignored)]
+        k.empty = 0 if pending else k.empty + 1
         if k.empty >= int(self.pk["empty_confirm_cycles"]):
-            return back, "no quedan objetos"
+            return self._end_pickup(back, "no quedan objetos")
         if k.presses >= int(self.pk["max_presses"]):
-            return back, "tope de pulsaciones de Z"
+            return self._end_pickup(back, "tope de pulsaciones de Z")
         if t - k.start_t >= float(self.pk["max_seconds"]):
-            return back, "tiempo maximo recogiendo"
-        if n and t - k.last_action_t >= float(self.pk["press_interval_ms"]) / 1000:
-            k.last_action_t = t
-            c = p.item_choice
-            if (k.since_click >= int(self.pk["presses_before_click"]) and c is not None and c.kind == "item"
-                    and not c.reserved_other and c.allowed):
-                self.gi.click_at(*c.click_point, p.mask)
-                k.since_click = 0
-            else:
-                self.gi.press("pickup")
-                k.presses += 1
-                k.since_click += 1
+            return self._end_pickup(back, "tiempo maximo recogiendo")
+        if k.tgt is not None:
+            self._pickup_walking(k, p, t, pos, pending)
+        elif pending and t - k.last_action_t >= float(self.pk["press_interval_ms"]) / 1000:
+            self._pickup_choose(k, p, t, pos, pending)
         return None
+
+    def _pickup_look(self, k: _Pickup, t: float, valid: list, back: State) -> Transition:
+        """Fase inicial: mirar un rato si hay objetos validos. Sin ellos no se baja del caballo."""
+        if not valid:
+            k.empty += 1
+            if t - k.start_t >= float(self.pk["look_s"]) and k.empty >= int(self.pk["empty_confirm_cycles"]):
+                logger.info("Sin objetos validos: no me bajo")
+                self._dbg("recoger", "sin objetos validos")
+                return back, "sin objetos validos"
+            return None
+        if self.pk["dismount"]:
+            logger.info("Objetos en el piso: %d validos -> me bajo del caballo", len(valid))
+            self._dbg("recoger", f"{len(valid)} objetos: me bajo")
+            if not self._dismount("recoger"):
+                return None   # captcha durante la bajada: ya esta en CAPTCHA
+        else:
+            logger.info("Objetos en el piso: %d validos -> recojo montado", len(valid))
+        k.phase, k.empty, k.start_t = "collect", 0, self.clock()   # el tiempo maximo cuenta desde que empieza a recoger
+        return None
+
+    def _pickup_press(self, k: _Pickup, t: float, why: str | None) -> None:
+        """Z (cuenta para `max_presses`); `why` = motivo de llegada (None: Z a ciegas, sin objeto clickeable)."""
+        if why is not None:
+            logger.info("Recoger: llegue (%s) -> Z", why)
+        self.gi.press("pickup")
+        k.presses += 1
+        k.last_action_t, k.tgt = t, None
+
+    def _pickup_walking(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
+        """Esperando llegar al objeto clickeado: Z cuando se cumple alguna condicion de llegada."""
+        if pos is not None and (k.last_pos is None or math.dist(pos, k.last_pos) >= 1.0):
+            k.last_pos, k.still_since = pos, t
+        track, still = float(self.pk["track_px"]), float(self.pk["still_s"])
+        near = [i for i in pending if math.dist(i.click_point, k.tgt) <= track]
+        lab = min(near, key=lambda i: math.dist(i.click_point, k.tgt)) if near else None
+        if lab is not None:
+            k.tgt = lab.click_point   # se sigue la etiqueta aunque la camara se mueva
+        if lab is None:
+            why = "se junto sola"
+        elif math.dist(lab.click_point, p.player_xy) <= float(self.pk["arrive_px"]):
+            why = "cerca de la etiqueta"
+        elif t - k.click_t >= still and t - k.still_since >= still:
+            why = "jugador quieto"
+        elif t - k.click_t >= float(self.pk["walk_timeout_s"]):
+            why = "tiempo de caminata"
+        else:
+            return
+        if lab is not None:
+            self._pickup_count_try(k, lab.click_point, pos)
+        self._pickup_press(k, t, why)
+
+    def _pickup_count_try(self, k: _Pickup, point: tuple[int, int], pos: tuple[int, int] | None) -> None:
+        track = float(self.pk["track_px"])
+        for e in k.tries:
+            if math.dist(e[0], point) <= track:
+                e[0], e[1] = point, e[1] + 1
+                break
+        else:
+            k.tries.append([point, 1])
+        if k.anchor is None:
+            k.anchor = pos
+
+    def _pickup_choose(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
+        """Elige el objeto clickeable mas cercano al jugador (o solo Z si ninguno lo es)."""
+        track, max_tries = float(self.pk["track_px"]), int(self.pk["tries_per_item"])
+        clickable = [i for i in pending if not self._monster_stuck(i, p)]
+        if len(clickable) < len(pending) and not k.warned_monster:
+            k.warned_monster = True
+            logger.info("Etiqueta con monstruo pegado: no la clickeo")
+        if not clickable:
+            self._pickup_press(k, t, None)   # validos pero ninguno clickeable: solo Z
+            return
+        for it in sorted(clickable, key=lambda i: math.dist(i.click_point, p.player_xy)):
+            tries = next((e[1] for e in k.tries if math.dist(e[0], it.click_point) <= track), 0)
+            if tries >= max_tries:
+                logger.info("Recoger: objeto en %s no se puede juntar (%d intentos): lo ignoro", it.click_point, tries)
+                k.ignored.append(it.click_point)
+                if k.anchor is None:
+                    k.anchor = pos
+                continue
+            d = math.dist(it.click_point, p.player_xy)
+            if d <= float(self.pk["arrive_px"]):   # ya esta encima: no hace falta caminar
+                self._pickup_count_try(k, it.click_point, pos)
+                self._pickup_press(k, t, "ya estaba cerca")
+                return
+            logger.info("Recoger: clic en objeto (%d, %d) a %.0f px", it.click_point[0], it.click_point[1], d)
+            self._dbg("recoger", f"clic en objeto a {d:.0f} px")
+            self.gi.click_at(*it.click_point, p.mask)
+            k.tgt, k.click_t, k.last_pos, k.still_since = it.click_point, t, pos, t
+            return
 
     # ------------------------------------------------------------------ EXPLORAR
     def _new_sweep(self) -> None:
@@ -1755,7 +1912,10 @@ class Bot:
         self._clear = self._clear + 1 if p.captcha is None else 0
         if self._clear >= int(self.cw["clear_confirm"]):
             self.alarm.stop()
-            self._remount()
+            if not self._remount():   # volvio el panel mientras se subia: se sigue esperando
+                self._clear = 0
+                self.alarm.start("captcha")
+                return None
             return State.BUSCAR, "el panel desaparecio"
         return None
 
