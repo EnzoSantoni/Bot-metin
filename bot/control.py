@@ -51,6 +51,8 @@ class BotControl:
         self._cond = threading.Condition()
         self._stopped = False
         self._paused = False
+        self._auto_paused = False     # la pausa vigente la puso el detector de input del usuario
+        self._user_input: Any = None  # UserInputDetector (opcional, ver attach_user_input)
         self._finished = False
         self._callbacks: list[Callable[[], None]] = []
         self._pause_callbacks: list[tuple[Callable[[], None], Callable[[], None]]] = []
@@ -67,6 +69,15 @@ class BotControl:
     @property
     def is_paused(self) -> bool:
         return self._paused
+
+    @property
+    def auto_paused(self) -> bool:
+        """True si esta en pausa por input del usuario (se limpia al reanudar)."""
+        return self._paused and self._auto_paused
+
+    def attach_user_input(self, detector: Any) -> None:
+        """Conecta el detector de input del usuario: se entera de las pausas / reanudaciones y del panico."""
+        self._user_input = detector
 
     def add_stop_callback(self, fn: Callable[[], None]) -> None:
         """`fn()` se llama al pararse (ej. `backend.release_all`)."""
@@ -123,6 +134,8 @@ class BotControl:
                 return
             self._stopped = True
             self._cond.notify_all()
+        if self._user_input is not None:
+            self._user_input.disarm()
         logger.warning("PANICO (%s): deteniendo el bot", reason)
         with self._cond:   # el corte se arma ANTES de los callbacks: si uno se cuelga, igual ocurre
             if not self._finished and not self._closed.is_set():
@@ -155,11 +168,27 @@ class BotControl:
             t.cancel()
 
     def toggle_pause(self) -> None:
+        """F11 / interfaz: alterna pausa y reanudar."""
+        self._set_paused(None, auto=False)
+
+    def auto_pause(self) -> None:
+        """Pausa por input fisico del usuario: igual que F11 (suelta todo). No hace nada si ya esta pausado o parado."""
+        self._set_paused(True, auto=True)
+
+    def _set_paused(self, want: bool | None, *, auto: bool) -> None:
         with self._cond:
-            self._paused = not self._paused
+            if want is not None and (self._paused == want or self._stopped):
+                return
+            self._paused = (not self._paused) if want is None else want
             paused = self._paused
+            self._auto_paused = paused and auto
             self._cond.notify_all()
-        if paused:
+        if self._user_input is not None:
+            self._user_input.set_paused(paused)
+        if paused and auto:
+            logger.warning("Pausa automatica: detecte mouse/teclado del usuario. %s o la interfaz para reanudar",
+                           self._pause_key.upper())
+        elif paused:
             logger.info("Pausado (%s para seguir)", self._pause_key.upper())
         else:
             logger.info("Reanudado")

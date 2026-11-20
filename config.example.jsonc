@@ -94,7 +94,21 @@
     "corner_px": 5,              // mouse a <= N px de la esquina sup. izq. de la PANTALLA = panico
     "corner_poll_ms": 50,        // cada cuanto se mira el cursor
     "countdown_s": 5,            // cuenta regresiva antes de arrancar
-    "hard_kill_after_s": 2.0     // > 0. Si tras el panico el loop no termina en N s, se suelta todo y se corta el proceso
+    "hard_kill_after_s": 2.0,    // > 0. Si tras el panico el loop no termina en N s, se suelta todo y se corta el proceso
+    // Pausa automatica (bot/user_input.py): si tocas el mouse o el teclado mientras el bot corre, se pausa igual que con F11
+    // (suelta todo). Distingue tu input del del bot por el flag "inyectado" de los hooks de Windows. Se reanuda con F11 o la
+    // interfaz. No vigila durante la cuenta regresiva, ni con --observar. F11/F12 y el input sobre la interfaz no cuentan.
+    "auto_pause_on_user_input": true,   // false = no pausar nunca por input del usuario
+    "user_mouse_px": 10,                // movimientos fisicos del mouse menores a N px acumulados en user_mouse_window_s = temblor, se ignoran
+    "user_mouse_window_s": 0.3,         // > 0. ventana para acumular el movimiento fisico
+    "auto_pause_grace_s": 1.0           // segundos tras arrancar o reanudar en los que se ignora el input (el F11 o el clic en la interfaz)
+  },
+
+  // Parada programada (bot/schedule.py). Termina prolijo (sube al caballo, etc.) como el tope de tiempo. No corta en medio de
+  // RECOGER ni de un captcha: espera a que terminen. Linea de comandos: --parar-a HH:MM y --parar-tras-metin N (pisan esto).
+  "schedule": {
+    "stop_at": "",               // "HH:MM" hora local; "" = no. Si esa hora ya paso hoy, es manana (el log lo dice al arrancar)
+    "stop_after_metins": 0       // entero >= 0: para tras romper N metin; 0 = sin tope
   },
 
   // Input. Rangos [min, max] en ms (aleatorios por accion).

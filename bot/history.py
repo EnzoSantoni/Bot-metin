@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Motivo de fin (stats.end_reason / run_bot) -> texto para la interfaz.
 REASON_LABELS = {"tiempo": "tope de tiempo", "panico": "pánico (F12 o esquina)", "interfaz": "detenido desde la interfaz",
                  "juego cerrado": "juego cerrado", "muerte": "muerte", "error": "error",
+                 "hora programada": "hora programada", "metin programados": "metin programados",
                  "no puede volver a la zona": "no pudo volver a la zona", "no puede llegar al centro": "no pudo llegar al centro"}
 
 

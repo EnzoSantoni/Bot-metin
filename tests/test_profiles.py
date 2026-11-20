@@ -19,7 +19,7 @@ from test_calibration import CLIENT, ORIGIN, QUAD, SAMPLES, FakeKeyboard, Script
 
 DATA = Path(__file__).parent / "data"
 REAL_PROFILES = PROJECT_ROOT / "profiles"
-NEW_SECTIONS = ("server", "character", "zone", "_profiles", "skill_timing", "items_catalog", "history", "revive")   # skill_timing: Fase 11; items_catalog e history: Fase 12; revive: Fase 14
+NEW_SECTIONS = ("server", "character", "zone", "_profiles", "skill_timing", "items_catalog", "history", "revive", "schedule")   # schedule: pausa automatica y parada programada; skill_timing: Fase 11; items_catalog e history: Fase 12; revive: Fase 14
 ZONA = "Guabina - Oscuridad y Negro"
 
 
@@ -36,13 +36,17 @@ def root(tmp_path):
     shutil.copytree(REAL_PROFILES, r)
     return r
 
+NEW_SAFETY_KEYS = ("auto_pause_on_user_input", "user_mouse_px", "user_mouse_window_s", "auto_pause_grace_s")   # pausa automatica
+
 
 def build(path, root, **kw):
     return pf.build_config(path, profiles_root_dir=root, **kw)
 
 
 def strip_new(cfg: dict) -> dict:
-    return {k: v for k, v in cfg.items() if k not in NEW_SECTIONS}
+    out = {k: v for k, v in cfg.items() if k not in NEW_SECTIONS}
+    out["safety"] = {k: v for k, v in out["safety"].items() if k not in NEW_SAFETY_KEYS}
+    return out
 
 
 def same_as_main(cfg: dict, baseline: dict) -> dict:

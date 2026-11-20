@@ -46,7 +46,11 @@ DEFAULTS: dict[str, Any] = {
     },
     # Seguridad (bot/control.py): panico, pausa, esquina de pantalla, cuenta regresiva, corte forzado.
     "safety": {"panic_key": "f12", "pause_key": "f11", "corner_px": 5, "corner_poll_ms": 50,
-               "countdown_s": 5, "hard_kill_after_s": 2.0},
+               "countdown_s": 5, "hard_kill_after_s": 2.0,
+               # Pausa automatica si el usuario toca mouse/teclado (bot/user_input.py). Ver config.example.jsonc.
+               "auto_pause_on_user_input": True, "user_mouse_px": 10, "user_mouse_window_s": 0.3, "auto_pause_grace_s": 1.0},
+    # Parada programada (bot/schedule.py): stop_at "HH:MM" local ("" = no), stop_after_metins (0 = sin tope).
+    "schedule": {"stop_at": "", "stop_after_metins": 0},
     # Input (bot/input): backend y variaciones aleatorias [min, max] en ms.
     "input": {"backend": "pydirectinput", "click_jitter_px": 4, "delay_ms": [60, 140],
               "key_hold_ms": [50, 110], "move_settle_ms": [30, 80]},
@@ -719,6 +723,26 @@ def _validate_controls_safety_input(cfg: dict) -> None:
         raise ConfigError("safety.corner_poll_ms debe ser > 0")
     if s["hard_kill_after_s"] <= 0:
         raise ConfigError("safety.hard_kill_after_s debe ser > 0")
+    if not isinstance(s.get("auto_pause_on_user_input"), bool):
+        raise ConfigError("safety.auto_pause_on_user_input debe ser true o false")
+    for k in ("user_mouse_px", "user_mouse_window_s", "auto_pause_grace_s"):
+        v = s.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v != v or v < 0:
+            raise ConfigError(f"safety.{k} debe ser un numero >= 0")
+    if s["user_mouse_window_s"] <= 0:
+        raise ConfigError("safety.user_mouse_window_s debe ser > 0")
+    sc = _require_dict(cfg.get("schedule"), "schedule")
+    if not isinstance(sc.get("stop_at"), str):
+        raise ConfigError("schedule.stop_at debe ser un texto HH:MM (o vacio)")
+    if sc["stop_at"].strip():
+        from bot.schedule import parse_hhmm
+        try:
+            parse_hhmm(sc["stop_at"])
+        except ValueError as e:
+            raise ConfigError(f"schedule.stop_at invalido: {e}") from e
+    n = sc.get("stop_after_metins")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ConfigError("schedule.stop_after_metins debe ser un entero >= 0 (0 = sin tope)")
     i = _require_dict(cfg.get("input"), "input")
     _require_text(i.get("backend"), "input.backend")
     v = i.get("click_jitter_px")

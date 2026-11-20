@@ -93,6 +93,7 @@ class App:
         self._thumbs: dict[str, tk.PhotoImage] = {}
         self.phase = ctl.STOPPED
         self.paused = False
+        self.auto_paused = False
         self._got_end = False
         self._last_log_error = ""
         self._last_status: ctl.Status | None = None
@@ -206,6 +207,18 @@ class App:
                                             tooltip="Minutos que corre el bot antes de detenerse solo. 0 = sin límite.")
         self.minutes_field.grid(row=0, column=1, sticky="w", padx=GAP)
         self.minutes_var, self.minutes_entry = self.minutes_field.var, self.minutes_field.entry
+        ttk.Label(opt, text="Parar a las (HH:MM)").grid(row=1, column=0, sticky="nw", pady=GAP_S)
+        self.stop_at_field = ValidatedEntry(opt, vd.optional_hhmm, value=self.opts.stop_at, width=8,
+                                            tooltip="Hora local (HH:MM, 24 h) a la que el bot termina solo. Vacío = no parar a una hora. "
+                                                    "Si esa hora ya pasó hoy, es mañana. No corta un captcha ni la recogida de objetos.")
+        self.stop_at_field.grid(row=1, column=1, sticky="w", padx=GAP)
+        self.stop_at_var, self.stop_at_entry = self.stop_at_field.var, self.stop_at_field.entry
+        ttk.Label(opt, text="Parar tras N metin").grid(row=2, column=0, sticky="nw", pady=GAP_S)
+        self.stop_metins_field = ValidatedEntry(opt, vd.non_negative_int, value=str(self.opts.stop_after_metins), width=8,
+                                                tooltip="El bot termina solo después de romper N metin (termina de recoger antes de parar). "
+                                                        "0 = sin tope.")
+        self.stop_metins_field.grid(row=2, column=1, sticky="w", padx=GAP)
+        self.stop_metins_var, self.stop_metins_entry = self.stop_metins_field.var, self.stop_metins_field.entry
         self.debug_var = tk.BooleanVar(value=self.opts.debug)
         self.observe_var = tk.BooleanVar(value=self.opts.observar)
         self.top_var = tk.BooleanVar(value=self.opts.always_on_top)
@@ -213,10 +226,10 @@ class App:
                        ttk.Checkbutton(opt, text="Observar (sin input)", variable=self.observe_var)]
         add_tooltip(self.checks[0], "Guarda imágenes de lo que ve el bot en la carpeta debug. Útil para revisar errores.")
         add_tooltip(self.checks[1], "El bot mira y registra pero no manda teclas ni clics al juego. Sirve para probar la detección.")
-        self.checks[0].grid(row=1, column=0, sticky="w")
-        self.checks[1].grid(row=1, column=1, columnspan=2, sticky="w", padx=GAP)
+        self.checks[0].grid(row=3, column=0, sticky="w")
+        self.checks[1].grid(row=3, column=1, columnspan=2, sticky="w", padx=GAP)
         top_check = ttk.Checkbutton(opt, text="Siempre encima", variable=self.top_var, command=self._apply_window_prefs)
-        top_check.grid(row=2, column=0, sticky="w")
+        top_check.grid(row=4, column=0, sticky="w")
         add_tooltip(top_check, "Mantiene esta ventana por encima de las demás.")
 
         bar = ttk.Frame(left)
@@ -248,6 +261,10 @@ class App:
         self.info_var = tk.StringVar(value="")
         ttk.Label(st, textvariable=self.info_var, justify="left", wraplength=WRAP + 40).grid(
             row=(len(STAT_FIELDS) + 1) // 2, column=0, columnspan=4, sticky="ew", pady=(GAP_S, 0))
+        self.schedule_var = tk.StringVar(value="")
+        sched_label = ttk.Label(st, textvariable=self.schedule_var, justify="left", wraplength=WRAP + 40)
+        sched_label.grid(row=(len(STAT_FIELDS) + 1) // 2 + 1, column=0, columnspan=4, sticky="ew")
+        add_tooltip(sched_label, "Parada programada de esta corrida (hora y/o cantidad de metin).")
 
         live = section(right, "Objetos de esta sesión")
         live.pack(fill="x", pady=(GAP, 0))
@@ -1204,7 +1221,12 @@ class App:
     # ------------------------------------------------------------------ opciones
     def read_options(self) -> ctl.UiOptions:
         """Opciones actuales de los widgets (ValueError si el tiempo es invalido)."""
+        try:
+            stop_at = ctl.normalize_hhmm(self.stop_at_var.get())
+        except ValueError as e:
+            raise ValueError("La hora de parada tiene que tener el formato HH:MM (ej. 23:30) o estar vacía.") from e
         o = ctl.UiOptions(max_minutes=ctl.parse_minutes(self.minutes_var.get()), debug=bool(self.debug_var.get()),
+                          stop_at=stop_at, stop_after_metins=ctl.parse_stop_metins(self.stop_metins_var.get()),
                           observar=bool(self.observe_var.get()), always_on_top=bool(self.top_var.get()),
                           geometry=self._geometry())
         for kind, _ in KIND_LABELS:
@@ -1275,6 +1297,8 @@ class App:
         self.zone_pos_var.set(zone_view.position_text(None, ""))
         self.draw_zone()
         self.info_var.set("")
+        self.auto_paused = False
+        self.schedule_var.set(ctl.schedule_text(o, 0))
         for v in self.stat_vars.values():
             v.set("-")
         self.live_tree.delete(*self.live_tree.get_children())
@@ -1323,9 +1347,9 @@ class App:
         self.btn_stop.configure(state="normal" if b.stop else "disabled")
         for cb in self.combos.values():
             cb.configure(state="readonly" if b.options else "disabled")
-        for w in (self.minutes_entry, *self.checks):
+        for w in (self.minutes_entry, self.stop_at_entry, self.stop_metins_entry, *self.checks):
             w.configure(state="normal" if b.options else "disabled")
-        self.paused_label.configure(text="PAUSADO" if self.paused and self.phase == ctl.RUNNING else "")
+        self.paused_label.configure(text=ctl.paused_text(self.paused, self.auto_paused) if self.phase == ctl.RUNNING else "")
         self.editor.locked = not b.options
         for w in self.skill_buttons:
             w.configure(state="normal" if b.options else "disabled")
@@ -1393,8 +1417,10 @@ class App:
             self.info_var.set(f"Arrancando en {s.countdown}... (poné el juego al frente)")
         elif not self._got_end:
             self.info_var.set("")
-        if s.paused != self.paused:
-            self.paused = s.paused
+        self.schedule_var.set(ctl.schedule_text(self.opts, s.metins))
+        auto = s.paused and s.auto_paused
+        if s.paused != self.paused or auto != self.auto_paused:
+            self.paused, self.auto_paused = s.paused, auto
             self.refresh_buttons()
 
     def _on_exit(self) -> None:
@@ -1405,7 +1431,7 @@ class App:
             self.root.after_cancel(self._kill_id)
             self._kill_id = None
         was_stopping = self.phase == ctl.STOPPING
-        self.paused = False
+        self.paused = self.auto_paused = False
         self._set_phase(ctl.STOPPED)
         if rc not in (0, None) and not self._got_end and not was_stopping:
             msg = self._last_log_error or "El bot terminó con un error antes de arrancar."

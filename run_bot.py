@@ -1,8 +1,9 @@
 """Ejecutable del bot de farmeo.
 
-Uso: .venv/Scripts/python.exe run_bot.py [--observar] [--max-minutos N]
+Uso: .venv/Scripts/python.exe run_bot.py [--observar] [--max-minutos N] [--parar-a HH:MM] [--parar-tras-metin N]
   --observar: percibe y decide con el juego a la vista, pero NO manda teclas ni clics (solo loguea lo que haria).
-F12 o el mouse en la esquina superior izquierda cortan; F11 pausa. El bot no resuelve el captcha: suena la alarma.
+F12 o el mouse en la esquina superior izquierda cortan; F11 pausa (tambien se pausa solo si tocas el mouse o el teclado:
+safety.auto_pause_on_user_input; no con --observar). El bot no resuelve el captcha: suena la alarma.
 La muerte y "no puede volver a la zona" terminan la corrida y dejan la alarma sonando hasta F12 (o alarm.max_seconds).
 """
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -27,6 +29,8 @@ from bot.control import BotControl, PanicStop
 from bot.input.fake import FakeBackend
 from bot.input.game_input import GameInput, InputBlockedError
 from bot.profiles import build_config
+from bot.schedule import next_stop, parse_hhmm
+from bot.user_input import UserInputDetector, WindowsInputHook, vk_codes
 from bot.ui.controller import CMD_PAUSE, CMD_STOP, END_TAG, STATUS_TAG
 
 logger = logging.getLogger("run_bot")
@@ -36,6 +40,41 @@ UI_STATUS_PERIOD_S = 0.5   # en --ui, cada cuanto se emite la linea @@STATUS
 ALARM_POLL_S = 0.2   # tras la muerte, cada cuanto se mira si la alarma sigue o se pidio parar
 OBSERVE_POLL_S = 0.25   # en --observar, cada cuanto se mira si el juego esta al frente
 ALARM_END_REASONS = ("muerte", "no puede volver a la zona", "no puede llegar al centro")   # terminan con la alarma sonando
+
+
+def _hhmm_arg(text: str) -> str:
+    """Tipo de argparse para --parar-a: valida HH:MM y lo devuelve normalizado."""
+    try:
+        h, m = parse_hhmm(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+    return f"{h:02d}:{m:02d}"
+
+
+def _nonneg_int_arg(text: str) -> int:
+    """Tipo de argparse para --parar-tras-metin: entero >= 0."""
+    try:
+        n = int(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"tiene que ser un entero >= 0, no {text!r}") from e
+    if n < 0:
+        raise argparse.ArgumentTypeError("tiene que ser un entero >= 0 (0 = sin tope)")
+    return n
+
+
+def resolve_schedule(cfg: dict, args: Any, now: datetime) -> tuple[datetime | None, int]:
+    """(momento de la parada por hora, tope de metin) con la linea de comandos pisando la config. Loguea cuando es manana."""
+    sc = cfg["schedule"]
+    text = args.parar_a if args.parar_a is not None else sc["stop_at"]
+    n = args.parar_tras_metin if args.parar_tras_metin is not None else sc["stop_after_metins"]
+    stop_at = None
+    if str(text).strip():
+        stop_at, tomorrow = next_stop(str(text), now)
+        logger.info("Parada programada a las %s%s (%s)", stop_at.strftime("%H:%M"),
+                    " de MANANA: esa hora ya paso hoy" if tomorrow else "", stop_at.strftime("%Y-%m-%d %H:%M"))
+    if n > 0:
+        logger.info("Parada programada tras romper %d metin", n)
+    return stop_at, int(n)
 
 
 class _LoggingBackend(FakeBackend):
@@ -189,6 +228,7 @@ class UiBridge:
         return {"state": getattr(state, "value", str(state)), "phase": self.phase, "countdown": self.countdown,
                 "metins": st.metins, "items": st.items, "captchas": st.captchas, "unstucks": st.unstucks,
                 "elapsed_s": round(st.elapsed_s, 1), "paused": self.control.is_paused,
+                "auto_paused": bool(getattr(self.control, "auto_paused", False)),
                 "skills_cast": getattr(st, "skills_cast", 0), "farm_mode": getattr(st, "farm_mode", "metin"),
                 "deaths": getattr(st, "deaths", 0), "revives": getattr(st, "revives", 0),
                 "lures": getattr(st, "lures", 0), "fight_s": round(getattr(st, "fight_s", 0.0), 1),
@@ -253,11 +293,15 @@ def _record_history(cfg: dict, bot: Any, inicio: datetime, reason: str) -> None:
 
 def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any = None, backend: Any = None,
          control: BotControl | None = None, alarm: Any = None, bot_kwargs: dict | None = None,
-         stdin: Any = None) -> int:
+         stdin: Any = None, input_hook: Callable[..., Any] | None = None) -> int:
     """Devuelve el codigo de salida. Los argumentos con nombre permiten inyectar dependencias (tests)."""
     ap = argparse.ArgumentParser(description="Bot de farmeo (F12/esquina cortan, F11 pausa).")
     ap.add_argument("--observar", action="store_true", help="percibe y decide sin mandar input (loguea lo que haria)")
     ap.add_argument("--max-minutos", type=float, default=None, help="termina solo a los N minutos (no corta mientras hay un captcha en pantalla: espera a que se resuelva)")
+    ap.add_argument("--parar-a", type=_hhmm_arg, default=None, metavar="HH:MM",
+                    help="termina solo a esa hora local (si ya paso hoy, es manana); pisa schedule.stop_at. No corta un captcha ni RECOGER")
+    ap.add_argument("--parar-tras-metin", type=_nonneg_int_arg, default=None, metavar="N",
+                    help="termina solo tras romper N metin (0 = sin tope); pisa schedule.stop_after_metins")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--servidor", default=None, help="perfil de servidor (default: el de config.json o Guabina)")
     ap.add_argument("--personaje", default=None, help="perfil de personaje (default: el de config.json o Farfarfa)")
@@ -296,6 +340,7 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
             print(f"No se encontro el juego: {e}")
             return 1
     control = control or BotControl(cfg)
+    real_input = backend is None and not args.observar   # solo con el backend real tiene sentido vigilar el input fisico
     if backend is None:
         if args.observar:
             backend = _LoggingBackend()
@@ -325,6 +370,18 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
 
     control.add_stop_callback(gi.release_all)
     control.add_stop_callback(alarm.stop)
+    # Pausa automatica por input del usuario: con --observar no hay input del bot para distinguir, asi que se desactiva.
+    s = cfg["safety"]
+    detector = UserInputDetector(cfg, enabled=not args.observar,
+                                 ignored_keys=vk_codes(str(s["pause_key"])) | vk_codes(str(s["panic_key"])))
+    if hasattr(control, "attach_user_input"):
+        control.attach_user_input(detector)
+    hook: Any = None
+    if detector.enabled and (input_hook is not None or real_input):
+        if input_hook is not None:
+            hook = input_hook(detector, control.auto_pause)
+        else:
+            hook = WindowsInputHook(detector, control.auto_pause, ignore_pids={os.getppid()} if args.ui else set())
     control.start()
     died = False
     ui = UiBridge(bot, control, cfg, stdin if stdin is not None else sys.stdin) if args.ui else None
@@ -333,6 +390,7 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     if ui is not None:
         ui.start()
     try:
+        stop_at, stop_after = resolve_schedule(cfg, args, datetime.now())
         print("MODO OBSERVAR: no se manda nada, solo se loguea lo que el bot haria." if args.observar
               else "El bot va a mandar teclas y clics REALES al juego.")
         if cfg["debug"]["enabled"]:
@@ -348,8 +406,11 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
             control.countdown(on_tick=_tick)
         if ui is not None:
             ui.set_countdown(0)
+        detector.arm()   # desde aca se vigila el input del usuario (no durante la cuenta regresiva)
+        if hook is not None:
+            hook.start()
         run_start = datetime.now()
-        stats = bot.run(max_minutes=args.max_minutos)
+        stats = bot.run(max_minutes=args.max_minutos, stop_at=stop_at, stop_after_metins=stop_after)
         print("\n" + stats.summary())
         end_reason = hist_reason = stats.end_reason or "fin"
         if ui is not None:
@@ -369,6 +430,8 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
             _record_history(cfg, bot, run_start, hist_reason)
         if ui is not None:
             ui.end(end_reason, bot.stats.summary())
+        if hook is not None:
+            hook.close()
         control.mark_finished()
         gi.release_all()
         if not died:

@@ -17,6 +17,7 @@ from typing import Any
 
 from bot.config import PROJECT_ROOT, ConfigError
 from bot.profiles import KINDS, build_config, list_profiles
+from bot.schedule import parse_hhmm
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class UiOptions:
     observar: bool = False
     always_on_top: bool = False
     geometry: str = ""                # "ANCHOxALTO+X+Y" de tkinter
+    stop_at: str = ""                 # "HH:MM" local; "" = no parar a una hora
+    stop_after_metins: int = 0        # 0 = sin tope de metin
 
 
 def validate_options(opts: UiOptions) -> list[str]:
@@ -53,10 +56,50 @@ def validate_options(opts: UiOptions) -> list[str]:
     mm = opts.max_minutes
     if not isinstance(mm, (int, float)) or isinstance(mm, bool) or mm != mm or mm < 0 or mm == float("inf"):
         errors.append("El tiempo máximo tiene que ser 0 (sin límite) o mayor que 0.")
+    if opts.stop_at.strip():
+        try:
+            parse_hhmm(opts.stop_at)
+        except ValueError:
+            errors.append("La hora de parada tiene que tener el formato HH:MM (ej. 23:30) o estar vacía.")
+    n = opts.stop_after_metins
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        errors.append("Parar tras N metin tiene que ser un entero 0 (no parar) o mayor.")
     for k in KINDS:
         if not getattr(opts, k):
             errors.append(f"Falta elegir el perfil de {k}.")
     return errors
+
+
+def parse_stop_metins(text: str) -> int:
+    """Texto de 'Parar tras N metin' -> entero >= 0 (vacio = 0). ValueError si no es valido."""
+    t = str(text).strip()
+    if not t:
+        return 0
+    try:
+        n = int(t)
+    except ValueError as e:
+        raise ValueError("Parar tras N metin tiene que ser un número entero (0 = no parar).") from e
+    if n < 0:
+        raise ValueError("Parar tras N metin no puede ser negativo (0 = no parar).")
+    return n
+
+
+def normalize_hhmm(text: str) -> str:
+    """'7:05' -> '07:05'; vacio -> ''. ValueError si el formato es invalido."""
+    if not str(text).strip():
+        return ""
+    h, m = parse_hhmm(text)
+    return f"{h:02d}:{m:02d}"
+
+
+def schedule_text(opts: UiOptions, metins: int) -> str:
+    """Texto de las estadisticas en vivo: 'Para a las HH:MM' y/o 'Faltan N metin' ('' si no hay parada programada)."""
+    parts = []
+    if opts.stop_at.strip():
+        parts.append(f"Para a las {opts.stop_at.strip()}")
+    if opts.stop_after_metins > 0:
+        parts.append(f"Faltan {max(0, opts.stop_after_metins - metins)} metin")
+    return " | ".join(parts)
 
 
 def parse_minutes(text: str) -> float:
@@ -91,6 +134,10 @@ def build_command(opts: UiOptions, *, python: str | None = None, script: str | P
             cmd += [f"--{k}", v]
     if opts.max_minutes and opts.max_minutes > 0:
         cmd += ["--max-minutos", f"{opts.max_minutes:g}"]
+    if opts.stop_at.strip():
+        cmd += ["--parar-a", opts.stop_at.strip()]
+    if opts.stop_after_metins and opts.stop_after_metins > 0:
+        cmd += ["--parar-tras-metin", str(int(opts.stop_after_metins))]
     cmd.append("--debug" if opts.debug else "--sin-debug")
     if opts.observar:
         cmd.append("--observar")
@@ -111,6 +158,7 @@ class Status:
     unstucks: int = 0
     elapsed_s: float = 0.0
     paused: bool = False
+    auto_paused: bool = False         # la pausa la puso el bot por input del usuario
     profiles: dict = field(default_factory=dict)
     skills_cast: int = 0
     farm_mode: str = "metin"          # "metin" | "bichos"
@@ -194,7 +242,7 @@ def status_from_dict(d: dict) -> Status:
     return Status(state=str(d.get("state", "")), phase=str(d.get("phase", "running")), countdown=_as_int(d.get("countdown")),
                   metins=_as_int(d.get("metins")), items=_as_int(d.get("items")), captchas=_as_int(d.get("captchas")),
                   unstucks=_as_int(d.get("unstucks")), elapsed_s=_as_float(d.get("elapsed_s")),
-                  paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {},
+                  paused=bool(d.get("paused", False)), auto_paused=bool(d.get("auto_paused", False)), profiles=prof if isinstance(prof, dict) else {},
                   skills_cast=_as_int(d.get("skills_cast")),
                   farm_mode=str(d.get("farm_mode") or "metin"), lures=_as_int(d.get("lures")), deaths=_as_int(d.get("deaths")),
                   revives=_as_int(d.get("revives")),
@@ -233,6 +281,13 @@ def parse_line(line: str) -> ParsedLine:
 def tab_title(title: str, dirty: bool) -> str:
     """Titulo de una pestana con '*' si tiene cambios sin guardar."""
     return f"{title} *" if dirty else title
+
+
+def paused_text(paused: bool, auto: bool) -> str:
+    """Cartel de pausa de Control ('' si no esta pausado)."""
+    if not paused:
+        return ""
+    return "PAUSADO (automático)" if auto else "PAUSADO"
 
 
 def format_elapsed(seconds: float) -> str:
@@ -285,6 +340,14 @@ def load_settings(path: str | Path = SETTINGS_FILE, profiles: dict[str, list[str
     mm = data.get("max_minutes")
     if isinstance(mm, (int, float)) and not isinstance(mm, bool) and 0 <= mm < float("inf"):
         opts.max_minutes = float(mm)
+    if isinstance(data.get("stop_at"), str):
+        try:
+            opts.stop_at = normalize_hhmm(data["stop_at"])
+        except ValueError:
+            pass
+    sm = data.get("stop_after_metins")
+    if isinstance(sm, int) and not isinstance(sm, bool) and sm >= 0:
+        opts.stop_after_metins = sm
     for k in ("debug", "observar", "always_on_top"):
         if isinstance(data.get(k), bool):
             setattr(opts, k, data[k])

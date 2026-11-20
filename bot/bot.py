@@ -12,6 +12,7 @@ import logging
 import math
 import random
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -275,7 +276,9 @@ class Bot:
                  mount_marker: Path | None = None, spawn_map: SpawnMap | None = None,
                  catalog: ItemCatalog | None = None,
                  death_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_death(img, cfg),
-                 icon_fn: Callable[..., Any] = find_icon) -> None:
+                 icon_fn: Callable[..., Any] = find_icon,
+                 wall_clock: Callable[[], datetime] = datetime.now) -> None:
+        self.wall_clock = wall_clock   # hora local, solo para la parada programada (`run(stop_at=...)`)
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
@@ -377,8 +380,22 @@ class Bot:
     def finished(self) -> bool:
         return self.state is State.FIN
 
-    def run(self, max_minutes: float | None = None) -> BotStats:
-        """Corre hasta FIN. PanicStop se propaga. Sin tope de tiempo mientras espera el captcha."""
+    def _scheduled_stop(self, stop_at: datetime | None, stop_after_metins: int) -> str | None:
+        """Motivo de la parada programada si ya se cumplio, o None. No corta captcha, RECOGER ni un revivir en curso:
+        espera a que terminen y para en el siguiente ciclo."""
+        if self.state in (State.CAPTCHA, State.RECOGER, State.REVIVIR):
+            return None
+        if stop_at is not None and self.wall_clock() >= stop_at:
+            return "hora programada"
+        if stop_after_metins > 0 and self.stats.metins >= stop_after_metins:
+            return "metin programados"
+        return None
+
+    def run(self, max_minutes: float | None = None, stop_at: datetime | None = None,
+            stop_after_metins: int = 0) -> BotStats:
+        """Corre hasta FIN. PanicStop se propaga. Sin tope de tiempo mientras espera el captcha.
+
+        `stop_at` (hora local) y `stop_after_metins` (0 = sin tope): parada programada, ver `_scheduled_stop`."""
         self._t_start = self._last_t = self.clock()
         self._start_skills(self._t_start)
         limit = None if max_minutes is None else float(max_minutes) * 60
@@ -388,6 +405,12 @@ class Bot:
                 if limit is not None and self.state is not State.CAPTCHA and self.clock() - self._t_start >= limit:
                     self._remount_quiet()
                     self._finish("tiempo")
+                    break
+                why = self._scheduled_stop(stop_at, stop_after_metins)
+                if why is not None:
+                    logger.info("Parada programada cumplida (%s): terminando", why)
+                    self._remount_quiet()
+                    self._finish(why)
                     break
                 self.step()
         except WindowNotFoundError as e:

@@ -45,6 +45,18 @@ def non_negative_int(text: str) -> str | None:
     return None if v >= 0 else "No puede ser negativo."
 
 
+def optional_hhmm(text: str) -> str | None:
+    """Hora HH:MM (24 h) o vacío ("no parar a una hora")."""
+    from bot.schedule import parse_hhmm
+    if not str(text).strip():
+        return None
+    try:
+        parse_hhmm(text)
+    except ValueError:
+        return "Usá el formato HH:MM (ej. 23:30)."
+    return None
+
+
 def game_key(text: str) -> str | None:
     """Tecla del juego valida (ej. f4, 4, ctrl+g) que no sea la de pausa ni la de panico del bot."""
     text = str(text).strip()
