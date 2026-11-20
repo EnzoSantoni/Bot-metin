@@ -125,8 +125,12 @@ class ItemCatalog:
 
     def _write_atomic(self, path: Path, data: bytes) -> None:
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _save_index(self) -> None:
         if self.dir is None:

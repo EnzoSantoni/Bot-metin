@@ -79,8 +79,8 @@ WRONG_PANEL_KINDS = ("other", "other_metin")
 BRAKE_DIRS = 4      # direcciones (cada 360/BRAKE_DIRS grados) que prueba el clic de freno
 SCREEN_DIRS = {"up": (0.0, -1.0), "down": (0.0, 1.0)}   # direccion de pantalla de W y de S
 HOLD_EPS = 1e-9
-END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER sin lograrlo)
-END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
+# El tope de tiempo y la parada programada no cortan en estos estados: esperan a que terminen
+_NO_CUT_STATES = (State.CAPTCHA, State.RECOGER, State.REVIVIR)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE, State.BICHOS)   # DESTRABAR vuelve a ellos
 LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
 SCREEN_COMBO_VEC = {"W": (0.0, -1.0), "W+D": (1.0, -1.0), "D": (1.0, 0.0), "S+D": (1.0, 1.0), "S": (0.0, 1.0),
@@ -383,7 +383,7 @@ class Bot:
     def _scheduled_stop(self, stop_at: datetime | None, stop_after_metins: int) -> str | None:
         """Motivo de la parada programada si ya se cumplio, o None. No corta captcha, RECOGER ni un revivir en curso:
         espera a que terminen y para en el siguiente ciclo."""
-        if self.state in (State.CAPTCHA, State.RECOGER, State.REVIVIR):
+        if self.state in _NO_CUT_STATES:
             return None
         if stop_at is not None and self.wall_clock() >= stop_at:
             return "hora programada"
@@ -402,7 +402,8 @@ class Bot:
         try:
             self._remount_if_marked()
             while self.state is not State.FIN:
-                if limit is not None and self.state is not State.CAPTCHA and self.clock() - self._t_start >= limit:
+                if (limit is not None and self.state not in _NO_CUT_STATES
+                        and self.clock() - self._t_start >= limit):
                     self._remount_quiet()
                     self._finish("tiempo")
                     break
@@ -528,6 +529,8 @@ class Bot:
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
         if old is State.RECOGER and self.farm_mode == "bichos":
             self._bi_after_pickup()
+        if self.state is not new:
+            return   # un captcha durante la subida ya cambio el estado: no se ejecuta el bloque de `new`
         self._walk = None
         if new not in WALKING_STATES and new is not State.DESTRABAR:
             self._leg = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
@@ -964,11 +967,6 @@ class Bot:
                             start_pos=pos, ref=pos)
         return True
 
-    def _try_attack(self, cands: list[_Cand], p: Perception, t: float) -> bool:
-        """Clic en el primer candidato cuyo clic se pueda mandar."""
-        return any(self._click_attack(c.det.click_point, c.gp, p, t) for c in cands)
-
-    # ------------------------------------------------------------------ ACERCARSE
     def _hover_label(self, p: Perception, a: _Approach) -> MetinDetection | None:
         """Etiqueta de metin (de cualquier tipo) cuya piedra quedo a <= `approach.hover_label_px` del punto del hover."""
         if a.point is None:
@@ -1256,6 +1254,7 @@ class Bot:
         por esta habilidad). Un captcha la aborta: la habilidad queda vencida y `_do_captcha` sube al salir."""
         wait = float(self.skill_cfg["mount_wait_s"])
         self.gi.release_all()
+        self._leg = None   # el desplazamiento de la habilidad no es de la tecla de movimiento: keynav no lo aprende
         down_here = False
         if skill.requires_dismount and not self._dismounted:
             if not self.gi.press("mount"):
@@ -1341,6 +1340,8 @@ class Bot:
         return self._mount_wait()
 
     def _remount_quiet(self) -> None:
+        if self.state in (State.REVIVIR, State.MUERTO):
+            return   # muerto o reviviendo: nunca Ctrl+G
         try:
             self._remount()
         except Exception:  # noqa: BLE001
@@ -1811,9 +1812,6 @@ class Bot:
         return "done"
 
     # ------------------------------------------------------------------ caminata con teclado
-    def _key_name(self, direction: str) -> str:
-        return str(self.cfg["controls"]["camera_" + direction]).upper()
-
     def _flush_leg(self) -> None:
         """Evalua ya el tramo de teclado pendiente (antes de girar la camara, para no mezclar los rumbos)."""
         leg, self._leg = self._leg, None
@@ -2371,6 +2369,7 @@ class Bot:
         """Aprieta la tecla del senuelo (si el juego no esta listo se reintenta en el proximo ciclo)."""
         c = self.bichos
         self.gi.release_all()
+        self._leg = None   # el senuelo puede desplazar al personaje: no evaluar el tramo pendiente
         if not self.gi.press_key(c.lure_key, float(self.skill_cfg["press_hold_s"])):
             logger.warning("Bichos: el juego no estaba listo, no se uso el senuelo")
             return
@@ -2383,6 +2382,7 @@ class Bot:
     def _bi_fight(self) -> None:
         """ESPACIO un tramo de `space_s` con chequeo de captcha (si aparece, `_hold_chunked` ya paso a CAPTCHA)."""
         t0 = self.clock()
+        self._leg = None   # ESPACIO desplaza al personaje: no evaluar el tramo pendiente
         self._hold_space(self.bichos.space_s)
         self.stats.fight_s += max(0.0, self.clock() - t0)
 
@@ -2425,8 +2425,10 @@ class Bot:
         """Espera pasiva: nada de input mientras el panel este. Lo resuelve una persona."""
         self._clear = self._clear + 1 if p.captcha is None else 0
         if self._clear >= int(self.cw["clear_confirm"]):
-            self.alarm.stop()
-            if self._rv is None and not self._remount():   # (revivir en curso: no hay caballo que montar) volvio el panel mientras se subia: se sigue esperando
+            self.alarm.stop()   # silencio mientras se sube (el Ctrl+G no debe sonar con la alarma)
+            if self._rv is None and not self._remount():   # (revivir en curso: no hay caballo que montar)
+                # el estado ya es CAPTCHA (no hay captcha nuevo en las estadisticas): solo se rearma la alarma
+                logger.warning("Volvio el panel mientras me subia: sigo esperando (mismo captcha)")
                 self._clear = 0
                 self.alarm.start("captcha")
                 return None

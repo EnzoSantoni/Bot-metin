@@ -5,14 +5,12 @@ Se guardan en el perfil de personaje (con .bak) conservando el resto de sus clav
 from __future__ import annotations
 
 import copy
-import logging
 from pathlib import Path
 
 from bot.config import DEFAULTS, PROJECT_ROOT, ConfigError, _validate_profile_sections
 from bot.profiles import load_profile, save_profile
+from bot.ui.profile_ops import load_profile_or_empty
 from bot.ui import validators as vd
-
-logger = logging.getLogger(__name__)
 
 # campo -> validador de texto (los booleanos no tienen)
 TEXT_VALIDATORS = {
@@ -86,11 +84,7 @@ class CharacterEditor:
     def load(self, personaje: str) -> None:
         """Carga las opciones del perfil (los valores por defecto donde el perfil no define nada)."""
         self.personaje = personaje
-        try:
-            data = load_profile("personaje", personaje, self.profiles_root) if personaje else {}
-        except ConfigError as e:
-            logger.warning("No se pudieron cargar las opciones del personaje: %s", e)
-            data = {}
+        data = load_profile_or_empty("personaje", personaje, self.profiles_root, "No se pudieron cargar las opciones del personaje")
         v = defaults()
         pk = data.get("pickup") or {}
         if isinstance(pk.get("dismount"), bool):

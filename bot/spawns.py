@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from bot.fileutil import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = 1
@@ -79,9 +81,7 @@ class SpawnMap:
             data = {"version": FORMAT_VERSION,
                     "spots": [{"x": round(s.x, 2), "y": round(s.y, 2), "n": s.n, "last_broken": round(s.last_broken, 1),
                                "last_visit": round(s.last_visit, 1)} for s in self.spots]}
-            tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            os.replace(tmp, self.path)
+            atomic_write_text(self.path, json.dumps(data, indent=2))
         except OSError as e:
             logger.warning("Mapa de metin: no se pudo guardar %s: %s", self.path, e)
 

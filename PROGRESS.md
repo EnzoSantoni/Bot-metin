@@ -17,6 +17,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 **Rama `main`: Fase 6c + recoger a pie, 992 tests pasan.**
 
 ## Decisiones tomadas sin Enzo (noche del 2026-11-20)
+- **Revisión general:** ver la sección "Revisión general (noche del 2026-11-20)" al final del bloque de estado (el tope de tiempo ahora tampoco corta en RECOGER ni REVIVIR, igual que la parada programada; `align_deg` queda sin uso).
 - **Pausa automática y parada programada:** decisiones en la sección "Pausa automática y parada programada" (observar la desactiva, solo pulsaciones/clics/rueda cuentan, sin posición esperada del mouse, RECOGER y REVIVIR retrasan la parada).
 - **Interfaz completa (tanda 2):** decisiones en la sección "Interfaz completa (tanda 2)" (Duplicar no cambia el perfil elegido; Crear y Nueva sí; migrar siempre con confirmación en la ventana).
 - **Interfaz completa (tanda 1):** decisiones en la sección "Interfaz completa (tanda 1)" (selector rápido de modo guarda al elegir; guías de calibración con `calibrate.py --ui --en-perfil`; con `config.json` pisando valores se guarda en el perfil y se muestra el aviso).
@@ -63,7 +64,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
    - Un punto al que no pudo llegar porque se trabó queda marcado como visitado, para no insistir con él en bucle.
 
 ### Recoger a pie (pedido de Enzo, 2026-11-20; RECOGER con clics reemplazado por W/A/S/D en la Fase 6d)
-- **RECOGER en dos fases** (`Bot._do_recoger`):
+- **(histórico, reemplazado en la Fase 6d: hoy RECOGER camina con W/A/S/D y no hace clics)** **RECOGER en dos fases** (`Bot._do_recoger`):
   - **"Mirar":** hasta `pickup.look_s` (1 s) y `empty_confirm_cycles` ciclos. Si no ve objetos válidos (kind "item", ni yang ni de otro jugador, `allowed`), NO se baja y vuelve a BUSCAR.
   - **Con objetos válidos:** Ctrl+G y espera `mount_wait_s` (solo si `pickup.dismount`).
   - **Recoger, objeto por objeto:** elige el más cercano, clic en su etiqueta y Z al llegar. "Llegar" es que la etiqueta esté a ≤ `arrive_px`, que desaparezca, que el jugador quede quieto `still_s`, o que pasen `walk_timeout_s`. Si la etiqueta ya está a ≤ `arrive_px`, aprieta Z sin clic.
@@ -84,7 +85,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 - **Diagnóstico de la prueba:** el jugador estaba en (689, 107), ADENTRO del polígono a 5,7 u del borde norte. La zona estaba bien. Lo que falló fue la regla: sin cámara calibrada exigía que el jugador estuviera a ≥ 15 u del borde (`explore_margin`).
 - **Regla nueva del metin a la vista** (`Bot._zone_reason`):
   - Con la posición del metin estimada, vale la zona del METIN.
-  - Sin cámara, un metin con etiqueta a ≤ `approach.blind_screen_px` (160 px) se ataca si el jugador está adentro o en la franja de tolerancia.
+  - Sin cámara, un metin con etiqueta a ≤ `approach.blind_screen_px` (160 px) se ataca si el jugador está adentro o en la franja de tolerancia. (histórico, reemplazado en la Fase 6d: sin límite de píxeles; `blind_screen_px` está obsoleto)
   - Una piedra lejana sin etiqueta se persigue si el jugador está adentro (sin margen).
 - **"tipo ignorado (metin_negro)" era falso:** era el cartel de un monstruo que se parecía un poco a la plantilla sin llegar al umbral. Ahora el log dice "etiqueta dudosa (se parece a X, score; no alcanza el umbral)". `config.json` y las plantillas estaban bien: Metin Negro es objetivo (lo prueba `tests/test_metin.py` con una captura real).
 - **Movimiento solo con teclado** (`navigation.mode: "teclado"`, por defecto; `"clic"` vuelve al modo anterior):
@@ -133,7 +134,7 @@ Enzo aprobó el plan y mandó `samples/real_metin_lejos_1.png` y `samples/real_r
 ### Fase 6b — valores nuevos a calibrar (estimaciones)
 - `stuck`: `space_s` 2, `forward_s` 1, `monsters_min` 2, `resolve_dist` 10, `look_steps` 4 × `look_step_s` 0.8, `space_fail_max` 2.
 - `explore`: `camera_steps` 12 × `camera_step_s` 0.5 (¿da ~360°?), `border_margin` 25, `leg_s` 10, `max_without_metin_s` 90.
-- `approach`: `blind_screen_px` 160, `blind_player_radius` 25, `max_seconds` 40.
+- `approach`: `blind_screen_px` 160, `blind_player_radius` 25, `max_seconds` 40. (histórico: `blind_screen_px` fue reemplazado en la Fase 6d y hoy se ignora con un aviso)
 - `attack`: `blocked_s` 4. Tramos: `forward_chunk_s` 0.3, `hold_chunk_s` 0.5. ESPACIO se suelta y vuelve a apretar cada 0.5 s: hay que verificar en el juego que el empujón no se corte.
 - Las piedras lejanas sin humo solo se calibraron con Metin Negro (3 ejemplos).
 
@@ -474,7 +475,7 @@ Con `zone.farm_mode: "bichos"` el bot no busca metins: entra al estado nuevo **B
    - **ACERCARSE** (estado nuevo): sin etiquetas visibles pero con piedras lejanas, caminar hacia la más cercana cuya posición estimada quede dentro de la zona o la tolerancia, hasta que aparezca el nombre. Objetivo → ATACAR; otro tipo → se recuerda su posición para ignorarla. Con timeout.
    - **Destrabe por episodios:** el episodio de traba (con su contador y la estrategia que toca) **persiste entre VOLVER/EXPLORAR/ATACAR** hasta que haya progreso real: alejarse ≥ N u del punto de traba o acercarse al objetivo, no 2 u. Las estrategias rotan sin repetir:
      - (A) Si hay monstruos cerca: barra espaciadora ~2 s + W ~1 s.
-     - (C) Sin monstruos: girar la cámara para quedar mirando hacia el interior del polígono (con la cámara estimada) o hacia un metin, y avanzar con W.
+     - (C) Sin monstruos: girar la cámara para quedar mirando hacia el interior del polígono (con la cámara estimada) o hacia un metin, y avanzar con W. (histórico, reemplazado en la Fase 6d: ya no se gira la cámara para caminar, ver Movimiento solo con teclado)
      - Clic hacia atrás o hacia un costado.
      - (D) Agotadas, o varias trabas seguidas en poco tiempo: ir al **centro** del polígono.
    - **ATACAR:**
@@ -542,8 +543,8 @@ Con `zone.farm_mode: "bichos"` el bot no busca metins: entra al estado nuevo **B
      - Si la vida no baja en X segundos: otro clic. Si sigue igual: descartarlo por N minutos, recordado por la coordenada del personaje.
      - Si mientras va hacia el metin el personaje sale de la tolerancia: abandonar y volver.
    - **Roto**: el panel desaparece, o la vida queda en 0 dos ciclos seguidos (no uno solo, por si algo tapa la barra). Pasa a RECOGER.
-   - **RECOGER**: Z repetido (recoge uno por vez) mientras queden objetos válidos. Si quedan y se pueden clickear: clic en la etiqueta y Z. Opción de bajarse del caballo para recoger (`pickup.dismount`, apagada). Máximo de intentos y de tiempo.
-   - **EXPLORAR**: girar la cámara con Q/E en pasos, mirando después de cada uno. Si no aparece nada, caminar hacia un punto aleatorio dentro del polígono.
+   - **RECOGER**: Z repetido (recoge uno por vez) mientras queden objetos válidos. Si quedan y se pueden clickear: clic en la etiqueta y Z. Opción de bajarse del caballo para recoger (`pickup.dismount`, apagada). Máximo de intentos y de tiempo. (histórico, reemplazado en la Fase 6d: RECOGER sin clics, a pie con W/A/S/D)
+   - **EXPLORAR**: girar la cámara con Q/E en pasos, mirando después de cada uno. Si no aparece nada, caminar hacia un punto aleatorio dentro del polígono. (histórico: hoy EXPLORAR camina por teclado y gira la cámara solo para mirar)
    - **VOLVER**: fuera de la tolerancia, volver enseguida hacia el centro. En la franja de tolerancia, volver al terminar el metin actual.
    - **DESTRABAR**: si las coordenadas no cambian en N segundos mientras intenta moverse (también yendo a un metin), caminar hacia otro lado, girar y reintentar, con un máximo de intentos. Después, cambiar de destino.
    - **En cada ciclo:**
@@ -948,3 +949,19 @@ Desde una terminal en `D:\proyectos\metin-bot`, con el juego abierto.
 3. Si en algún caso aparece "El juego no está al frente. Hacé clic en la ventana…" (con un beep), hacé clic en el juego: tiene que decir "Juego al frente, sigo." y capturar. Si no hacés nada, a los 30 s sale sin capturar.
 4. Si aparece el aviso de que el juego corre como administrador, abrí la terminal como administrador y repetí.
 5. Contame en cuál de los casos tuviste que hacer clic vos.
+
+## Revisión general (noche del 2026-11-20)
+Correcciones de la revisión general, sin cambiar el comportamiento ya pedido (1722 tests; antes 1710).
+- **1. `_enter` con captcha durante la subida:** tras el `_remount()` al salir de RECOGER, si `self.state` ya no es `new` (un captcha lo cambió) se sale sin ejecutar el bloque de `new`. Ya no queda `_vl_since` colgado estando en CAPTCHA; Ctrl+G queda par. (`bot/bot.py`)
+- **2. Tope de tiempo (`--max-minutos`):** comparte con la parada programada la lista `_NO_CUT_STATES` (CAPTCHA, RECOGER, REVIVIR): espera a que terminen (RECOGER tiene su tope propio). `_remount_quiet` nunca manda Ctrl+G en REVIVIR/MUERTO.
+- **3. Tramo de teclado pendiente:** `_cast_skill`, `_bi_lure` y `_bi_fight` ponen `self._leg = None`, así `keynav` no aprende rumbo/velocidad con el desplazamiento de una habilidad, del señuelo o de ESPACIO.
+- **4. Escrituras atómicas:** nuevo `bot/fileutil.py::atomic_write_text` (`.tmp` + `os.replace`, borra el `.tmp` si falla). Lo usan `save_config`, `save_profile`, `save_settings` y el mapa de metin; el catálogo de objetos ya era atómico y ahora también borra el `.tmp` si falla. El historial es append. Los `.bak` siguen siendo `shutil.copy2`. Quedan sin cambio las imágenes de calibración (`cv2.imwrite`: vistas previas y plantillas) y la marca de a pie (un archivo de una línea).
+- **5. Docs:** PROGRESS.md marca como históricos `blind_screen_px`, RECOGER con clic y girar la cámara para caminar (reemplazados en la Fase 6d). README: sección "Cómo funciona (resumen)" y correcciones (revivir, franja amarilla, pestañas, `--parar-a`/`--parar-tras-metin`).
+- **6. `profiles` en config.example.jsonc:** documentado junto a DEFAULTS (`EXAMPLE_ONLY_KEYS`); ya se validaba en `read_selection` (textos no vacíos, clave de KINDS). Test que compara recursivamente las claves del ejemplo con DEFAULTS.
+- **7. `user_input._run`:** el desinstalado de hooks va en un `finally` (`_unhook_all`), incluso si falla la instalación o el bucle de mensajes.
+- **8. `_do_captcha` (reintento):** se loguea que volvió el panel; no hay captcha nuevo en las estadísticas porque el estado ya era CAPTCHA. Se mantiene `alarm.stop()` antes de subirse (el Ctrl+G no suena con la alarma; un test lo exige) y se rearma con `alarm.start` solo si el panel volvió (un único start).
+- **Interfaz:** los avisos viejos "config.json pisa …" ya no aparecen en Perfiles (se filtran en `refresh_overrides`; test de regresión con la ventana real). "Habilidades *" recién abierta NO se reproduce (con los perfiles reales y con uno de prueba el editor no está sucio): descartado, queda un test.
+- **Editores:** el cargar-perfil-o-vacío estaba copiado en los 4 editores: ahora es `profile_ops.load_profile_or_empty`. El guardar con `.bak` ya es común (`save_profile`); el resto de cada `save` es específico y se dejó.
+- **Subprocesos:** `BotProcess.kill()` espera al hilo lector (tope `READER_JOIN_S`) y cierra stdin/stdout; `stop()` también tras terminar; `App.on_close` cancela el temporizador de kill y mata el subproceso si sigue vivo. La ventana de calibración ya mataba el proceso al cerrar/cancelar. Tests con subprocesos reales de Python (`sleep`).
+- **Código muerto borrado:** `KeyboardNav.plan_turn`, `KeyboardNav.flip_keys` (la inversión de Q/E se hace en `observe`), `KeyboardNav.align`, `Bot._try_attack`, `Bot._key_name`, `END_NO_VOLVER`, `END_NO_CENTRO`, y sus tests (los dos tests de "no se invierten las teclas" ya no envuelven `flip_keys`: siguen comprobando `view_right_key`). La clave de config `navigation.keyboard.align_deg` queda aceptada pero sin uso (quitarla cambia las líneas de base de tests/data; decisión de Enzo). `Zone.direction_to_center` solo la usan sus tests: se dejó.
+- **Cuáles aplican a main:** 1, 2, 4, 7 y 8 (bot.py/config.py/user_input.py existen igual), 3 solo la parte de `_cast_skill` si main tiene `_leg` (keynav reescrito), el resto es de desarrollo (perfiles, editores, interfaz).

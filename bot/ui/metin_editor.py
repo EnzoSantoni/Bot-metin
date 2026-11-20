@@ -4,15 +4,12 @@ Los tipos son los `target_metin_names` del perfil de zona mas los que tienen pla
 plantillas. Guardar escribe `target_metin_names` y `zone.metin_priority` en el perfil de zona (con .bak)."""
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from bot.config import ConfigError
 from bot.profiles import load_profile, save_profile
+from bot.ui.profile_ops import load_profile_or_empty
 from bot.vision.metin import slugify
-
-logger = logging.getLogger(__name__)
 
 _SMALL_WORDS = {"de", "del", "la", "las", "los", "el", "y", "en"}
 ERR_NONE_CHECKED = "Marcá al menos un tipo de metin para atacar."
@@ -84,11 +81,7 @@ class MetinEditor:
     def load(self, zona: str, labels_dir: str | Path | None = None) -> None:
         """Carga los tipos de la zona (vacio si el perfil no se puede leer)."""
         self.zona = zona
-        try:
-            data = load_profile("zona", zona, self.profiles_root) if zona else {}
-        except ConfigError as e:
-            logger.warning("No se pudieron cargar los tipos de metin: %s", e)
-            data = {}
+        data = load_profile_or_empty("zona", zona, self.profiles_root, "No se pudieron cargar los tipos de metin")
         self._targets = [n for n in data.get("target_metin_names") or [] if isinstance(n, str)]
         prio = [n for n in (data.get("zone") or {}).get("metin_priority") or [] if isinstance(n, str)]
         self.types = metin_types(self._targets, prio, labels_dir)

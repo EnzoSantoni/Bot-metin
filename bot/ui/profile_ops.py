@@ -3,6 +3,7 @@ de personaje y de zona."""
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 
 from bot.config import ConfigError
@@ -11,6 +12,17 @@ from bot.profiles import (KIND_DIRS, MAP_SUFFIX, check_name, list_profiles, load
 from bot.vision.metin import slugify
 
 OWNER_TEMPLATE_PATH = ("vision", "items", "owner_template")
+
+logger = logging.getLogger(__name__)
+
+
+def load_profile_or_empty(kind: str, name: str, root: str | Path | None, what: str) -> dict:
+    """Datos del perfil, o {} si no hay nombre o no se puede leer (se loguea `what`). Lo usan todos los editores."""
+    try:
+        return load_profile(kind, name, root) if name else {}
+    except ConfigError as e:
+        logger.warning("%s: %s", what, e)
+        return {}
 
 
 def validate_new_profile_name(kind: str, name: str, existing: list[str] | None = None,

@@ -277,26 +277,35 @@ class WindowsInputHook:
     def _run(self) -> None:
         u32 = self._u32
         try:
-            self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
-            u32.PeekMessageW(ctypes.byref(wintypes.MSG()), None, WM_USER, WM_USER, 0)   # crea la cola de mensajes
-            for kind, fn in ((WH_KEYBOARD_LL, self._on_keyboard), (WH_MOUSE_LL, self._on_mouse)):
-                proc = _HOOKPROC(fn)
-                self._procs.append(proc)
-                h = u32.SetWindowsHookExW(kind, proc, None, 0)
-                if not h:
-                    logger.warning("No se pudo instalar el hook %s: la pausa automatica por input no funciona", kind)
-                else:
-                    self._hooks.append(h)
+            try:
+                self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+                u32.PeekMessageW(ctypes.byref(wintypes.MSG()), None, WM_USER, WM_USER, 0)   # crea la cola de mensajes
+                for kind, fn in ((WH_KEYBOARD_LL, self._on_keyboard), (WH_MOUSE_LL, self._on_mouse)):
+                    proc = _HOOKPROC(fn)
+                    self._procs.append(proc)
+                    h = u32.SetWindowsHookExW(kind, proc, None, 0)
+                    if not h:
+                        logger.warning("No se pudo instalar el hook %s: la pausa automatica por input no funciona", kind)
+                    else:
+                        self._hooks.append(h)
+            finally:
+                self._ready.set()
+            if not self._hooks:
+                return
+            msg = wintypes.MSG()
+            while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                u32.TranslateMessage(ctypes.byref(msg))
+                u32.DispatchMessageW(ctypes.byref(msg))
         finally:
-            self._ready.set()
-        if not self._hooks:
-            return
-        msg = wintypes.MSG()
-        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            u32.TranslateMessage(ctypes.byref(msg))
-            u32.DispatchMessageW(ctypes.byref(msg))
+            self._unhook_all()
+
+    def _unhook_all(self) -> None:
+        """Desinstala los hooks aunque el bucle de mensajes haya fallado."""
         for h in self._hooks:
-            u32.UnhookWindowsHookEx(h)
+            try:
+                self._u32.UnhookWindowsHookEx(h)
+            except Exception:  # noqa: BLE001
+                logger.exception("No se pudo desinstalar un hook")
         self._hooks.clear()
 
     def close(self) -> None:

@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from bot.fileutil import atomic_write_text
 from bot.input.base import VALID_KEYS, parse_keys
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 # Raiz del proyecto: las rutas relativas de la config se resuelven contra esta carpeta,
 # no contra el directorio desde donde se ejecuta el script.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Claves de config.example.jsonc que NO estan en DEFAULTS a proposito: `profiles` es la seleccion de perfiles
+# (servidor/personaje/zona, texto) que lee `bot/profiles.py::read_selection` (valida que sean textos no vacios y que la
+# clave sea una de KINDS). No forma parte del cfg armado: `build_config` la saca antes de validar.
+EXAMPLE_ONLY_KEYS = frozenset({"profiles"})
 
 # Las fases siguientes agregan sus campos aca.
 DEFAULTS: dict[str, Any] = {
@@ -1015,8 +1021,7 @@ def validate_config(cfg: dict) -> None:
 
 def save_config(cfg: dict, path: str | Path = "config.json") -> None:
     """Guarda la config como JSON indentado UTF-8."""
-    resolve_path(path).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
-                                  encoding="utf-8")
+    atomic_write_text(resolve_path(path), json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
 
 
 def read_raw_config(p: Path) -> dict:

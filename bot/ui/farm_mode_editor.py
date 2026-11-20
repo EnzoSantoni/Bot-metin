@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 import copy
-import logging
 from pathlib import Path
 
 from bot.config import DEFAULTS, ConfigError, _validate_profile_sections
 from bot.profiles import load_profile, save_profile
+from bot.ui.profile_ops import load_profile_or_empty
 from bot.ui import validators as vd
 from bot.ui.skills_editor import parse_seconds
-
-logger = logging.getLogger(__name__)
 
 MODES: tuple[tuple[str, str], ...] = (("metin", "Metin"), ("bichos", "Bichos"))   # (valor del perfil, texto de la interfaz)
 MODE_LABELS = dict(MODES)
@@ -110,11 +108,7 @@ class FarmModeEditor:
     def load(self, zona: str) -> None:
         """Carga el modo y el señuelo del perfil de zona (los valores por defecto si no se puede leer)."""
         self.zona = zona
-        try:
-            data = load_profile("zona", zona, self.profiles_root) if zona else {}
-        except ConfigError as e:
-            logger.warning("No se pudo cargar el modo de farmeo: %s", e)
-            data = {}
+        data = load_profile_or_empty("zona", zona, self.profiles_root, "No se pudo cargar el modo de farmeo")
         zn = data.get("zone") or {}
         bi = zn.get("bichos") or {}
         self.mode = zn.get("farm_mode") if zn.get("farm_mode") in MODE_LABELS else "metin"

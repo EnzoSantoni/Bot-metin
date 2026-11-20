@@ -404,3 +404,30 @@ def test_status_informa_auto_paused():
     assert bridge.status()["auto_paused"] is False
     feed_key(ctl, det)
     assert bridge.status()["auto_paused"] is True and bridge.status()["paused"] is True
+
+
+def test_run_desinstala_los_hooks_aunque_el_bucle_de_mensajes_falle():
+    class U32(FakeUser32):
+        def __init__(self):
+            super().__init__()
+            self.unhooked = []
+
+        def PeekMessageW(self, *a):
+            return 0
+
+        def SetWindowsHookExW(self, kind, proc, mod, tid):
+            return 100 + kind
+
+        def GetMessageW(self, *a):
+            raise OSError("boom")
+
+        def UnhookWindowsHookEx(self, h):
+            self.unhooked.append(h)
+
+    det, _ = armed()
+    u32 = U32()
+    hook = WindowsInputHook(det, lambda: None, user32=u32, pid_at_point=lambda x, y: 0, foreground_pid=lambda: 0)
+    with pytest.raises(OSError):
+        hook._run()
+    assert sorted(u32.unhooked) == [100 + ui.WH_KEYBOARD_LL, 100 + ui.WH_MOUSE_LL] and hook._hooks == []
+    assert hook._ready.is_set()

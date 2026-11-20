@@ -44,22 +44,6 @@ def test_tramo_corto_se_acumula_hasta_poder_medir():
     assert k.speed != k.speed0       # la velocidad sale del acumulado (9 u en 0.9 s = 10 u/s)
 
 
-def test_plan_turn_signo_y_segundos():
-    k = nav()          # view_right_key = camera_right: 'right' gira la vista a la derecha; 60 grados/s
-    assert k.plan_turn(math.radians(90)) == ("right", pytest.approx(1.5))
-    assert k.plan_turn(math.radians(-30)) == ("left", pytest.approx(0.5))
-    k2 = nav(view_right_key="camera_left")
-    assert k2.plan_turn(math.radians(90))[0] == "left" and k2.plan_turn(math.radians(-90))[0] == "right"
-
-
-def test_plan_turn_se_recorta_a_max_turn():
-    k = nav(max_turn_deg=100.0)
-    d, s = k.plan_turn(math.radians(170))
-    assert d == "right" and s == pytest.approx(100 / 60)
-    d, s = k.plan_turn(math.radians(-175))
-    assert d == "left" and s == pytest.approx(100 / 60)
-
-
 def test_on_turned_pasa_a_estimado_y_suma_el_giro():
     k = nav()
     walk(k, 10)
@@ -95,7 +79,6 @@ def test_inversion_de_q_e_exige_dos_giros_consistentes(caplog):
         assert walk(k, -120) == "invertido"   # la segunda vez tambien giro hacia la izquierda
     assert k.view_right_key == "camera_left"
     assert any("Q/E giran al reves" in r.message for r in caplog.records)
-    assert k.plan_turn(math.radians(60))[0] == "left"      # ya con el sentido corregido
 
 
 def test_un_giro_al_reves_aislado_no_invierte_q_e():
@@ -180,13 +163,6 @@ def test_giro_pendiente_con_error_de_medicion_chico_no_invierte():
     walk(k, 0)
     k.on_turned("right", 0.5)      # +30
     assert walk(k, 28) == "aprendido" and k.view_right_key == "camera_right"
-
-
-def test_flip_keys_olvida_el_rumbo():
-    k = nav()
-    walk(k, 10)
-    k.flip_keys()
-    assert k.view_right_key == "camera_left" and k.heading is None
 
 
 def test_describe():

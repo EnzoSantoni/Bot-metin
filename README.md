@@ -2,7 +2,7 @@
 
 Bot de farmeo de metin para un servidor privado de Metin2 que permite este tipo de programas. Funciona **solo con la pantalla y el teclado/mouse**: captura la ventana del juego, analiza la imagen (OpenCV) y simula clics y teclas (pydirectinput). No se inyecta en el juego ni lee su memoria.
 
-Qué hace: busca los metin de los tipos configurados dentro de una zona de farmeo, los ataca, recoge los objetos (sin yang ni objetos de otros jugadores), explora la zona cuando no hay ninguno a la vista y se destraba si queda bloqueado. Si aparece el captcha "Bot Verify" **no lo resuelve**: se pausa y hace sonar una alarma para que lo resuelvas vos. Si el personaje muere, se detiene con alarma.
+Qué hace: busca los metin de los tipos configurados dentro de una zona de farmeo, los ataca, recoge los objetos (sin yang ni objetos de otros jugadores), explora la zona cuando no hay ninguno a la vista y se destraba si queda bloqueado. Si aparece el captcha "Bot Verify" **no lo resuelve**: se pausa y hace sonar una alarma para que lo resuelvas vos. Si el personaje muere se detiene con alarma, o lo revive solo si activás `revive.auto_revive` en su perfil.
 
 > Estado: en desarrollo. El avance, las decisiones y las pruebas pendientes están en [PROGRESS.md](PROGRESS.md). Los requisitos, en [ESPECIFICACION.md](ESPECIFICACION.md).
 
@@ -111,6 +111,18 @@ Todo lo demás (tiempos de ataque, destrabe, navegación, debug, alarma, segurid
 
 **Crear un perfil nuevo a mano:** copiá uno existente de la misma carpeta, cambiale el nombre del archivo y el campo `name`, dejá solo lo que difiere, y usalo con `--zona "Otro"` (o en el bloque `profiles`). Los nombres pueden tener espacios y guiones, pero no `/`, `\`, `..` ni `< > : " | ? *`.
 
+## Cómo funciona (resumen)
+
+- **Elegir el metin:** el más cercano en el piso (con perspectiva: más abajo en pantalla = más cerca), o por prioridad de tipo si hay lista (`zone.metin_priority`).
+- **Ir al metin:** pone el mouse sobre la piedra (hover), lee la etiqueta y, si es un tipo objetivo, hace clic y el personaje va solo. Sin cámara calibrada no hay límite de píxeles.
+- **Moverse (explorar, volver, centro, destrabar):** solo con teclado, W/A/S/D y Q/E para girar la vista (`navigation.mode`); no clickea el piso.
+- **Recoger:** a pie (se baja con Ctrl+G, solo si hay objetos válidos), camina con W/A/S/D al objeto más cercano y aprieta Z; **sin clics**. Después se vuelve a subir.
+- **Mapa de metin:** recuerda dónde rompió metin y vuelve a esos puntos cuando reaparecen (`profiles/zonas/<zona>.mapa.json`, ignorado por git).
+- **Modo bichos** (`zone.farm_mode: "bichos"`): señuelo, pelear con ESPACIO, recoger y caminar un tramo corto adentro de la zona; sin buscar metin.
+- **Revivir:** si `revive.auto_revive` está activo, vuelve a empezar, llama al caballo y vuelve a lanzar las habilidades (hasta `revive.max_revives`); si no, termina con alarma.
+- **Pausa automática:** si tocás el mouse o el teclado mientras corre, se pausa como con F11 (`auto_pause_on_user_input`; `--observar` la desactiva).
+- **Parada programada:** `--parar-a HH:MM` y `--parar-tras-metin N` (también en la interfaz). No cortan en medio de un captcha, una recogida ni un revivir; esperan a que terminen. Lo mismo vale para `--max-minutos`.
+
 ## Puesta en marcha (en este orden)
 
 Todo con `.venv\Scripts\python.exe` desde la carpeta del proyecto y el juego abierto:
@@ -128,7 +140,7 @@ Todo con `.venv\Scripts\python.exe` desde la carpeta del proyecto y el juego abi
 .venv\Scripts\python.exe run_bot.py
 ```
 
-Opciones: `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida), `--ui` (protocolo para la interfaz), `--max-minutos N` (termina solo a los N minutos), `--observar` (sin input), `--config ruta`, `--servidor`/`--personaje`/`--zona` (perfiles, ver más abajo).
+Opciones: `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida), `--ui` (protocolo para la interfaz), `--max-minutos N` (termina solo a los N minutos), `--parar-a HH:MM`, `--parar-tras-metin N`, `--observar` (sin input), `--config ruta`, `--servidor`/`--personaje`/`--zona` (perfiles, ver más abajo).
 
 - Cuenta regresiva de 5 s antes de arrancar.
 - **F12** o llevar el mouse a la **esquina superior izquierda** de la pantalla: detiene el bot al instante y suelta todas las teclas.
@@ -140,13 +152,14 @@ Opciones: `--debug` / `--sin-debug` (pisan `debug.enabled` solo en esa corrida),
 
 Doble clic en `abrir_interfaz.bat` (o en `abrir_interfaz_admin.bat` si el juego corre como administrador: pide permisos). Abre `gui.py` con el `pythonw.exe` del `.venv` (sin consola); si no hay `.venv` local busca `..\metin-bot\.venv`.
 
-- **Perfiles:** listas de servidor, personaje y zona. Debajo, en naranja, los avisos de "config.json pisa X del perfil Y".
+- **Perfiles:** listas de servidor, personaje y zona. Si `config.json` pisa valores del perfil activo, una franja amarilla en cada pestaña que edita perfiles avisa cuáles (con botón para migrarlos).
 - **Prioridad de metin:** debajo de los perfiles, en la pestaña Control. Lista los tipos de metin de la zona elegida; con el interruptor "Elegir por prioridad" encendido, el bot va primero al de más arriba que vea (con ↑ y ↓ lo ordenás) y, entre los del mismo tipo, al más cercano. Apagado (o lista vacía) elige siempre el más cercano, como antes. Se guarda en `zone.metin_priority` del perfil de zona (con `.bak`) y se bloquea mientras el bot corre. Solo cuenta para metin con etiqueta visible: las piedras lejanas sin nombre no tienen tipo conocido. Un nombre que no está en `target_metin_names` se ignora con un aviso.
 - **Opciones:** tiempo máximo en minutos (0 = sin límite), **Debug** (solo para esa corrida, no toca `config.json`), **Observar (sin input)** y **Siempre encima**.
 - **Iniciar / Pausar-Reanudar / Detener:** se habilitan según el estado. Detener manda la orden de parada (igual que F12); si el bot no termina en ~5 s se lo cierra a la fuerza.
 - **Estadísticas en vivo:** estado, metin rotos, objetos, captchas, destrabes, tiempo, cuenta regresiva y motivo de fin. Con el bot en pausa aparece "PAUSADO" en rojo.
 - **Log:** últimas 200 líneas (WARNING en naranja, ERROR en rojo). Si el bot no arranca (juego no encontrado, falta de admin, plantillas), muestra el error y un aviso.
 - **Habilidades (pestaña "Habilidades"):** tabla editable de las habilidades del personaje elegido (`character.skills` de su perfil): activa, nombre, tecla, duración (s), bajarse del caballo y animación (s). Botones Agregar, Editar (o doble clic), Quitar, subir/bajar, Guardar y "Agregar ejemplo" (Aura de Espada F1, Espada Espejo F1, Defensiva 4; son solo ejemplos con 100 s de duración y 2 s de animación: hay que ajustarlos a los valores reales). El diálogo valida en vivo (tecla inválida, F11/F12, duración > 0, animación >= 0) y avisa, sin bloquear, si la tecla coincide con una de `controls` (por ejemplo `z` de recoger). Guardar escribe en el perfil conservando el resto de sus claves y deja un `.bak`; "sin guardar" avisa de cambios pendientes y se pregunta al cambiar de personaje o al iniciar. Al iniciar el bot, todas las habilidades activas se lanzan enseguida; después, cada una al vencer su duración, siempre en un momento seguro (nunca en medio de un clic, recoger, destrabe o captcha): Ctrl+G para bajarse (si hace falta), la tecla, espera de la animación y Ctrl+G para subirse. Con la lista vacía el bot se comporta exactamente igual que antes. Durante la corrida la tabla queda bloqueada (los cambios valen para la próxima sesión) y muestra el tiempo restante de cada una; las estadísticas cuentan "Habilidades lanzadas".
+- **Otras pestañas:** Metin (tipos y prioridad), Zona (mapa), Modo bichos, Personaje (opciones y calibración), Historial y Objetos.
 - La ventana no se minimiza (para dejarla en el segundo monitor) y recuerda posición y tamaño.
 - El bot corre como subproceso (`run_bot.py --ui`): la ventana no se congela y **F12, la esquina del mouse y F11 siguen funcionando igual**. Si cerrás la ventana con el bot corriendo, pide confirmación y lo detiene.
 - Las últimas opciones se guardan en `ui_settings.json` (no se sube al repo).

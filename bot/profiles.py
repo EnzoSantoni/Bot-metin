@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bot.fileutil import atomic_write_text
 from bot.config import (DEFAULTS, PROJECT_ROOT, ConfigError, _merge, read_raw_config, resolve_path, save_config,
                         validate_config)
 
@@ -197,7 +198,7 @@ def save_profile(kind: str, name: str, data: dict, root: str | Path | None = Non
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         shutil.copy2(p, p.with_name(p.name + ".bak"))
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_text(p, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return p
 
 

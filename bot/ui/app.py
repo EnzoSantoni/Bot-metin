@@ -1328,6 +1328,10 @@ class App:
                 return
             self.proc.stop(ctl.STOP_GRACE_S)
         self.save_settings()
+        if self._kill_id is not None:
+            self.root.after_cancel(self._kill_id)
+            self._kill_id = None
+        self.proc.kill()   # (si sigue vivo; ademas cierra las tuberias)
         if self._calib is not None:
             self._calib.kill()
         if self._after_id is not None:

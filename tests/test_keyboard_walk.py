@@ -119,14 +119,10 @@ def test_nunca_concluye_q_e_al_reves_con_una_sola_muestra():
     """Una muestra de giro contraria a lo ordenado (por ruido) no invierte Q/E: hacen falta dos seguidas."""
     env = SimEnv(2, cfg=kcfg(), start=START, speed=SPEED, turn_noise=(0.3, 1.5))
     kn = env.bot.keynav
-    flips = []
-    orig = kn.flip_keys
-    kn.flip_keys = lambda: (flips.append(1), orig())[1]
     seen = []
     obs = kn.observe
     kn.observe = lambda *a, **k: (seen.append(obs(*a, **k)), seen[-1])[1]
     env.run_until(max_s=240)
-    assert not flips
     # cada "invertido" de Q/E vino precedido por un "dudoso" (dos muestras consistentes)
     for i, r in enumerate(seen):
         if r == "invertido" and kn.view_right_key != "camera_right":

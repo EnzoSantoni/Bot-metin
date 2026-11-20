@@ -3,14 +3,12 @@ validacion (reusa la de bot/config.py), alta/edicion/baja/orden y ejemplos."""
 from __future__ import annotations
 
 import copy
-import logging
 from pathlib import Path
 from typing import Any
 
 from bot.config import DEFAULTS, ConfigError, _validate_profile_sections, parse_keys
 from bot.profiles import load_profile, save_profile
-
-logger = logging.getLogger(__name__)
+from bot.ui.profile_ops import load_profile_or_empty
 
 DEFAULT_DURATION_S = 100.0
 DEFAULT_ANIMATION_S = 2.0
@@ -116,11 +114,7 @@ class SkillsEditor:
     def load(self, personaje: str) -> list[dict]:
         """Carga las habilidades del perfil (lista vacia si no hay perfil o no tiene la clave)."""
         self.personaje = personaje
-        try:
-            data = load_profile("personaje", personaje, self.profiles_root) if personaje else {}
-        except ConfigError as e:
-            logger.warning("No se pudieron cargar las habilidades: %s", e)
-            data = {}
+        data = load_profile_or_empty("personaje", personaje, self.profiles_root, "No se pudieron cargar las habilidades")
         sk = (data.get("character") or {}).get("skills")
         self.skills = [dict(s) for s in sk] if isinstance(sk, list) else []
         self._saved = copy.deepcopy(self.skills)

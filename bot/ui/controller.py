@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.config import PROJECT_ROOT, ConfigError
+from bot.fileutil import atomic_write_text
 from bot.profiles import KINDS, build_config, list_profiles
 from bot.schedule import parse_hhmm
 
@@ -26,6 +27,7 @@ END_TAG = "@@END "
 ASK_TAG = "@@ASK "                    # pregunta de calibrate.py --ui (se responde por stdin)
 CMD_PAUSE = "pause"
 CMD_STOP = "stop"
+READER_JOIN_S = 1.0                   # espera maxima al hilo lector tras terminar el subproceso
 STOP_GRACE_S = 5.0                    # tras `stop`, cuanto se espera antes de terminar el proceso a la fuerza
 SETTINGS_FILE = PROJECT_ROOT / "ui_settings.json"
 RUN_BOT = PROJECT_ROOT / "run_bot.py"
@@ -364,7 +366,7 @@ def load_settings(path: str | Path = SETTINGS_FILE, profiles: dict[str, list[str
 def save_settings(opts: UiOptions, path: str | Path = SETTINGS_FILE) -> bool:
     """Guarda las opciones. False (y log) si no se pudo escribir; nunca lanza."""
     try:
-        Path(path).write_text(json.dumps(asdict(opts), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        atomic_write_text(path, json.dumps(asdict(opts), indent=2, ensure_ascii=False) + "\n")
         return True
     except OSError:
         logger.exception("No se pudo guardar %s", path)
@@ -466,17 +468,34 @@ class BotProcess:
         self.send(CMD_STOP)
         try:
             self.proc.wait(timeout=grace_s)
+            self._close_pipes()
             return True
         except subprocess.TimeoutExpired:
             self.kill()
             return False
 
     def kill(self) -> None:
+        """Mata el subproceso (si sigue vivo), espera al hilo lector con tope y cierra las tuberias."""
         if self.proc is not None and self.proc.poll() is None:
             self.proc.kill()
             try:
                 self.proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                logger.warning("El subproceso no termino tras kill()")
+        self._close_pipes()
+
+    def _close_pipes(self) -> None:
+        """Con el proceso muerto el lector llega a EOF: se lo espera un momento y se cierran stdin/stdout."""
+        if self.proc is None or self.proc.poll() is None:
+            return
+        r = self._reader
+        if r is not None and r.is_alive() and r is not threading.current_thread():
+            r.join(timeout=READER_JOIN_S)
+        for pipe in (self.proc.stdin, self.proc.stdout):
+            try:
+                if pipe is not None and (pipe is self.proc.stdin or not (r is not None and r.is_alive())):
+                    pipe.close()
+            except (OSError, ValueError):
                 pass
 
     def drain(self, limit: int = 500) -> list[str | None]:
