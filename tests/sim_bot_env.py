@@ -34,6 +34,7 @@ CLIENT = Rect(8, 31, W, H)
 LABEL_W, LABEL_H = 80, 10
 CAPTCHA_RECT = Rect(1600, 400, 152, 194)
 DEATH_RECT = Rect(10, 10, 100, 20)
+HOVER_PX = 40   # radio alrededor del cuerpo de una piedra lejana donde el mouse hace aparecer su etiqueta
 
 
 class SimControl:
@@ -114,6 +115,7 @@ class SimBackend(FakeBackend):
         self.k_move = {parse_keys(c[f"move_{d}"])[0]: d for d in ("up", "down", "left", "right")}
         self.k_skills = {str(sk["key"]).lower(): bool(sk["requires_dismount"]) for sk in cfg["character"]["skills"]}
         self.cursor = (0, 0)
+        self._move_held: set[str] = set()   # direcciones de movimiento apretadas (varias a la vez: W+D, etc.)
 
     def _log(self, *ev) -> None:
         self.events.append(ev)
@@ -144,9 +146,10 @@ class SimBackend(FakeBackend):
         elif key in self.k_skills:
             w.cast_skill(key, self.k_skills[key])
         elif key in self.k_cam:
-            w.rot_dir = self.k_cam[key]
+            w.start_rotate(self.k_cam[key])
         elif key in self.k_move:
-            w.key_move(self.k_move[key])
+            self._move_held.add(self.k_move[key])
+            w.set_move_keys(self._move_held)
         elif key == self.k_space:
             w.space_held = True
             if w.t - w.space_up_t > w.space_gap_tol:   # soltarla un instante entre tramos no corta el empujon
@@ -157,7 +160,8 @@ class SimBackend(FakeBackend):
         if key in self.k_cam:
             self.world.rot_dir = 0
         elif key in self.k_move:
-            self.world.key_move(None)
+            self._move_held.discard(self.k_move[key])
+            self.world.set_move_keys(self._move_held)
         elif key == self.k_space:
             self.world.space_held, self.world.space_up_t = False, self.world.t
 
@@ -173,6 +177,7 @@ def make_cfg(**over) -> dict:
     """Config de test: tiempos de input en 0 (el simulador corre rapido)."""
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic; los del teclado usan make_cfg(navigation={"mode": "teclado"})
+    cfg["spawns"]["enabled"] = False   # los tests no tocan el mapa de metin del usuario
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     for sec, vals in over.items():
@@ -244,8 +249,12 @@ class SimEnv:
                 if foff is not None:
                     fc = (round(player[0] + foff[0]), round(player[1] + foff[1]))
                     if 40 <= fc[0] < W - 40 and 40 <= fc[1] < H - 40:
-                        far.append(FarMetin(Rect(fc[0] - 25, fc[1] - 60, 50, 70), fc, 0.9, self.mask.allows(*fc)))
-                continue
+                        if self._hovered(fc):   # el mouse esta encima: el juego muestra su nombre aunque este lejos
+                            off = foff
+                        else:
+                            far.append(FarMetin(Rect(fc[0] - 25, fc[1] - 60, 50, 70), fc, 0.9, self.mask.allows(*fc)))
+                if off is None:
+                    continue
             cp = (round(player[0] + off[0]), round(player[1] + off[1]))
             label = Rect(cp[0] - LABEL_W // 2, cp[1] - 65 - LABEL_H // 2, LABEL_W, LABEL_H)
             if label.x < 0 or label.y < 0 or label.right > W or label.bottom > H or not (0 <= cp[0] < W and 0 <= cp[1] < H):
@@ -280,6 +289,11 @@ class SimEnv:
             captcha=CaptchaInfo(CAPTCHA_RECT, 1.0) if w.captcha_active else None,
             death=DeathInfo(DEATH_RECT, None, 1.0) if w.dead else None, player_xy=player,
             far_metins=far, monsters=monsters, monsters_near=count_near(monsters, player, cfg=cfg))
+
+    def _hovered(self, base: tuple[int, int]) -> bool:
+        """El cursor esta sobre el cuerpo de una piedra lejana (cuyo punto base es `base`): se ve su etiqueta."""
+        cx, cy = self.window.screen_to_client(*self.backend.cursor)
+        return math.hypot(cx - base[0], cy - (base[1] - 25)) <= HOVER_PX
 
     def _panel(self) -> PanelInfo | None:
         sel = self.world.selected

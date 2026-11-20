@@ -45,6 +45,16 @@ def strip_new(cfg: dict) -> dict:
     return {k: v for k, v in cfg.items() if k not in NEW_SECTIONS}
 
 
+def same_as_main(cfg: dict, baseline: dict) -> dict:
+    """Excepcion documentada a "igual que main": `spawns.file`. main usa data/mapa_metin.json; desarrollo deriva el mapa de
+    la zona elegida (profiles/zonas/<zona>.mapa.json). Se verifica la derivacion y se compara el resto tal cual."""
+    assert baseline["spawns"]["file"] == "data/mapa_metin.json"
+    assert cfg["spawns"]["file"] == pf.spawns_file_for(ZONA) == f"profiles/zonas/{ZONA}.mapa.json"
+    out = strip_new(cfg)
+    out["spawns"] = {**out["spawns"], "file": baseline["spawns"]["file"]}
+    return out
+
+
 # ------------------------------------------------------------------ igualdad con el cfg de antes de los perfiles
 
 def test_cfg_igual_al_de_antes_con_el_config_de_enzo(tmp_path):
@@ -52,7 +62,7 @@ def test_cfg_igual_al_de_antes_con_el_config_de_enzo(tmp_path):
     shutil.copy(DATA / "config_enzo.json", p)
     baseline = json.loads((DATA / "cfg_baseline_enzo.json").read_text(encoding="utf-8"))
     cfg = load_config(p)
-    assert strip_new(cfg) == baseline
+    assert same_as_main(cfg, baseline) == baseline
     assert set(baseline) == set(strip_new(cfg))
     for sec in ("server", "character", "zone"):    # las secciones nuevas traen los valores por defecto de los perfiles
         assert {k: v for k, v in cfg[sec].items() if k != "name"} == {k: v for k, v in DEFAULTS[sec].items() if k != "name"}
@@ -65,7 +75,7 @@ def test_cfg_igual_al_de_antes_con_config_vacio(tmp_path):
     # unica diferencia con DEFAULTS puros: el perfil Guabina fija el titulo de la ventana
     assert cfg["window_title"] == "Guabina" and baseline["window_title"] == "Metin2"
     baseline["window_title"] = "Guabina"
-    assert strip_new(cfg) == baseline
+    assert same_as_main(cfg, baseline) == baseline
     assert cfg["_profiles"]["overrides"] == []
 
 
@@ -83,6 +93,44 @@ def test_perfiles_reales_validan_y_tienen_su_categoria():
         for n in names:
             pf.load_profile(kind, n)
     assert pf.list_profiles("zona") == [ZONA]
+
+
+# ------------------------------------------------------------------ mapa de metin por zona
+
+def test_mapa_derivado_del_nombre_de_la_zona(tmp_path, root):
+    write(root / "zonas" / "Otra.json", {"zone": {"name": "Otra"}})
+    p = write(tmp_path / "config.json", {})
+    assert build(p, root)["spawns"]["file"] == f"profiles/zonas/{ZONA}.mapa.json"
+    assert build(p, root, zona="Otra")["spawns"]["file"] == "profiles/zonas/Otra.mapa.json"
+    assert not list(root.glob("zonas/*.mapa.json"))   # derivar no escribe nada
+
+
+def test_mapa_explicito_en_el_perfil_de_zona(tmp_path, root):
+    write(root / "zonas" / "Otra.json", {"spawns": {"file": "data/otro.json"}})
+    cfg = build(write(tmp_path / "config.json", {}), root, zona="Otra")
+    assert cfg["spawns"]["file"] == "data/otro.json" and cfg["spawns"]["enabled"] is True
+
+
+def test_mapa_en_config_json_gana(tmp_path, root):
+    p = write(tmp_path / "config.json", {"spawns": {"file": "data/mio.json"}})
+    assert build(p, root)["spawns"]["file"] == "data/mio.json"
+
+
+def test_spawns_es_categoria_de_zona(root):
+    assert pf.kind_of(("spawns", "file")) == "zona"
+    pf.validate_profile_data("zona", {"spawns": {"file": "x.json"}})
+    with pytest.raises(ConfigError):
+        pf.validate_profile_data("servidor", {"spawns": {"file": "x.json"}})
+
+
+def test_el_mapa_no_se_lista_como_perfil(root):
+    write(root / "zonas" / f"{ZONA}.mapa.json", {"version": 1, "spots": []})
+    assert pf.list_profiles("zona") == [ZONA]
+
+
+def test_mapa_de_zona_ignorado_por_git():
+    gi = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "profiles/zonas/*.mapa.json" in gi
 
 
 # ------------------------------------------------------------------ precedencia, avisos, seleccion

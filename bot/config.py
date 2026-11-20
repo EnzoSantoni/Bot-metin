@@ -21,6 +21,9 @@ DEFAULTS: dict[str, Any] = {
     "expected_client_size": [1858, 1057],
     "window": {"settle_ms": 500, "unobstructed_poll_ms": 50},
     "log": {"level": "INFO", "dir": "logs", "file": "bot.log"},
+    # Mapa de metin: puntos donde se rompio un metin (persisten entre sesiones). Ver config.example.jsonc.
+    "spawns": {"enabled": True, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
+               "arrive_u": 5.0, "max_walk_s": 40.0},
     # explore_every_s: cada cuanto guarda una imagen periodica mientras explora; max_images: tope por corrida;
     # jpeg_quality 1-100; max_per_kind: tope de imagenes por tipo de evento (estado, descarte, destrabe, ignorada,
     # equivocada, bloqueado, explorar = la periodica); reason_memory_s: un motivo de descarte que vuelve a aparecer antes
@@ -100,12 +103,19 @@ DEFAULTS: dict[str, Any] = {
                # monstruos cerca para tratar una seleccion equivocada como "monstruo pegado". (Estimados.)
                "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0, "wrong_monsters_min": 1,
                # blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
-               "blocked_window_frac": 0.8},
+               "blocked_window_frac": 0.8,
+               # Ir a un metin lejano con clic: el personaje camina solo. Mientras se mueve no cuenta el estancamiento de
+               # vida (tope walk_max_s). Trabado en el camino con monstruos cerca: ESPACIO unstick_space_s y reclic.
+               "walk_max_s": 25.0, "unstick_space_s": 1.5},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero),
-    # clic en la etiqueta y Z al llegar. Ver config.example.jsonc.
+    # caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z. Cada tramo dura step_s (menos si el objeto esta cerca:
+    # proporcional a su distancia hasta full_step_px, minimo min_step_s); el punto del objeto es el centro inferior de su
+    # etiqueta + item_below_label_px. arrive_px = Z cuando ese punto queda a tanto de los pies. stall_steps tramos sin
+    # acercarse al menos stall_gain_px cuentan como un intento (tries_per_item intentos y se ignora). Ver config.example.jsonc.
     "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
-               "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "monster_gap_px": 12, "arrive_px": 70,
-               "track_px": 80, "still_s": 0.6, "walk_timeout_s": 4.0, "tries_per_item": 2, "same_spot_u": 3.0},
+               "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
+               "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
+               "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
     # EXPLORAR: barrido de camara (pasos de Q/E) y caminata hacia un punto aleatorio del poligono.
     # border_margin: destino de cada tramo a >= esta distancia del borde; leg_s / leg_units: tope de tiempo y largo de un
     # tramo recto; max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO; min_leg_sep_deg / recent_legs: el
@@ -114,21 +124,32 @@ DEFAULTS: dict[str, Any] = {
     # (unidades) entre destinos de tramo parecidos.
     "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
                 "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
-                "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0},
+                "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
+                # edge_return_u: adentro a menos de esto del borde con el tramo alejandose del poligono (o un barrido
+                # completo sin ver nada util a menos de border_margin del borde) -> VOLVER al centro por coordenadas.
+                "edge_return_u": 5.0,
+                # Giros de busqueda de la camara en pasos: despues de cada uno se espera settle_s y settle_frames
+                # percepciones completas antes del siguiente (tiempo para analizar lo que aparecio).
+                "settle_s": 0.6, "settle_frames": 2},
     # ACERCARSE (piedra lejana sin etiqueta): max_seconds de la caminata; ignore_minutes / ignore_radius: posicion que
     # resulto ser de otro tipo; lost_cycles: ciclos sin ver la piedra para abandonar; label_match_px: una etiqueta a
     # esta distancia de la piedra es "esa piedra"; match_px: seguimiento de la piedra entre ciclos;
     # label_exclude_down_px: la piedra con etiqueta se excluye de las lejanas hasta tantos px debajo de la etiqueta.
-    # Sin camara lista (la posicion en el juego no se conoce): blind_screen_px = un metin con etiqueta solo se ataca si
-    # esta a tantos px del personaje en pantalla (y el personaje esta adentro con margen); blind_player_radius = un
-    # descarte o ignorado guardado con la posicion del JUGADOR solo aplica a menos de tantas unidades de ese lugar.
+    # Sin camara lista (la posicion en el juego no se conoce): un metin (con etiqueta o piedra) se ataca/persigue si el
+    # personaje esta adentro de la zona o en la franja de tolerancia, sin limite de distancia en pantalla;
+    # blind_player_radius = un descarte o ignorado guardado con la posicion del JUGADOR solo aplica a menos de tantas
+    # unidades de ese lugar.
+    # ACERCARSE = hover (mover el mouse sobre la piedra, sin clic) para leer su etiqueta: espera hover_wait_s, busca una
+    # etiqueta a <= hover_label_px de la piedra; tras hover_tries hovers sin etiqueta hace clic igual (el panel de
+    # ATACAR confirma el tipo).
     # max_tries_per_spot: aproximaciones a una misma posicion sin llegar a atacar antes de ignorarla.
     # far_monsters_n / far_monsters_px: una piedra lejana SIN humo con tantos monstruos a menos de tantos px es un
     # falso positivo y se ignora.
     "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                  "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
-                 "blind_screen_px": 160, "blind_player_radius": 25.0, "max_tries_per_spot": 3,
-                 "far_monsters_n": 2, "far_monsters_px": 200},
+                 "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+                 "far_monsters_n": 2, "far_monsters_px": 200,
+                 "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2},
     # CENTRO: llega al centro del poligono a <= arrive_dist unidades (el tope de tiempo es volver.max_seconds).
     "center": {"arrive_dist": 8.0},
     # VOLVER: tiempo acumulado maximo de una "vuelta" (s); lo comparte CENTRO.
@@ -169,6 +190,10 @@ DEFAULTS: dict[str, Any] = {
                      "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"},
     },
     "vision": {
+        # Plano del piso (bot/ground.py) para comparar distancias con perspectiva: horizonte a horizon_frac del alto,
+        # focal = focal_frac del ancho, pies del personaje a feet_dy_px debajo de su punto, min_dv_px = acota (v - horizonte).
+        # (Estimados: robusto con horizon_frac 0.10-0.19.)
+        "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
         # Zonas de interfaz ignoradas. dx/dy: esquina superior izquierda respecto del punto de
         # anclaje (medido sobre ./samples). Los rectangulos se recortan al tamano de la imagen.
         "exclusion_zones": [
@@ -356,7 +381,8 @@ def resolve_path(p: str | Path) -> Path:
 
 
 # Claves que ya no se usan: si estan en el config.json se ignoran con un WARNING (no es un error).
-OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"))
+OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
+                 ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -438,6 +464,12 @@ def _validate_far_monsters(vision: dict) -> None:
         _require_numbers(fm.get(k), f"vision.far_metin.{k}", 3)
     if fm["core_ref"] <= 0 or fm["smoke_ref"] <= 0:
         raise ConfigError("vision.far_metin.core_ref y smoke_ref deben ser > 0")
+    gr = _require_dict(vision.get("ground"), "vision.ground")
+    nums(gr, "ground", ("horizon_frac", "focal_frac", "feet_dy_px", "min_dv_px"), ("min_dv_px",))
+    if gr["focal_frac"] <= 0:
+        raise ConfigError("vision.ground.focal_frac debe ser > 0")
+    if gr["horizon_frac"] >= 0.5:
+        raise ConfigError("vision.ground.horizon_frac debe ser < 0.5 (el horizonte esta en la mitad de arriba)")
     mo = _require_dict(vision.get("monsters"), "vision.monsters")
     for k, n in (("red_bgr", 3), ("green_bgr", 3), ("green_kernel", 2)):
         _require_numbers(mo.get(k), f"vision.monsters.{k}", n)
@@ -697,21 +729,23 @@ def _validate_tracking_navigation(cfg: dict) -> None:
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
           "forward_chunk_s", "back_s", "look_walk_s"))
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
-                      "label_exclude_down_px", "blind_screen_px", "blind_player_radius", "max_tries_per_spot",
-                      "far_monsters_n", "far_monsters_px"),
-         ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_screen_px", "blind_player_radius",
-          "max_tries_per_spot", "far_monsters_n", "far_monsters_px"))
+                      "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
+                      "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries"),
+         ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
+          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries"))
     nums("center", ("arrive_dist",), ("arrive_dist",))
     nums("loop", ("cycle_ms", "captcha_full_search_every", "hold_chunk_s"), ("captcha_full_search_every", "hold_chunk_s"))
     nums("attack", ("confirm_timeout_s", "hp_stall_s", "max_reclicks", "max_seconds", "broken_confirm_cycles",
                     "discard_minutes", "discard_radius", "discard_error_frac", "max_wrong_selections", "blocked_s",
-                    "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac"),
+                    "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
+                    "unstick_space_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
-          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac"))
+          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s"))
     nums("pickup", ("press_interval_ms", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
-                    "monster_gap_px", "arrive_px", "track_px", "still_s", "walk_timeout_s", "tries_per_item", "same_spot_u"),
-         ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "track_px", "still_s",
-          "walk_timeout_s", "tries_per_item", "same_spot_u"))
+                    "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "stall_steps",
+                    "stall_gain_px", "track_px", "tries_per_item", "same_spot_u"),
+         ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
+          "full_step_px", "stall_steps", "track_px", "tries_per_item", "same_spot_u"))
     nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s"),
          ("press_hold_s", "chunk_s"))
     if cfg["skill_timing"]["chunk_s"] > 0.5:
@@ -719,8 +753,9 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
-                     "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units"),
-         ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep"))
+                     "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units",
+                     "settle_s", "settle_frames", "edge_return_u"),
+         ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
     nums("volver", ("max_seconds",), ("max_seconds",))
     nums("captcha_wait", ("poll_s", "clear_confirm"), ("poll_s", "clear_confirm"))
     n = nums("navigation", ("probe_radius_px", "arrive_dist", "explore_margin", "min_segment_px", "min_segment_game",
@@ -850,6 +885,14 @@ def validate_config(cfg: dict) -> None:
         raise ConfigError(f"log.level invalido: {level!r} (usa DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     _require_text(log.get("dir"), "log.dir")
     _require_text(log.get("file"), "log.file")
+    sp = _require_dict(cfg.get("spawns"), "spawns")
+    if not isinstance(sp.get("enabled"), bool):
+        raise ConfigError("spawns.enabled debe ser true o false")
+    _require_text(sp.get("file"), "spawns.file")
+    for k in ("merge_u", "respawn_s", "revisit_s", "arrive_u", "max_walk_s"):
+        v = sp.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"spawns.{k} debe ser un numero > 0")
     debug = _require_dict(cfg.get("debug"), "debug")
     if not isinstance(debug.get("enabled"), bool):
         raise ConfigError("debug.enabled debe ser true o false")

@@ -7,9 +7,11 @@
  },
  "approach": {
   "blind_player_radius": 25.0,
-  "blind_screen_px": 160,
   "far_monsters_n": 2,
   "far_monsters_px": 200,
+  "hover_label_px": 120,
+  "hover_tries": 2,
+  "hover_wait_s": 0.3,
   "ignore_minutes": 10.0,
   "ignore_radius": 10.0,
   "label_exclude_down_px": 100,
@@ -33,6 +35,8 @@
   "max_reclicks": 3,
   "max_seconds": 120.0,
   "max_wrong_selections": 3,
+  "unstick_space_s": 1.5,
+  "walk_max_s": 25.0,
   "wrong_monsters_min": 1
  },
  "captcha_wait": {
@@ -88,12 +92,15 @@
   "border_margin": 25.0,
   "camera_step_s": 0.5,
   "camera_steps": 12,
+  "edge_return_u": 5.0,
   "leg_s": 10.0,
   "leg_tiebreak_units": 3.0,
   "leg_units": 45.0,
   "max_without_metin_s": 90.0,
   "min_leg_sep_deg": 60.0,
   "recent_legs": 3,
+  "settle_frames": 2,
+  "settle_s": 0.6,
   "visited_keep": 8,
   "walk_timeout_s": 20.0
  },
@@ -197,17 +204,20 @@
   "arrive_px": 70,
   "dismount": true,
   "empty_confirm_cycles": 5,
+  "full_step_px": 200,
+  "item_below_label_px": 10,
   "look_s": 1.0,
   "max_presses": 30,
   "max_seconds": 20.0,
-  "monster_gap_px": 12,
+  "min_step_s": 0.1,
   "mount_wait_s": 2.0,
   "press_interval_ms": 350,
   "same_spot_u": 3.0,
-  "still_s": 0.6,
+  "stall_gain_px": 8,
+  "stall_steps": 5,
+  "step_s": 0.25,
   "track_px": 80,
-  "tries_per_item": 2,
-  "walk_timeout_s": 4.0
+  "tries_per_item": 2
  },
  "safety": {
   "corner_poll_ms": 50,
@@ -216,6 +226,15 @@
   "hard_kill_after_s": 2.0,
   "panic_key": "f12",
   "pause_key": "f11"
+ },
+ "spawns": {
+  "arrive_u": 5.0,
+  "enabled": true,
+  "file": "data/mapa_metin.json",
+  "max_walk_s": 40.0,
+  "merge_u": 6.0,
+  "respawn_s": 240.0,
+  "revisit_s": 120.0
  },
  "stuck": {
   "back_key_s": 0.6,
@@ -448,6 +467,12 @@
     "min_margin": 0.15,
     "min_score": 0.9
    }
+  },
+  "ground": {
+   "feet_dy_px": 40,
+   "focal_frac": 0.7,
+   "horizon_frac": 0.14,
+   "min_dv_px": 20
   },
   "items": {
    "border_color": [

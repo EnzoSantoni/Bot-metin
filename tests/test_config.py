@@ -1,6 +1,6 @@
 import pytest
 
-from bot.config import DEFAULTS, ConfigError, load_config, save_config
+from bot.config import DEFAULTS, ConfigError, load_config, save_config, validate_config
 
 
 def test_missing_file_creates_defaults(tmp_path):
@@ -87,3 +87,35 @@ def test_relative_paths_resolve_to_project_root():
     from bot.config import PROJECT_ROOT, resolve_path
     assert resolve_path("logs") == PROJECT_ROOT / "logs"
     assert (PROJECT_ROOT / "bot" / "config.py").exists()
+
+
+def test_blind_screen_px_vieja_se_ignora_y_no_rompe(tmp_path, caplog):
+    p = tmp_path / "c.json"
+    p.write_text('{"approach": {"blind_screen_px": 160, "hover_tries": 3}}', encoding="utf-8")
+    cfg = load_config(p)
+    assert "blind_screen_px" not in cfg["approach"] and cfg["approach"]["hover_tries"] == 3
+    assert "obsoleta" in caplog.text
+    assert "blind_screen_px" not in DEFAULTS["approach"]
+
+
+def test_claves_nuevas_con_sus_defaults():
+    assert DEFAULTS["vision"]["ground"] == {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20}
+    assert (DEFAULTS["approach"]["hover_wait_s"], DEFAULTS["approach"]["hover_label_px"],
+            DEFAULTS["approach"]["hover_tries"]) == (0.3, 120, 2)
+    assert (DEFAULTS["attack"]["walk_max_s"], DEFAULTS["attack"]["unstick_space_s"]) == (25.0, 1.5)
+    assert (DEFAULTS["explore"]["settle_s"], DEFAULTS["explore"]["settle_frames"]) == (0.6, 2)
+
+
+@pytest.mark.parametrize("sec,key,val", [("vision.ground", "horizon_frac", 0.6), ("vision.ground", "focal_frac", 0),
+                                         ("vision.ground", "min_dv_px", 0), ("approach", "hover_tries", 0),
+                                         ("attack", "walk_max_s", -1), ("explore", "settle_frames", 0),
+                                         ("explore", "settle_s", "x")])
+def test_validacion_de_claves_nuevas(sec, key, val):
+    import copy
+    cfg = copy.deepcopy(DEFAULTS)
+    d = cfg
+    for part in sec.split("."):
+        d = d[part]
+    d[key] = val
+    with pytest.raises(ConfigError):
+        validate_config(cfg)

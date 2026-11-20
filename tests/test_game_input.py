@@ -351,3 +351,79 @@ def test_hold_zero_seconds_still_presses_once():
     g, be, _, _ = make()
     assert g.hold("move_up", 0)
     assert be.events == [("key_down", "w"), ("key_up", "w")]
+
+
+def test_hover_only_moves_the_mouse_with_jitter_and_mask_check():
+    g, be, _, _ = make()
+    for _ in range(20):
+        be.events.clear()
+        assert g.hover_at(500, 400, open_mask())
+        assert [e[0] for e in be.events] == ["move_to"]   # sin clic ni teclas
+        _, sx, sy = be.events[0]
+        assert (sx - 8 - 500) ** 2 + (sy - 31 - 400) ** 2 <= (g.cfg["input"]["click_jitter_px"] + 1) ** 2
+    be.events.clear()
+    assert g.hover_at(100, 100, open_mask(blocked=Rect(50, 50, 200, 200))) is False
+    assert g.hover_at(1900, 100, open_mask(w=2000, h=1200)) is False   # fuera del cliente
+    assert be.events == []
+    with pytest.raises(ValueError):
+        g.hover_at(10, 10, None)
+
+
+def test_hover_not_ready_sends_nothing():
+    g, be, _, _ = make(ready=False)
+    assert g.hover_at(500, 400, open_mask()) is False
+    assert be.events == []
+
+
+# ---------------------------------------------------------------- hold_keys: teclas combinadas (W+D, S+A, ...)
+def test_hold_keys_aprieta_todas_y_las_suelta_todas():
+    g, be, _, _ = make()
+    assert g.hold_keys(["move_up", "move_right"], 0.12)
+    assert be.events[:2] == [("key_down", "w"), ("key_down", "d")]
+    assert set(be.events[2:]) == {("key_up", "w"), ("key_up", "d")} and len(be.events) == 4
+    assert be.pressed == ([], [])
+
+
+def test_hold_keys_con_una_sola_accion_es_como_hold():
+    g, be, _, _ = make()
+    assert g.hold_keys(["move_down"], 0.01)
+    assert be.events == [("key_down", "s"), ("key_up", "s")]
+
+
+def test_hold_keys_rechaza_mas_de_dos_repetidas_o_combinaciones():
+    g, be, _, _ = make()
+    for bad in ([], ["move_up", "move_down", "move_left"], ["move_up", "move_up"], ["mount"]):
+        with pytest.raises(ValueError):
+            g.hold_keys(bad, 0.1)
+    assert be.events == []
+
+
+def test_hold_keys_panico_suelta_todas():
+    g, be, ctl, _ = make()
+    t = threading.Timer(0.1, lambda: ctl.panic("t"))
+    t.start()
+    with pytest.raises(PanicStop):
+        g.hold_keys(["move_up", "move_left"], 5)
+    t.join()
+    assert be.events[:2] == [("key_down", "w"), ("key_down", "a")]
+    assert be.pressed == ([], [])
+
+
+def test_hold_keys_foco_perdido_suelta_todas_y_sigue_al_volver():
+    g, be, _, win = make()
+    state = {"n": 0}
+
+    def fg():
+        state["n"] += 1
+        return state["n"] != 2          # pierde el foco una vez
+    win.foreground = fg
+    assert g.hold_keys(["move_up", "move_right"], 0.3)
+    downs = [e for e in be.events if e[0] == "key_down"]
+    assert len(downs) == 4 and be.pressed == ([], [])
+    assert be.events[-1][0] == "key_up"
+
+
+def test_hold_keys_sin_listo_no_manda_nada():
+    g, be, _, _ = make(ready=False)
+    assert g.hold_keys(["move_up", "move_right"], 0.1) is False
+    assert be.events == []

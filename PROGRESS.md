@@ -3,8 +3,9 @@
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
 ## Estado actual (2026-11-20)
-**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, más la prioridad de metin de la 12, con 1140 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: el resto de la 12 (historial y conteo de objetos), la 13 y la 14. `main` no se tocó.
+**Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz) y 11 (habilidades) hechas, más la prioridad de metin de la 12, con 1381 tests pasando.** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`"). Pendientes: el resto de la 12 (historial y conteo de objetos), la 13 y la 14. `main` no se tocó.
 
+- **main 0c66ec3 (Fase 6d) integrado en desarrollo:** elección del metin más cercano por perspectiva (`bot/ground.py`), ACERCARSE con hover + clic, ATACAR con caminata, barrido de cámara con pausa, RECOGER con W/A/S/D sin clics, `bot/keynav.py` reescrito y mapa de metin `bot/spawns.py`, todo junto con perfiles, interfaz, habilidades y prioridad. Prioridad + distancia de piso: con `zone.metin_priority` vacía el orden es el de main; con lista, las etiquetas van por rango de su tipo, las piedras sin etiqueta con el rango "no listado" y, a igual rango, la menor distancia de piso (`Bot._goals`, `bot/priority.py::order_by_priority`). Mapa de metin por zona: `spawns` es categoría de zona; sin `spawns.file` en el perfil de zona se deriva `profiles/zonas/<zona>.mapa.json` (ignorado por git, no se lista como perfil). Líneas de base regeneradas desde main (única diferencia con main: `spawns.file`, probada en `tests/test_profiles.py`).
 - **main b353ff2 (Fase 6c) integrado en desarrollo:** regla del metin a la vista sin cámara, "etiqueta dudosa" y movimiento solo con teclado (`navigation.mode`, `bot/keynav.py`) conviven con perfiles, habilidades y prioridad. Líneas de base de "sin cambios de comportamiento" regeneradas desde main.
 - **main 3c1b74c (recoger a pie) integrado en desarrollo:** las habilidades se bajan y se suben con `_set_dismounted` (una sola cuenta de montado con recoger, y la marca `logs/a_pie.flag` también las cubre). El perfil `Farfarfa` quedó con `pickup.dismount: true`. Líneas de base regeneradas desde main.
 
@@ -15,7 +16,49 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 **Rama `main`: Fase 6c + recoger a pie, 992 tests pasan.**
 
-### Recoger a pie (pedido de Enzo, 2026-11-20)
+## Decisiones tomadas sin Enzo (noche del 2026-11-20)
+- **Prioridad + distancia de piso:** con `zone.metin_priority` vacía se elige exactamente como en main (el más cercano por piso entre etiquetas objetivo y piedras). Con lista: rango de prioridad del tipo (piedra sin etiqueta = "no listado" = `len(lista)`) y, a igual rango, la menor distancia de piso. Se mantiene el log "Elegido X por prioridad (mas cerca habia Y)".
+- **Mapa de metin por zona:** el archivo va en el perfil de zona (`spawns.file`); si no lo define, se deriva `profiles/zonas/<zona>.mapa.json`. Cambiar de zona en la interfaz usa el mapa de esa zona. El mapa viejo `data/mapa_metin.json` de main no se migra solo (copiarlo a mano al archivo de la zona si se quiere conservar).
+
+### Fase 6d: qué cambió (pedido de Enzo tras la prueba de las 01:15)
+- **1. Elegir el metin más cercano** (`bot/ground.py`, `Bot._pick_goal`):
+  - La distancia se estima sobre el plano del piso, con perspectiva: horizonte en `vision.ground.horizon_frac` (0.14 del alto) y focal `focal_frac` (0.7 del ancho). Más abajo en pantalla = más cerca.
+  - Se elige el más cercano entre las etiquetas objetivo y las piedras lejanas. Log "Elegido … el mas cercano (piso D.D); tambien: …".
+  - Sin límite de píxeles: sin cámara, un metin se ataca si el jugador está adentro o en la tolerancia. `approach.blind_screen_px` quedó obsoleto: si está en la config, se ignora con un aviso.
+  - Test con `samples/real_tres_metin_hover.png`: elige la piedra de adelante a la derecha (1407, 374).
+- **2. Ir con clic y hover** (`Bot._do_acercarse`, `gi.hover_at`):
+  - Pone el mouse sobre la piedra, espera `approach.hover_wait_s` (0.3 s) y lee la etiqueta.
+  - Si es un objetivo, hace clic en la piedra y el personaje va solo. Si es otro tipo, ignora esa posición.
+  - Si después de `hover_tries` (2) intentos no aparece la etiqueta, hace clic igual y el panel confirma el tipo.
+  - ATACAR tolera la caminata (`attack.walk_max_s` 25 s). Si se traba en el camino con monstruos cerca: espacio `attack.unstick_space_s` (1.5 s) y vuelve a clickear la piedra.
+- **3. Recoger sin clics:** camina con combinaciones de W/A/S/D (8 direcciones) hacia el objeto más cercano y aprieta Z cuando lo tiene a ≤ `pickup.arrive_px` (70 px) de los pies. Lo demás sigue igual (bajarse solo si hay objetos, subirse al terminar, marca de a pie).
+- **4. Cámara en pasos:** entre un giro de búsqueda y el siguiente espera `explore.settle_s` (0.6 s) y al menos `settle_frames` (2) capturas. Una piedra perdida de vista ya no queda ignorada 10 min.
+- **5. Volver por coordenadas** (`bot/keynav.py` reescrito):
+  - Para caminar ya no gira la cámara. Mide hacia dónde camina W con cada tramo (cualquier combinación de teclas) y elige la combinación de W/A/S/D más cercana al rumbo del destino. Q/E quedan solo para mirar.
+  - Si A/D caminan al revés de lo supuesto, lo detecta con dos tramos y lo corrige.
+  - EXPLORAR vuelve al centro si queda afuera, si está a menos de `explore.edge_return_u` (5 u) del borde y se aleja, o si termina un barrido sin ver nada cerca del borde.
+  - En el simulador, con giros de cámara ruidosos y A/D espejadas, siempre vuelve en menos de 25 s.
+- **6. Mapa de dónde aparecen los metin** (`bot/spawns.py`, config `spawns`):
+  - Al romper un metin guarda la posición del jugador en `data/mapa_metin.json`, junto con cuántas veces lo rompió ahí y cuándo. Une los puntos a ≤ `merge_u` (6 u) y el archivo dura entre sesiones.
+  - En EXPLORAR, sin metin a la vista, va al punto conocido más cercano que ya reapareció y que no visitó hace poco: `respawn_s` 240 s desde que lo rompió y `revisit_s` 120 s desde la última visita.
+  - Al llegar (≤ `arrive_u` 5 u, o pasados `max_walk_s` 40 s) lo marca como visitado y hace un barrido de cámara. Elegir siempre el más cercano listo arma el recorrido entre puntos. Sin puntos listos, explora al azar como antes.
+  - Logs: "Mapa de metin: guardo punto …", "Mapa de metin: voy al punto …" y "ningun punto listo (proximo en S s): exploro".
+  - Con `--observar` lee el mapa pero no lo escribe.
+
+### Decisiones tomadas sin Enzo (noche del 2026-11-20)
+1. **Perspectiva:** modelo de plano del piso con valores estimados (`horizon_frac` 0.14, `focal_frac` 0.7). Solo se verificó con `real_tres_metin_hover.png`: allí elige bien con `horizon_frac` entre 0.10 y 0.19.
+2. **Piedra sin etiqueta tras 2 hovers:** hace clic igual. Si no era objetivo, el panel lo detecta en ATACAR y la descarta.
+3. **Para caminar no se gira la cámara** (punto 5): con combinaciones de W/A/S/D se llega a 8 direcciones sin depender de cuánto gira Q/E, que en la prueba de las 01:17 no coincidía con lo pedido. Q/E solo miran alrededor.
+4. **Inclinar la cámara con clic derecho:** no lo hice. Era una sugerencia y puede dejar la cámara mirando solo el piso. Lo vemos después de la prueba.
+5. **RECOGER:** si el jugador queda afuera de la zona mientras recoge, corta la recogida y vuelve.
+6. **Commits:** los puntos 3 y 5 van en el mismo commit porque comparten las teclas combinadas.
+7. **Tests del modo "clic":** el tope de VOLVER en los mundos al azar quedó en 50 s, porque ese modo no cambió. En modo teclado el tope sigue en 25 s.
+8. **Mapa de metin:**
+   - En `main`, que no tiene perfiles, el archivo es `data/mapa_metin.json` (ignorado por git). En `desarrollo` va junto al perfil de zona.
+   - `respawn_s` 240 s es estimado ("a los pocos minutos").
+   - Un punto al que no pudo llegar porque se trabó queda marcado como visitado, para no insistir con él en bucle.
+
+### Recoger a pie (pedido de Enzo, 2026-11-20; RECOGER con clics reemplazado por W/A/S/D en la Fase 6d)
 - **RECOGER en dos fases** (`Bot._do_recoger`):
   - **"Mirar":** hasta `pickup.look_s` (1 s) y `empty_confirm_cycles` ciclos. Si no ve objetos válidos (kind "item", ni yang ni de otro jugador, `allowed`), NO se baja y vuelve a BUSCAR.
   - **Con objetos válidos:** Ctrl+G y espera `mount_wait_s` (solo si `pickup.dismount`).

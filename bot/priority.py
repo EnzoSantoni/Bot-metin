@@ -1,7 +1,6 @@
 """Prioridad entre tipos de metin (puro): orden de los candidatos con etiqueta."""
 from __future__ import annotations
 
-import math
 from typing import Callable, Sequence, TypeVar
 
 from bot.vision.metin import slugify
@@ -18,10 +17,9 @@ def priority_rank(name_slug: str | None, priority_list: Sequence[str]) -> int:
     return len(priority_list)
 
 
-def order_candidates(candidates: Sequence[T], player_xy: tuple[int, int], priority_list: Sequence[str],
-                     key_name: Callable[[T], str | None], key_pos: Callable[[T], tuple[int, int]]) -> list[T]:
-    """Mayor prioridad primero y, a igual prioridad, el mas cercano. Orden estable (como el sort por distancia de siempre);
-    con la lista vacia es exactamente ese orden."""
+def order_by_priority(items: Sequence[T], priority_list: Sequence[str], key_name: Callable[[T], str | None]) -> list[T]:
+    """Ordena por rango de prioridad del tipo (`key_name` None = tipo desconocido = "no listado"). Estable: a igual rango
+    queda el orden de entrada (el llamador la trae ordenada por distancia de piso). Con la lista vacia no cambia nada."""
     if not priority_list:
-        return sorted(candidates, key=lambda c: math.dist(key_pos(c), player_xy))
-    return sorted(candidates, key=lambda c: (priority_rank(key_name(c), priority_list), math.dist(key_pos(c), player_xy)))
+        return list(items)
+    return sorted(items, key=lambda it: priority_rank(key_name(it), priority_list))

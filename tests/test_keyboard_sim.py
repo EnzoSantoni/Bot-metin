@@ -1,5 +1,6 @@
-"""Modo teclado (navigation.mode = "teclado"): el bot camina SOLO con W/A/S/D y gira con Q/E; el clic izquierdo queda para
-atacar un metin y recoger objetos. Todo contra `SimWorld` (input falso)."""
+"""Modo teclado (navigation.mode = "teclado"): el bot camina SOLO con W/A/S/D (8 direcciones, sin girar la camara) y mira con
+Q/E; el clic izquierdo queda para atacar un metin (RECOGER camina hasta los objetos y aprieta Z, sin clics). Todo contra
+`SimWorld` (input falso)."""
 import math
 
 import pytest
@@ -11,7 +12,7 @@ from sim_game import Box, make_a0
 
 OSC, NEG = "metin_de_oscuridad", "metin_negro"
 INSIDE_METINS = [((500, 160), OSC), ((600, 150), NEG), ((680, 165), OSC), ((470, 180), NEG)]
-CLICK_TOL_PX = 25.0     # todo clic izquierdo cae a esta distancia de un metin o de un objeto de RECOGER
+CLICK_TOL_PX = 25.0     # todo clic izquierdo cae a esta distancia de un metin (RECOGER ya no clickea objetos)
 MARGIN = 4.0            # margen de redondeo/latencia sobre outside_tolerance
 
 
@@ -46,13 +47,14 @@ def x_at_sd(env, target, y=150.0):
 
 
 def watch_clicks(env):
-    """Registra, por cada clic izquierdo, la distancia en pantalla al metin o al objeto mas cercano (None = ninguno)."""
+    """Registra, por cada clic izquierdo, la distancia en pantalla al metin mas cercano (None = ninguno)."""
     w, out = env.world, []
     orig = w.click_screen
 
     def spy(vec):
-        near = [math.dist(off, vec) for pt in [m.pos for m in w.metins if m.alive] + [i.pos for i in w.items]
-                if (off := w.visible_offset(pt)) is not None]
+        # una piedra lejana (sin etiqueta, hasta far_dist) tambien es un metin: el clic izquierdo sobre ella esta permitido
+        near = [math.dist(off, vec) for m in w.metins if m.alive
+                and (off := w.visible_offset(m.pos, w.far_dist)) is not None]
         out.append(min(near) if near else None)
         return orig(vec)
     w.click_screen = spy
@@ -86,8 +88,8 @@ def test_farmeo_completo_solo_con_teclado(seed):
     assert why == "cond", (why, env.transitions[-5:])
     assert clicks and not ground_clicks(clicks), ground_clicks(clicks)
     assert max(dist) <= tol(env)
-    k = keys_down(env)
-    assert k.get("w", 0) > 0
+    # ahora a los metin lejanos se va con clic sobre ellos (el personaje camina solo): W ya no es imprescindible
+    assert len(env.world.clicks_on_metin) >= len(targets)
     assert not env.bot.camera.has_a0          # sin clics en el piso la camara no aprende nada
 
 
@@ -157,7 +159,8 @@ def test_destrabe_mirar_y_atras_con_teclado_sin_clics():
         ep.next_strategy = orig
         k = keys_down(env)
         if strat == "MIRAR":
-            assert k.get("w", 0) > w0.get("w", 0) and (k.get("q", 0) + k.get("e", 0)) > (w0.get("q", 0) + w0.get("e", 0))
+            walked = sum(k.get(x, 0) for x in "wasd") > sum(w0.get(x, 0) for x in "wasd")   # camina con alguna combinacion
+            assert walked and (k.get("q", 0) + k.get("e", 0)) > (w0.get("q", 0) + w0.get("e", 0))   # y mira con Q/E
         else:
             assert k.get("s", 0) > w0.get("s", 0)
         assert env.world.t > t0 and math.dist(tuple(env.world.pos), pos0) > 1.0
@@ -177,42 +180,31 @@ def test_traba_real_contra_un_muro_dispara_el_destrabe_con_teclas():
     assert not clicks
 
 
-# ---------------------------------------------------------------- (f) Q/E al reves de lo configurado
-def test_view_right_key_al_reves_se_aprende_en_pocos_giros():
-    """En el simulador `camera_left` gira la vista a la derecha; la config por defecto supone lo contrario."""
+# ---------------------------------------------------------------- (f) Q/E ya no se usan para caminar
+def test_caminar_a_un_punto_no_aprieta_q_e_ni_invierte_las_teclas():
+    """Con la caminata por coordenadas la camara no gira: Q/E quedan solo para mirar; nada que aprender ni invertir."""
     env = kenv(4, start=(520.0, 150.0), phi=0.3)
-    assert env.cfg["navigation"]["keyboard"]["view_right_key"] == "camera_right"
     kn, bot = env.bot.keynav, env.bot
-    log = []                                         # ("giro", t) y ("invertido", t) en orden
-    orig_obs, orig_rot = kn.observe, bot._rotate_camera
-
-    def obs(*a, **k):
-        r = orig_obs(*a, **k)
-        if r == "invertido":
-            log.append("invertido")
-        return r
-
-    def rot(d, s):
-        log.append("giro")
-        return orig_rot(d, s)
-    kn.observe, bot._rotate_camera = obs, rot
     bot._enter(State.CENTRO, "test")
     target = bot.navigator.return_target((520, 150))
     env.run_until(lambda: bot.state is not State.CENTRO, max_s=300)
     assert bot.state is not State.CENTRO
-    assert "invertido" in log and kn.view_right_key == "camera_left"
-    assert log.index("invertido") <= 2          # a lo sumo 2 giros hasta darse cuenta
+    k = keys_down(env)
+    assert k.get("q", 0) == 0 and k.get("e", 0) == 0
+    assert kn.view_right_key == "camera_right" and kn.side == 1
     assert math.dist(tuple(env.world.pos), target) <= float(env.cfg["center"]["arrive_dist"]) + 3
 
 
-def test_view_right_key_al_reves_se_aprende_tambien_acercandose_a_una_piedra():
+def test_acercarse_a_una_piedra_no_gira_la_vista_ni_invierte_las_teclas():
+    """ACERCARSE ya no gira la camara (hover + clic): Q/E no se aprietan por ir a la piedra y la tecla no se invierte."""
     env = kenv(1, start=(520.0, 160.0))
     env.world.add_metin((640.0, 150.0), name=OSC)
     flips = []
     orig = env.bot.keynav.flip_keys
     env.bot.keynav.flip_keys = lambda: (flips.append(env.world.t), orig())[1]
     env.run_until(lambda: env.world.broken, max_s=600)
-    assert env.world.broken and len(flips) == 1 and env.bot.keynav.view_right_key == "camera_left"
+    assert env.world.broken and not flips and env.bot.keynav.view_right_key == "camera_right"
+    assert any(t.new == "ACERCARSE" for t in env.transitions)
 
 
 def test_view_right_key_correcta_no_se_invierte():

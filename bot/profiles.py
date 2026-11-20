@@ -24,6 +24,7 @@ KINDS = ("servidor", "personaje", "zona")
 KIND_DIRS = {"servidor": "servidores", "personaje": "personajes", "zona": "zonas"}
 DEFAULT_SELECTION = {"servidor": "Guabina", "personaje": "Farfarfa", "zona": "Guabina - Oscuridad y Negro"}
 PROFILES_DIRNAME = "profiles"
+MAP_SUFFIX = ".mapa.json"   # mapa de metin de la zona: vive junto al perfil pero no es un perfil
 
 # Lista blanca: ruta de claves -> tipo de perfil al que pertenece. Gana el prefijo mas largo; lo que no esta aca es
 # configuracion general (va en config.json).
@@ -40,6 +41,7 @@ RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("farm_zone",), "zona"),
     (("target_metin_names",), "zona"),
     (("zone",), "zona"),
+    (("spawns",), "zona"),
 )
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -156,7 +158,7 @@ def list_profiles(kind: str, root: str | Path | None = None) -> list[str]:
     """Nombres de los perfiles disponibles de ese tipo, ordenados."""
     _check_kind(kind)
     d = profiles_root(root) / KIND_DIRS[kind]
-    return sorted(p.stem for p in d.glob("*.json")) if d.is_dir() else []
+    return sorted(p.stem for p in d.glob("*.json") if not p.name.endswith(MAP_SUFFIX)) if d.is_dir() else []
 
 
 def validate_profile_data(kind: str, data: Any, source: str = "el perfil") -> None:
@@ -259,6 +261,11 @@ def _legacy(raw: dict) -> dict:
     return cfg
 
 
+def spawns_file_for(zona: str) -> str:
+    """Archivo del mapa de metin de una zona: `profiles/zonas/<zona>.mapa.json` (relativo al proyecto, no se versiona)."""
+    return f"{PROFILES_DIRNAME}/{KIND_DIRS['zona']}/{zona}{MAP_SUFFIX}"
+
+
 def build_config(config_path: str | Path = "config.json", servidor: str | None = None, personaje: str | None = None,
                  zona: str | None = None, *, profiles_root_dir: str | Path | None = None, warn: bool = True) -> dict:
     """Arma el cfg: DEFAULTS <- servidor <- personaje <- zona <- config.json. Agrega `cfg["_profiles"]`.
@@ -281,6 +288,8 @@ def build_config(config_path: str | Path = "config.json", servidor: str | None =
         return _legacy(raw)
     datas = {k: load_profile(k, names[k], profiles_root_dir) for k in KINDS}
     cfg = merge_layers([datas[k] for k in KINDS] + [raw_without_profiles(raw)])
+    if not has_path(datas["zona"], ("spawns", "file")) and not has_path(raw_without_profiles(raw), ("spawns", "file")):
+        cfg["spawns"]["file"] = spawns_file_for(names["zona"])   # mapa de metin propio de la zona elegida
     validate_config(cfg)
     overrides = find_overrides(raw, datas, names)
     if warn:

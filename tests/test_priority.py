@@ -7,7 +7,7 @@ import pytest
 
 import baseline_scenarios as bs
 from bot.config import ConfigError, validate_config
-from bot.priority import order_candidates, priority_rank
+from bot.priority import order_by_priority, priority_rank
 from sim_bot_env import SimEnv, make_cfg
 
 OSC, NEG = "metin_de_oscuridad", "metin_negro"
@@ -28,26 +28,31 @@ def test_rank_ignora_mayusculas_y_tildes():
     assert priority_rank("metin_de_oscuridad", ["Métin dé Oscuridad"]) == 0
 
 
-def _order(cands, prio, player=(0, 0)):
-    return order_candidates(cands, player, prio, lambda c: c[0], lambda c: c[1])
+def _order(cands, prio):
+    """cands = (nombre, distancia de piso); se entregan ordenadas por distancia de piso (como `rank_goals`)."""
+    return order_by_priority(sorted(cands, key=lambda c: c[1]), prio, lambda c: c[0])
 
 
 def test_lista_vacia_es_el_orden_por_distancia_estable():
     # empates de distancia (a y b) conservan el orden de entrada, como el sort de siempre
-    cands = [("a", (10, 0)), ("b", (0, 10)), ("c", (5, 0)), ("d", (-10, 0))]
-    expected = sorted(cands, key=lambda c: math.dist(c[1], (0, 0)))
-    assert _order(cands, []) == expected
-    assert _order(cands, []) == [("c", (5, 0)), ("a", (10, 0)), ("b", (0, 10)), ("d", (-10, 0))]
+    cands = [("a", 10.0), ("b", 10.0), ("c", 5.0), ("d", 20.0)]
+    assert _order(cands, []) == [("c", 5.0), ("a", 10.0), ("b", 10.0), ("d", 20.0)]
+    assert order_by_priority(cands, [], lambda c: c[0]) == cands   # sin lista no reordena nada
 
 
 def test_prioridad_empate_por_cercania_y_no_listados_al_final():
-    cands = [("metin_de_oscuridad", (5, 0)), ("metin_negro", (50, 0)), ("metin_negro", (20, 0)), ("raro", (1, 0))]
+    cands = [("metin_de_oscuridad", 5.0), ("metin_negro", 50.0), ("metin_negro", 20.0), ("raro", 1.0)]
     out = _order(cands, ["Metin Negro"])
-    assert [c[1] for c in out] == [(20, 0), (50, 0), (1, 0), (5, 0)]   # no listados: todos iguales, por distancia
+    assert [c[1] for c in out] == [20.0, 50.0, 1.0, 5.0]   # no listados: todos iguales, por distancia de piso
+
+
+def test_piedra_sin_tipo_va_como_no_listada():
+    items = [(None, 1.0), ("metin_negro", 9.0), ("otro", 3.0)]   # None = piedra sin etiqueta
+    assert [i[1] for i in _order(items, ["Metin Negro"])] == [9.0, 1.0, 3.0]
 
 
 def test_orden_de_la_lista_manda():
-    cands = [("a", (1, 0)), ("b", (2, 0)), ("c", (3, 0))]
+    cands = [("a", 1.0), ("b", 2.0), ("c", 3.0)]
     assert [c[0] for c in _order(cands, ["c", "b"])] == ["c", "b", "a"]
 
 

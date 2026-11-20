@@ -23,7 +23,7 @@ WITH_PANEL = {
 }
 NO_PANEL = ["explorando_zona", "items_en_piso", "metin_cerca_sin_seleccionar", "metin_muy_lejos",
             "metin_oscuridad_a_distancia", "muerte", "real_metin_negro_inventario_mapa",
-            "real_inventario_abierto", "real_rodeado", "real_metin_lejos_1"]
+            "real_inventario_abierto", "real_rodeado", "real_metin_lejos_1", "real_tres_metin_hover"]
 
 
 @pytest.fixture(autouse=True)

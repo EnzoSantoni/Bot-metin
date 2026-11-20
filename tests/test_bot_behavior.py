@@ -337,46 +337,86 @@ def test_acercarse_fuera_de_la_zona_loguea_el_motivo_y_no_camina(caplog):
     assert any("piedra lejana fuera de zona" in x and "est. (" in x and "d=-" in x for x in messages(caplog))
 
 
-def test_acercarse_sin_camara_y_jugador_fuera_no_se_acerca(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(coords=TOL_XY, far=[far_at(1300, 548)]))
+def test_acercarse_sin_camara_y_jugador_fuera_no_se_acerca():
+    h = Harness(lambda h, n: perc_far(coords=OUT_XY, far=[far_at(1300, 548)]))
     h.bot.step()
-    assert State.ACERCARSE not in h.states()
-    assert any("sin camara y jugador fuera" in x for x in messages(caplog))
+    assert State.ACERCARSE not in h.states() and h.clicks() == 0
+    assert h.states()[0] is State.VOLVER
 
 
-def test_acercarse_sin_camara_con_jugador_inside_camina_y_aprende():
-    seen = {"n": 0}
+def hovers(h):
+    """Movimientos del mouse sin clic (hover): los move_to del backend falso menos los 2 que emite cada clic."""
+    return sum(1 for e in h.be.events if e[0] == "move_to") - 2 * h.clicks()
+
+
+def test_acercarse_sin_camara_en_la_tolerancia_hace_hover_y_despues_clic():
+    """Sin camara, jugador en la franja de tolerancia: se acerca igual. Sin etiqueta: hover_tries hovers y clic igual."""
+    h = Harness(lambda h, n: perc_far(coords=TOL_XY, far=[far_at(1300, 548)]))
+    h.run_until(lambda: State.ACERCARSE in h.states() and h.clicks() >= 1)
+    assert h.states()[:2] == [State.ACERCARSE, State.ATACAR]
+    assert hovers(h) == 2 and h.clicks() == 1
+    kinds = [e[0] for e in h.be.events]
+    assert kinds[:2] == ["move_to", "move_to"] and "mouse_down" not in kinds[:2]
+
+
+def test_hover_etiqueta_objetivo_hace_clic_y_ataca(caplog):
+    caplog.set_level(logging.INFO)
+    fx = far_at(1300, 548)
 
     def script(h, n):
+        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:   # el mouse esta encima: aparece la etiqueta
+            return perc(metins=[metin(click=(1300, 540))])
+        return perc_far(far=[fx])
+    h = Harness(script)
+    h.run_until(lambda: State.ATACAR in h.states())
+    assert h.states()[:2] == [State.ACERCARSE, State.ATACAR]
+    assert hovers(h) == 1 and h.clicks() == 1
+    assert any("Hover sobre piedra" in x and "etiqueta metin_de_oscuridad" in x for x in messages(caplog))
+    assert not h.bot.ignored
+
+
+def test_hover_otro_tipo_ignora_la_posicion_y_vuelve_a_buscar(caplog):
+    caplog.set_level(logging.INFO)
+
+    def script(h, n):
+        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:
+            return perc(metins=[MetinDetection(Rect(1260, 470, 80, 10), "metin_de_avaricia", 1.0, False, (1300, 540), True)])
         return perc_far(far=[far_at(1300, 548)])
     h = Harness(script)
-    h.run_until(lambda: State.ACERCARSE in h.states() and h.clicks() >= 1)
-    assert h.bot.state is State.ACERCARSE and seen["n"] == 0
+    h.run_until(lambda: State.ACERCARSE in h.states() and h.bot.state is not State.ACERCARSE)
+    assert h.seen[1][0] is State.BUSCAR and "otro tipo" in h.seen[1][1]
+    assert h.clicks() == 0 and h.bot.ignored
+    assert any("etiqueta metin_de_avaricia" in x for x in messages(caplog))
 
 
-def test_acercarse_se_pierde_la_piedra_vuelve_a_buscar():
+def test_hover_sin_etiqueta_hace_hover_tries_y_clic_igual(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]), approach={"hover_tries": 3})
+    h.run_until(lambda: h.clicks() >= 1)
+    assert hovers(h) == 3
+    assert sum(1 for x in messages(caplog) if "etiqueta ninguna" in x) == 3
+
+
+def test_hover_no_manda_clic_ni_gira_la_camara():
+    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]))
+    h.run_until(lambda: State.ACERCARSE in h.states() and hovers(h) >= 1)
+    assert h.clicks() == 0
+    assert not any(e[0] == "key_down" for e in h.be.events)
+
+
+def test_acercarse_se_pierde_la_piedra_vuelve_a_buscar_sin_ignorarla():
     def script(h, n):
-        if h.bot.state is State.ACERCARSE and h.clicks() >= 1:
+        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:
             return perc()
         return perc_far(far=[far_at(1300, 548)])
     h = Harness(script)
     h.run_until(lambda: State.ACERCARSE in h.states() and h.bot.state is not State.ACERCARSE)
     assert h.seen[1][0] is State.BUSCAR and "perdio" in h.seen[1][1]
-
-
-def test_acercarse_etiqueta_objetivo_va_a_atacar():
-    def script(h, n):
-        if h.bot.state is State.ACERCARSE and h.clicks() >= 1:
-            return perc(metins=[metin(click=(1000, 540))])   # cerca del personaje en pantalla (sin camara hace falta)
-        return perc_far(far=[far_at(1300, 548)])
-    h = Harness(script)
-    h.run_until(lambda: State.ATACAR in h.states())
-    assert h.states()[:2] == [State.ACERCARSE, State.ATACAR]
+    assert not h.bot.ignored   # solo se perdio de vista (p. ej. al girar la camara): no se ignora 10 min
 
 
 def test_acercarse_timeout_ignora_la_posicion():
-    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]), approach={"max_seconds": 4.0}, stuck={"window_s": 500.0})
+    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]), approach={"max_seconds": 0.2, "hover_wait_s": 0.5})
     h.run_until(lambda: len(h.seen) >= 2)
     assert h.seen[1][0] is State.BUSCAR and "tiempo maximo" in h.seen[1][1] and h.bot.ignored
 

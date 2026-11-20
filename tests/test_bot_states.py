@@ -71,6 +71,7 @@ class FakeAlarm:
 def make_cfg(**over):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
+    cfg["spawns"]["enabled"] = False
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     cfg["explore"].update(camera_steps=2, camera_step_s=0.01)
@@ -189,7 +190,7 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
     assert h.bot.stats.metins == 1 and h.bot.stats.items == 1
     assert h.clicks() == 1 and h.keys("z") == 2 and h.keys("g") == 2   # 1 clic del ataque; el objeto esta encima: solo Z
     # las partes de percepcion que pide cada estado
-    assert ({"items", "coords", "monsters"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
+    assert ({"items", "coords"}) in [c[1] for c in h.calls if c[0] is State.RECOGER]
     assert all("panel" in c[1] for c in h.calls if c[0] is State.ATACAR)
 
 
@@ -478,17 +479,30 @@ def test_motivo_etiqueta_dudosa_vs_tipo_ignorado():
                     "tipo ignorado (metin_de_avaricia)"]
 
 
-def test_sin_camara_metin_lejos_en_pantalla_no_se_ataca():
-    p = perc(coords=NEAR_EDGE_XY, metins=[_far_screen_metin(300)])
+@pytest.mark.parametrize("px", [150, 300, 700])
+def test_sin_camara_metin_con_etiqueta_se_ataca_a_cualquier_distancia_en_pantalla(px):
+    """Sin limite de pixeles (regla vieja de 160 px): adentro o en la tolerancia, a 174 px o mas, se ataca."""
+    for xy in (NEAR_EDGE_XY, TOL_XY):
+        p = perc(coords=xy, metins=[_far_screen_metin(px)])
+        h = Harness(lambda h, n: p)
+        h.bot.tracker.update(p.coords, 0.0)
+        cands, why = h.bot._label_view(p, 0.0)
+        assert len(cands) == 1 and not why
+        h.bot.step()
+        assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_sin_camara_metin_con_etiqueta_no_se_ataca_con_el_jugador_afuera():
+    p = perc(coords=OUT_XY, metins=[_far_screen_metin(174)])
     h = Harness(lambda h, n: p)
     h.bot.tracker.update(p.coords, 0.0)
     cands, why = h.bot._label_view(p, 0.0)
-    assert not cands and "lejos en pantalla" in why[0][1]
+    assert not cands and "jugador fuera de la zona" in why[0][1]
 
 
-def test_sin_camara_piedra_lejana_solo_si_el_jugador_esta_adentro():
+def test_sin_camara_piedra_lejana_adentro_o_en_la_tolerancia_pero_no_afuera():
     h = Harness(lambda h, n: perc())
-    for xy, ok in ((NEAR_EDGE_XY, True), (TOL_XY, False)):
+    for xy, ok in ((NEAR_EDGE_XY, True), (TOL_XY, True), (OUT_XY, False)):
         h.bot.tracker.update(Coords(xy[0], xy[1], 1.0), 0.0)
         h.bot.tracker.forget_reference()
         r = h.bot._zone_reason(None, h.bot._zone_status(), "piedra lejana")

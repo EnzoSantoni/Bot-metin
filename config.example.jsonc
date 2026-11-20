@@ -26,6 +26,17 @@
     "file": "bot.log"
   },
 
+  // Mapa de metin: al romper un metin se guarda la posicion del personaje (pegado a la piedra) con la hora. Cuando no
+  //  se ve ningun metin, el bot va al punto conocido mas cercano que ya reaparecio y no visito hace poco, en vez de
+  //  explorar al azar. Persiste entre sesiones (archivo JSON; borralo para empezar de cero). Con --observar no escribe.
+  //  enabled: usar el mapa. file: ruta (relativa al proyecto; la carpeta data/ esta en .gitignore).
+  //  merge_u: un metin roto a esta distancia (unidades) o menos de un punto conocido es el mismo punto.
+  //  respawn_s: segundos que tarda en reaparecer un metin (ESTIMADO: "a los pocos minutos").
+  //  revisit_s: no volver a un punto visitado hace menos de esto. arrive_u: llegada al punto (unidades).
+  //  max_walk_s: tope de caminata hacia un punto; al agotarlo se lo da por visitado.
+  "spawns": {"enabled": true, "file": "data/mapa_metin.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
+             "arrive_u": 5.0, "max_walk_s": 40},
+
   "debug": {
     // true guarda capturas anotadas con lo detectado. Activalo solo para depurar: ocupa disco.
     "enabled": false,
@@ -135,8 +146,8 @@
             "repeat_max": 3, "repeat_window_s": 120.0, "look_steps": 4, "look_step_s": 0.8,
             "min_dir_sep_deg": 60.0, "dir_step_deg": 30.0, "episode_ttl_s": 120.0,
             "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
-            // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = girar la vista hacia la direccion
-            // elegida y W durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
+            // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = mirar con Q/E y caminar hacia la
+            // direccion elegida con la combinacion de W/A/S/D mas cercana (sin girar) durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
             "back_s": 1.0, "look_walk_s": 1.2},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
@@ -166,25 +177,34 @@
   //  con >= wrong_monsters_min monstruos cerca -> ESPACIO, Escape y reclic (sigue contando para max_wrong_selections).
   //  blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
   //  Si el personaje sale de la zona atacando un metin cuya posicion queda afuera (o no se conoce), esa posicion se descarta.
+  //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
+  //  vida (hp_stall_s) hasta walk_max_s. Quieto stuck.window_s con la vida sin bajar y >= stuck.monsters_min monstruos cerca
+  //  -> ESPACIO unstick_space_s y reclic (cuenta para max_reclicks). (walk_max_s, unstick_space_s: ESTIMADOS.)
   "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
              "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
-             "wrong_monsters_min": 1, "blocked_window_frac": 0.8},
+             "wrong_monsters_min": 1, "blocked_window_frac": 0.8,
+             "walk_max_s": 25.0, "unstick_space_s": 1.5},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
-  //  cada objeto (el mas cercano al personaje primero), clic en su etiqueta y Z al llegar, hasta que no queden.
+  //  cada objeto (el mas cercano al personaje primero), camina hasta el y aprieta Z, hasta que no queden.
   //  dismount: true = se baja del caballo para recoger y se sube al terminar; false = recoge montado (mismo flujo).
   //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha). press_interval_ms: pausa tras cada Z.
-  //  Llego cuando: la etiqueta esta a <= arrive_px del personaje o desaparecio, o el personaje no cambia de coordenadas
-  //  en still_s (tras al menos still_s del clic), o pasaron walk_timeout_s. track_px: tolerancia para seguir una etiqueta
-  //  entre ciclos. tries_per_item: Z por objeto antes de ignorarlo (valido mientras el personaje no se mueva same_spot_u
-  //  unidades). monster_gap_px: no se clickea una etiqueta a <= esto de un nombre de monstruo (solo Z).
-  //  Termina tras empty_confirm_cycles ciclos sin objetos validos, max_presses Z o max_seconds (cuenta desde que
-  //  empieza a recoger).
+  //  SIN clics: despues de bajarse, camina con W/A/S/D hasta quedar encima o al lado de cada objeto y aprieta Z
+  //  (de paso puede juntar yang). Elige el objeto mas cercano (distancia de piso), toma su direccion sobre el piso desde
+  //  los pies, la parte en 8 sectores de 45 grados (W, W+D, D, S+D, S, S+A, A, W+A) y mantiene esas teclas un tramo de
+  //  step_s (proporcional a la distancia si el objeto esta a menos de full_step_px, minimo min_step_s); despues vuelve a
+  //  mirar. El punto del objeto = centro inferior de su etiqueta + item_below_label_px. arrive_px: Z cuando ese punto esta
+  //  a <= arrive_px de los pies. Cada Z sin que desaparezca el objeto, y cada stall_steps tramos sin acercarse al menos
+  //  stall_gain_px, cuentan como un intento: tries_per_item intentos y el objeto se ignora (valido mientras el personaje
+  //  no se mueva same_spot_u unidades; track_px: tolerancia para reconocer la misma etiqueta). Si el personaje sale de la
+  //  zona se corta la recogida. Termina tras empty_confirm_cycles ciclos sin objetos validos, max_presses Z o
+  //  max_seconds (cuenta desde que empieza a recoger). (arrive_px, step_s, full_step_px, stall_*: ESTIMADOS.)
   "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
-             "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "monster_gap_px": 12, "arrive_px": 70,
-             "track_px": 80, "still_s": 0.6, "walk_timeout_s": 4.0, "tries_per_item": 2, "same_spot_u": 3.0},
+             "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
+             "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
+             "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...
@@ -194,29 +214,38 @@
   //  walk_timeout_s: tope de un tramo de VOLVER/CENTRO. (camera_steps, border_margin, leg_*, max_without_metin_s: ESTIMADOS.)
   //  visited_keep: puntos recientes que la exploracion trata de no repetir. leg_tiebreak_units: desempate al azar
   //  (unidades) entre destinos de tramo parecidos.
+  //  settle_s / settle_frames: el barrido (y el giro de MIRAR) gira en pasos y despues de cada uno espera este tiempo Y
+  //  esta cantidad de percepciones completas antes del siguiente (para analizar lo que aparecio). (ESTIMADOS.)
+  //  edge_return_u: adentro a menos de esto del borde con el tramo alejandose del poligono -> VOLVER al centro; igual si
+  //  termino un barrido completo sin ver nada util estando a menos de border_margin del borde. VOLVER/CENTRO se guian solo
+  //  por las coordenadas (W/A/S/D), aunque la imagen no muestre referencias.
   "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
-              "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0},
+              "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
+              "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0},
 
-  // ACERCARSE: caminar hacia una piedra lejana (sin etiqueta) hasta que aparezca el nombre. Entra desde BUSCAR/EXPLORAR
-  //  si no hay etiqueta valida y hay una piedra permitida, no ignorada y cuya posicion estimada (o el jugador, sin camara)
-  //  esta en la zona. Etiqueta de un objetivo -> ATACAR; etiqueta de otro tipo donde estaba la piedra -> esa posicion se
-  //  ignora ignore_minutes (radio ignore_radius, mas el error de la camara). lost_cycles ciclos sin verla -> BUSCAR.
+  // ACERCARSE: confirmar el tipo de una piedra lejana (sin etiqueta) con HOVER. Entra desde BUSCAR/EXPLORAR cuando la
+  //  piedra elegida (la mas cercana al personaje, ver vision.ground) no tiene etiqueta: mueve el mouse sobre su cuerpo
+  //  (sin clic), espera hover_wait_s y busca una etiqueta a <= hover_label_px de la piedra. Etiqueta objetivo -> clic y
+  //  ATACAR (el personaje camina solo hasta la piedra); etiqueta de otro tipo -> esa posicion se ignora ignore_minutes
+  //  (radio ignore_radius, mas el error de la camara) y vuelve a BUSCAR; sin etiqueta tras hover_tries hovers -> clic
+  //  igual (el panel de ATACAR confirma el tipo). No gira la camara ni camina con W.
+  //  lost_cycles ciclos sin ver la piedra -> BUSCAR (SIN ignorarla). max_seconds: tope de todo el acercamiento.
   //  label_match_px: una etiqueta a esa distancia de la piedra es "esa piedra". match_px: seguimiento entre ciclos.
   //  label_exclude_down_px: la piedra de una etiqueta visible (hasta tantos px debajo de ella) no es "lejana".
-  //  Perder la piedra de vista tambien ignora su posicion. max_tries_per_spot: aproximaciones a una misma posicion sin
-  //  llegar a atacar antes de ignorarla (se reinicia al atacar).
-  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego; es lo normal en modo teclado): un metin con etiqueta
-  //  se ataca si el personaje esta adentro del poligono o en la franja de tolerancia (no mas afuera) y la etiqueta queda a
-  //  <= blind_screen_px del personaje en pantalla; una piedra lejana sin etiqueta, solo si el personaje esta adentro.
+  //  max_tries_per_spot: aproximaciones a una misma posicion sin llegar a atacar antes de ignorarla (se reinicia al atacar).
+  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego; es lo normal en modo teclado): un metin (con etiqueta
+  //  o piedra) se ataca/persigue si el personaje esta adentro del poligono o en la franja de tolerancia (no mas afuera),
+  //  sin limite de distancia en pantalla (la clave vieja approach.blind_screen_px se ignora).
   //  Un descarte o ignorado se guarda con la posicion del JUGADOR y solo aplica a menos de blind_player_radius
   //  unidades de ese lugar (y a lo que se ve en el mismo sitio de la pantalla), no a todo.
   //  far_monsters_n / far_monsters_px: una piedra lejana SIN humo (criterio secundario) con >= n etiquetas de monstruos a
   //  menos de px de ella es un falso positivo (un grupo de bichos) y se ignora. Las que tienen humo no se filtran.
   "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
-               "blind_screen_px": 160, "blind_player_radius": 25.0, "max_tries_per_spot": 3,
-               "far_monsters_n": 2, "far_monsters_px": 200},
+               "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+               "far_monsters_n": 2, "far_monsters_px": 200,
+               "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2},
 
   // CENTRO (regla D / E): como VOLVER pero el destino es el centro del poligono; termina a <= arrive_dist unidades y
   //  sigue con barrido + EXPLORAR. Su tope de tiempo y sus episodios de traba son los de VOLVER (volver.max_seconds).
@@ -267,21 +296,29 @@
     // (cerca del borde el sondeo se acorta por debajo de eso, sin piso). probe_turn_jitter_deg: variacion al azar del
     // giro de ~90 grados entre sondeos.
     "probe_measure_factor": 1.5, "probe_turn_jitter_deg": 17.0,
-    // mode: "teclado" (por defecto) = el bot camina SOLO con W/A/S/D y gira la vista con Q/E; el clic izquierdo queda para
-    // atacar un metin y recoger objetos. "clic" = caminar con clics en el piso (modo anterior, con la camara aprendida).
+    // mode: "teclado" (por defecto) = el bot camina SOLO con W/A/S/D (8 direcciones: W, W+D, D, S+D, S, S+A, A, W+A) sin
+    // girar la camara; Q/E solo sirven para mirar (barridos, MIRAR). El clic izquierdo queda para atacar un metin.
+    // "clic" = caminar con clics en el piso (modo anterior, con la camara aprendida).
     "mode": "teclado",
-    // Modo teclado (bot/keynav.py). chunk_s: W sostenida entre chequeos; probe_s: W para medir el rumbo cuando no se
-    // conoce; align_deg: si el desvio al destino es mayor, primero se gira la vista; turn_deg_per_s: velocidad inicial de
-    // giro de Q/E (= 360 / (explore.camera_steps * explore.camera_step_s)), el bot la aprende; max_turn_deg: giro maximo
-    // por orden; walk_speed: velocidad inicial de caminata en unidades/s, tambien se aprende; min_step_s: tramo minimo
-    // de W; edge_measure_u: desplazamiento minimo para medir el rumbo cuando el personaje ya paso la guardia de zona
-    // (ahi no hay lugar para tramos largos); view_right_key: tecla (camera_left o camera_right) que gira la VISTA a la derecha (trae al frente lo que
-    // esta a la derecha en pantalla); si esta al reves el bot lo detecta y lo corrige solo.
+    // Modo teclado (bot/keynav.py). El bot aprende hacia donde camina W en el juego (cam_h) midiendo cada tramo y
+    // elige la combinacion de teclas cuyo desvio (W 0, W+D +45, D +90, S+D +135, S 180, S+A -135, A -90, W+A -45) queda mas
+    // cerca del rumbo al destino; si A/D caminan al reves lo detecta (2 muestras seguidas) y lo corrige solo.
+    // chunk_s: tramo de caminata entre chequeos; probe_s: W de prueba para medir cam_h cuando no se conoce; align_deg y
+    // max_turn_deg: solo para giros de la vista; turn_deg_per_s: velocidad inicial de giro de Q/E (= 360 /
+    // (explore.camera_steps * explore.camera_step_s)), se aprende (Q/E al reves se concluye con 2 giros seguidos);
+    // walk_speed: velocidad inicial de caminata en unidades/s, tambien se aprende; min_step_s: tramo minimo;
+    // edge_measure_u: desplazamiento minimo para medir cam_h cuando el personaje ya paso la guardia de zona (ahi no hay
+    // lugar para tramos largos); view_right_key: tecla (camera_left o camera_right) que gira la VISTA a la derecha.
     "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
                  "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"}
   },
 
   "vision": {
+    // Plano del piso (bot/ground.py): compara distancias con perspectiva (mas abajo y mas grande = mas cerca) para elegir
+    //  el metin mas cercano. horizon_frac: fila del horizonte (fraccion del alto); focal_frac: focal (fraccion del ancho);
+    //  feet_dy_px: los pies del personaje quedan tanto debajo de su punto; min_dv_px: acota (fila - horizonte) abajo.
+    //  ESTIMADOS: verificados con samples/real_tres_metin_hover.png; el orden no cambia con horizon_frac 0.10-0.19.
+    "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).

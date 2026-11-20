@@ -143,6 +143,28 @@ class GameInput:
             self._delay()
             return True
 
+    def hover_at(self, x: int, y: int, mask: ScreenMask | None) -> bool:
+        """Solo mueve el mouse a (x, y) de cliente (sin clic), con el mismo chequeo de mascara y jitter que `click_at`.
+        Sirve para que el juego muestre la etiqueta de lo que hay debajo."""
+        if mask is None:
+            raise ValueError("hover_at requiere la mascara de la captura actual")
+        with self._action() as ready:
+            if not ready or not self._window_unchanged():
+                return False
+            if not mask.allows(x, y):
+                logger.warning("Hover rechazado en (%d, %d): zona no permitida", x, y)
+                return False
+            x, y = self._jitter(x, y, mask)
+            try:
+                sx, sy = self.window.client_to_screen(x, y, strict=True)
+            except ValueError:
+                logger.warning("Hover rechazado en (%d, %d): fuera del cliente", x, y)
+                return False
+            self.control.check()
+            self.backend.move_to(sx, sy)
+            self.control.sleep(self._rand_s("move_settle_ms"))
+            return True
+
     def press(self, action: str, hold_s: float | None = None) -> bool:
         """Aprieta la tecla (o combinacion) de `controls[action]`."""
         return self._press_keys(self._key_spec(action), hold_s)
@@ -176,28 +198,49 @@ class GameInput:
         keys = self._key_spec(action)
         if len(keys) != 1:
             raise ValueError(f"hold solo admite una tecla, {action!r} es una combinacion")
+        return self._hold_down(keys, seconds)
+
+    def hold_keys(self, actions: list[str], seconds: float) -> bool:
+        """Mantiene a la vez 1 o 2 teclas de movimiento (acciones de `controls`, p. ej. ["move_up", "move_right"]) durante
+        `seconds`; siempre las suelta todas."""
+        if not 1 <= len(actions) <= 2 or len(set(actions)) != len(actions):
+            raise ValueError(f"hold_keys admite 1 o 2 acciones distintas: {actions!r}")
+        keys: list[str] = []
+        for a in actions:
+            spec = self._key_spec(a)
+            if len(spec) != 1:
+                raise ValueError(f"hold_keys solo admite teclas simples, {a!r} es una combinacion")
+            keys.append(spec[0])
+        return self._hold_down(keys, seconds)
+
+    def _hold_down(self, keys: list[str], seconds: float) -> bool:
+        """Nucleo de `hold` / `hold_keys`: key_down de todas, espera en pasos de HOLD_STEP_S (pausa/foco) y suelta todas."""
         with self._action() as ready:
             if not ready:
                 return False
-            key = keys[0]
             remaining = float(seconds)
             while True:   # al menos una pulsacion, aunque `seconds` sea 0
-                self.backend.key_down(key)
                 try:
+                    for key in keys:
+                        self.backend.key_down(key)
                     while True:
                         step = max(0.0, min(HOLD_STEP_S, remaining))
                         self.control.sleep(step)
                         remaining -= step
                         if remaining <= 0:
                             break
-                        if key not in self.backend.pressed[0]:
-                            logger.debug("hold: la tecla %r se solto (pausa); sigo al reanudar", key)
+                        if any(key not in self.backend.pressed[0] for key in keys):
+                            logger.debug("hold: una tecla se solto (pausa); sigo al reanudar")
                             break
                         if not self.window.is_foreground():
-                            logger.warning("hold: el juego perdio el foco; suelto %r y espero", key)
+                            logger.warning("hold: el juego perdio el foco; suelto %s y espero", keys)
                             break
                 finally:
-                    self.backend.key_up(key)
+                    for key in reversed(keys):
+                        try:
+                            self.backend.key_up(key)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("No se pudo soltar %r", key)
                 if remaining <= 0:
                     break
                 if not self._wait_ready():
