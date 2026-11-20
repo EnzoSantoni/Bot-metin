@@ -87,7 +87,7 @@ def test_mirar_elige_direcciones_separadas_al_menos_60_grados():
 def test_mirar_con_camara_lista_apunta_hacia_el_interior():
     h = Harness(lambda h, n: perc(coords=(442, 168)))   # pegado al borde oeste
     h.train_camera()
-    h.bot.tracker.update(Coords(442, 168, 1.0), 0.0)
+    h.bot.tracker.update(Coords(442, 168, 1.0), h.clock())
     ep = StuckEpisode(1, (442, 168), 0.0, 0.0)
     for _ in range(4):
         a = h.bot._pick_direction(ep)
@@ -130,9 +130,11 @@ def test_regla_b_confirmado_bloqueado_usa_espacio_y_reclic(caplog):
     env.run_until(lambda: not m.alive, max_s=300)
     assert not m.alive and env.world.space_pushes >= 1
     msgs = messages(caplog)
-    assert any("Bloqueado atacando" in x and "ESPACIO y reclic" in x for x in msgs)
-    assert any(x.startswith("Reclic en") and "bloqueado" in x for x in msgs)
-    assert len(env.world.clicks_on_metin) >= 2
+    assert any("Trabado yendo al metin" in x and "ESPACIO y reclic" in x for x in msgs)
+    # el metin sigue seleccionado y tras el empujon la vida vuelve a bajar: pegando no se reclickea
+    assert any("Sin reclic (trabado" in x for x in msgs)
+    assert not any(x.startswith("Reclic en") for x in msgs)
+    assert len(env.world.clicks_on_metin) == 1
 
 
 def test_regla_b_monstruo_seleccionado_espacio_escape_y_reclic(caplog):
@@ -439,7 +441,7 @@ def test_log_descartado_hasta_y_fuera_de_zona(caplog):
     caplog.set_level(logging.INFO)
     h = Harness(lambda h, n: perc(metins=[label(OSC, True)]))
     h.train_camera()
-    h.bot.tracker.update(Coords(*INSIDE_XY, 1.0), 0.0)
+    h.bot.tracker.update(Coords(*INSIDE_XY, 1.0), h.clock())
     gp = h.bot._game_pos_of((1000, 500), perc())
     h.bot.discarded.append(_Spot(gp, h.clock() + 600))
     h.bot.step()

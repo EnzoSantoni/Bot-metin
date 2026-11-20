@@ -231,6 +231,8 @@ class UiBridge:
                 "auto_paused": bool(getattr(self.control, "auto_paused", False)),
                 "skills_cast": getattr(st, "skills_cast", 0), "farm_mode": getattr(st, "farm_mode", "metin"),
                 "deaths": getattr(st, "deaths", 0), "revives": getattr(st, "revives", 0),
+                "coords_total": getattr(getattr(st, "coords", None), "total", 0),
+                "coords_failed": getattr(getattr(st, "coords", None), "failed", 0),
                 "lures": getattr(st, "lures", 0), "fight_s": round(getattr(st, "fight_s", 0.0), 1),
                 "pos": pos, "zone_status": zone_status, "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
                 "skills": self.bot.skills.snapshot() if hasattr(getattr(self.bot, "skills", None), "snapshot") else [],

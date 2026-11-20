@@ -22,7 +22,7 @@ from bot.vision.items import ItemLabel
 from bot.vision.metin import MetinDetection
 from bot.vision.monsters import MonsterLabel
 from bot.vision.panel import PanelInfo
-from bot.vision.screen_mask import ScreenMask
+from bot.vision.screen_mask import ScreenMask, anchor_rect
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ GREEN, RED, YELLOW, CYAN = (0, 255, 0), (0, 0, 255), (0, 255, 255), (255, 255, 0
 GRAY, ORANGE, MAGENTA = (160, 160, 160), (0, 140, 255), (255, 0, 255)
 MAX_FAILS = 10   # fallos seguidos al guardar: el recorder se apaga para no llenar el log
 SLUG_LEN = 40
+COORD_CROP_ZOOM = 4   # ampliacion de los recortes de coordenadas fallidas
 
 
 def annotate(img: np.ndarray, mask: ScreenMask, dets: list[MetinDetection],
@@ -194,6 +195,10 @@ class DebugRecorder:
         self._fails = 0
         self._last_explore = -math.inf
         self._capped = False
+        self.max_coord_crops = int(d["max_coord_crops"])
+        self.coord_crop_every_s = float(d["coord_crop_every_s"])
+        self.coord_crops = 0
+        self._last_crop = -math.inf
 
     @property
     def run_dir(self) -> Path | None:
@@ -205,6 +210,34 @@ class DebugRecorder:
             return False
         self._last_explore = t
         return True
+
+    def save_coord_crop(self, img: np.ndarray, reason: str, t: float) -> Path | None:
+        """Guarda la zona de coordenadas ampliada x4 de una lectura fallida o descartada en
+        `<run>/coordenadas/NNNN_<motivo>.png` (tope `debug.max_coord_crops`, separacion `coord_crop_every_s`)."""
+        if not self.enabled or img is None or self.coord_crops >= self.max_coord_crops                 or t - self._last_crop < self.coord_crop_every_s:
+            return None
+        try:
+            ih, iw = img.shape[:2]
+            region = anchor_rect(iw, ih, self.cfg["vision"]["coords"]["search"]).clip(iw, ih)
+            if region is None:
+                return None
+            if self._dir is None:
+                self._dir = self._base / f"run_{self._now():%Y%m%d_%H%M%S}"
+            folder = self._dir / "coordenadas"
+            folder.mkdir(parents=True, exist_ok=True)
+            crop = img[region.y:region.bottom, region.x:region.right]
+            big = cv2.resize(crop, None, fx=COORD_CROP_ZOOM, fy=COORD_CROP_ZOOM, interpolation=cv2.INTER_NEAREST)
+            path = folder / f"{self.coord_crops + 1:04d}_{_slug(reason)}.png"
+            if not cv2.imwrite(str(path), big):
+                raise OSError(f"cv2.imwrite no pudo escribir {path}")
+            self.coord_crops += 1
+            self._last_crop = t
+            if self.coord_crops == self.max_coord_crops:
+                logger.warning("Debug: tope de %d recortes de coordenadas alcanzado", self.max_coord_crops)
+            return path
+        except Exception:  # noqa: BLE001 - el debug nunca puede romper el loop
+            logger.exception("Debug: no se pudo guardar el recorte de coordenadas")
+            return None
 
     def record(self, img: np.ndarray | None, p: Any, state: str, reason: str, lines: list[str] | None = None,
                click: tuple[int, int] | None = None, summary: str = "", kind: str = "") -> Path | None:

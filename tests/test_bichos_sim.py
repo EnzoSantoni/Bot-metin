@@ -61,7 +61,7 @@ def test_corrida_de_bichos(mode):
     assert w.bugs_killed >= 9 and len(w.picked) >= 6
     assert "RECOGER" in {tr.new for tr in env.transitions}
     assert all(tr.reason.startswith("bichos") for tr in env.transitions if tr.new == "RECOGER")
-    assert env.bot.stats.items >= len(w.picked) - 2
+    assert 3 <= env.bot.stats.items <= len(w.picked)   # el conteo (estimado) sigue un objeto fijo; el simulador junta el mas cercano
     # nunca salio de la zona; clic izquierdo solo si el modo de caminata es por clics
     assert max(dist) <= tol(env)
     if mode == "teclado":

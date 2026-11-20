@@ -225,7 +225,7 @@ def test_metin_roto_se_cuenta_por_tipo_confirmado():
     from bot.bot import State
     from test_bot_states import Harness, item, metin, target_panel
     w = {"atk": 0, "done": False}
-    hps = [0.9, 0.6, 0.3]
+    hps = [0.9, 0.5, 0.05]   # roto real: la ultima vida leida es casi 0
 
     def script(h, n):
         st = h.bot.state
@@ -233,6 +233,8 @@ def test_metin_roto_se_cuenta_por_tipo_confirmado():
             return perc(metins=[metin()])
         if st is State.ATACAR:
             w["atk"] += 1
+            if w["atk"] == len(hps) + 1:
+                h.clock.t += 20.0   # un metin real tarda mas de attack.min_break_s en romperse
             return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
         if st is State.RECOGER:
             w["done"] = True

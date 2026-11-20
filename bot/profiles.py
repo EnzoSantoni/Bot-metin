@@ -40,6 +40,7 @@ RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("revive",), "personaje"),
     (("pickup", "dismount"), "personaje"),
     (("coords_filter", "max_speed"), "personaje"),
+    (("camera_pitch", "ref_horizon_frac"), "personaje"),   # el angulo vertical que le gusta al jugador
     (("farm_zone",), "zona"),
     (("target_metin_names",), "zona"),
     (("zone",), "zona"),

@@ -171,7 +171,7 @@ class Harness:
 
 def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
     w = {"atk": 0, "done": False}
-    hps = [0.9, 0.6, 0.3]
+    hps = [0.9, 0.5, 0.05]   # roto real: la ultima vida leida es casi 0
 
     def script(h, n):
         st = h.bot.state
@@ -179,6 +179,8 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
             return perc(metins=[metin()])
         if st is State.ATACAR:
             w["atk"] += 1
+            if w["atk"] == len(hps) + 1:
+                h.clock.t += 20.0   # un metin real tarda mas de attack.min_break_s en romperse
             return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
         if st is State.RECOGER:
             w["done"] = True
@@ -214,7 +216,7 @@ def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
             return perc(panel=target_panel(0.5))
         return perc(metins=[metin()])
 
-    h = Harness(script, attack={"hp_stall_s": 1.0, "max_reclicks": 2})
+    h = Harness(script, attack={"reclick_stall_s": 1.0, "max_reclicks": 2, "walk_stuck_s": 1000.0})
     if camera:
         h.train_camera()
     h.run_until(lambda: State.EXPLORAR in h.states())
@@ -228,12 +230,14 @@ def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
 
 
 def test_un_solo_ciclo_sin_panel_no_cuenta_como_roto():
-    seq = [target_panel(0.9), target_panel(0.8), None, target_panel(0.7), target_panel(0.6), None]
+    seq = [target_panel(0.09), target_panel(0.08), None, target_panel(0.07), target_panel(0.06), None]
     w = {"i": 0}
 
     def script(h, n):
         if h.bot.state is State.ATACAR:
             w["i"] += 1
+            if w["i"] == 6:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
             return perc(panel=seq[w["i"] - 1] if w["i"] <= len(seq) else None)
         return perc(metins=[metin()])
 
@@ -250,6 +254,8 @@ def test_vida_en_cero_dos_ciclos_es_roto():
     def script(h, n):
         if h.bot.state is State.ATACAR:
             w["i"] += 1
+            if w["i"] == 3:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
             return perc(panel=target_panel(0.5 if w["i"] == 1 else 0.0))
         return perc(metins=[metin()])
 
@@ -257,7 +263,7 @@ def test_vida_en_cero_dos_ciclos_es_roto():
     h.run_until(lambda: w["i"] == 2)
     assert h.bot.state is State.ATACAR
     h.run_until(lambda: State.RECOGER in h.states())
-    assert w["i"] == 3 and h.bot.stats.metins == 1
+    assert w["i"] == 4 and h.bot.stats.metins == 1   # vida 0 con panel 2 ciclos + 2 ciclos sin piedra a la vista
 
 
 # ---------------------------------------------------------------- captcha y muerte
@@ -383,7 +389,9 @@ def test_tolerancia_al_terminar_deja_vuelta_pendiente():
     def script(h, n):
         if h.bot.state is State.ATACAR:
             w["i"] += 1
-            return perc(coords=TOL_XY, panel=target_panel(0.5) if w["i"] <= 2 else None)
+            if w["i"] == 3:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
+            return perc(coords=TOL_XY, panel=target_panel(0.05) if w["i"] <= 2 else None)
         return perc(coords=TOL_XY, metins=[metin()] if State.RECOGER not in h.states() else [])
 
     h = Harness(script)
@@ -486,7 +494,7 @@ def test_sin_camara_metin_con_etiqueta_se_ataca_a_cualquier_distancia_en_pantall
     for xy in (NEAR_EDGE_XY, TOL_XY):
         p = perc(coords=xy, metins=[_far_screen_metin(px)])
         h = Harness(lambda h, n: p)
-        h.bot.tracker.update(p.coords, 0.0)
+        h.bot.tracker.update(p.coords, h.clock())
         cands, why = h.bot._label_view(p, 0.0)
         assert len(cands) == 1 and not why
         h.bot.step()
@@ -496,7 +504,7 @@ def test_sin_camara_metin_con_etiqueta_se_ataca_a_cualquier_distancia_en_pantall
 def test_sin_camara_metin_con_etiqueta_no_se_ataca_con_el_jugador_afuera():
     p = perc(coords=OUT_XY, metins=[_far_screen_metin(174)])
     h = Harness(lambda h, n: p)
-    h.bot.tracker.update(p.coords, 0.0)
+    h.bot.tracker.update(p.coords, h.clock())
     cands, why = h.bot._label_view(p, 0.0)
     assert not cands and "jugador fuera de la zona" in why[0][1]
 
@@ -504,7 +512,7 @@ def test_sin_camara_metin_con_etiqueta_no_se_ataca_con_el_jugador_afuera():
 def test_sin_camara_piedra_lejana_adentro_o_en_la_tolerancia_pero_no_afuera():
     h = Harness(lambda h, n: perc())
     for xy, ok in ((NEAR_EDGE_XY, True), (TOL_XY, True), (OUT_XY, False)):
-        h.bot.tracker.update(Coords(xy[0], xy[1], 1.0), 0.0)
+        h.bot.tracker.update(Coords(xy[0], xy[1], 1.0), h.clock())
         h.bot.tracker.forget_reference()
         r = h.bot._zone_reason(None, h.bot._zone_status(), "piedra lejana")
         assert (r is None) == ok, (xy, r)
@@ -529,12 +537,14 @@ def test_dismount_emparejado_aunque_haya_timeout():
     def script(h, n):
         if h.bot.state is State.ATACAR:
             w["atk"] += 1
-            return perc(panel=target_panel(0.5) if w["atk"] <= 1 else None)
+            if w["atk"] == 2:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
+            return perc(panel=target_panel(0.05) if w["atk"] <= 1 else None)
         if h.bot.state is State.RECOGER:
             return perc(items=[item()])      # nunca se van: sale por timeout
         return perc(metins=[metin()] if State.RECOGER not in h.states() else [])
 
-    h = Harness(script, pickup={"dismount": True, "max_seconds": 1.0, "press_interval_ms": 100})
+    h = Harness(script, pickup={"dismount": True, "max_seconds": 1.0, "z_interval_s": 0.1})
     h.run_until(lambda: State.RECOGER in h.states() and h.bot.state is State.BUSCAR)
     assert h.keys("g") == 2 and h.keys("ctrl") == 2
     assert h.be.events.index(("key_down", "g")) < h.be.events.index(("key_down", "z"))

@@ -35,6 +35,16 @@ ZONA_STEPS = (
     "zona elegido (con copia .bak) y se redibuja la zona.",
 )
 
+CAMARA_TITLE = "Calibrar el ángulo vertical de la cámara"
+CAMARA_STEPS = (
+    "1. Poné el juego al frente y dejá la cámara con el ángulo vertical que más te gusta (ni muy de arriba ni muy rasante), "
+    "con piso a la vista alrededor del personaje.",
+    "2. No toques nada: el programa mide varias capturas seguidas (la altura del horizonte) y muestra el promedio.",
+    "3. Respondé Sí a guardar: queda como referencia en el perfil del personaje (camera_pitch.ref_horizon_frac) y el bot "
+    "corrige el ángulo después de romper y recoger.",
+    "F12 cancela sin guardar. Esta ventana no manda teclas ni clics al juego.",
+)
+
 
 PERSONAJE_TITLE = "Crear un personaje (nombre amarillo)"
 PERSONAJE_CAPTURE_TITLE = "Capturar el nombre amarillo"
@@ -73,10 +83,10 @@ def validate_metin_name(name: str, existing: list[str]) -> str | None:
 def build_calibrate_command(sub: str, *, nombre: str | None = None, servidor: str = "", personaje: str = "", zona: str = "",
                             config: str | None = None, python: str | None = None,
                             script: str | Path = CALIBRATE) -> list[str]:
-    """Linea de comandos de `calibrate.py <metin|zona|personaje|perfiles-migrar> --ui` con los perfiles elegidos. Sin
+    """Linea de comandos de `calibrate.py <metin|zona|camara|personaje|perfiles-migrar> --ui` con los perfiles elegidos. Sin
     `--si`: las preguntas las responde la persona desde la ventana. `personaje` no pasa `--personaje` (el nombre es
     el del perfil, que puede no existir todavia); `perfiles-migrar` corre `perfiles migrar`."""
-    if sub not in ("metin", "zona", "personaje", "perfiles-migrar"):
+    if sub not in ("metin", "zona", "camara", "personaje", "perfiles-migrar"):
         raise ValueError(f"subcomando no soportado desde la interfaz: {sub}")
     cmd = [python or ctl.gui_python(), "-u", str(script)]
     cmd += ["perfiles", "migrar"] if sub == "perfiles-migrar" else [sub]

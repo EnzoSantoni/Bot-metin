@@ -95,7 +95,7 @@ def test_config_schedule_validacion():
 
 def ciclo_script(w):
     """BUSCAR -> ATACAR -> (metin roto) -> RECOGER con 2 pulsaciones de Z -> BUSCAR."""
-    hps = [0.9, 0.6, 0.3]
+    hps = [0.9, 0.5, 0.05]   # roto real: la ultima vida leida es casi 0
 
     def script(h, n):
         st = h.bot.state
@@ -103,6 +103,8 @@ def ciclo_script(w):
             return perc(metins=[metin()])
         if st is State.ATACAR:
             w["atk"] = w.get("atk", 0) + 1
+            if w["atk"] == len(hps) + 1:
+                h.clock.t += 20.0   # un metin real tarda mas de attack.min_break_s en romperse
             return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
         if st is State.RECOGER:
             w["done"] = True

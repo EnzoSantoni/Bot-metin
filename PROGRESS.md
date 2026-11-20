@@ -42,6 +42,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 ## Estado actual (2026-11-20)
 **Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades), 12 (prioridad de metin, historial y conteo de objetos por tipo) 13 (modo bichos) y 14 (revivir al morir, apagado por defecto) hechas, y la interfaz completa (tanda 1: Metin y Zona, base común; tanda 2: Personaje, Modo bichos, migrar config.json y pulido), con 1710 tests pasando (más la pausa automática y la parada programada).** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`" y la sección de la Fase 14). `main` no se tocó.
 
+- **main 0f8a855 (Fase 6e) integrado en desarrollo:** roto real por vida, sin reclics mientras la vida baja, escalera de trabado, metin en curso (`_CurrentMetin`), RECOGER de objeto fijo (Z hasta que desaparece), angulo vertical de la camara (`bot/camera_pitch.py`, `calibrate.py camara`), busqueda del proximo metin mientras ataca y filtro de coordenadas por confianza/velocidad, todo junto con perfiles, interfaz, habilidades, prioridad, historial/catalogo, modo bichos y revivir. Lineas de base regeneradas desde main. Ver "Decisiones tomadas sin Enzo (integracion de la Fase 6e)".
 - **main 0c66ec3 (Fase 6d) integrado en desarrollo:** elección del metin más cercano por perspectiva (`bot/ground.py`), ACERCARSE con hover + clic, ATACAR con caminata, barrido de cámara con pausa, RECOGER con W/A/S/D sin clics, `bot/keynav.py` reescrito y mapa de metin `bot/spawns.py`, todo junto con perfiles, interfaz, habilidades y prioridad. Prioridad + distancia de piso: con `zone.metin_priority` vacía el orden es el de main; con lista, las etiquetas van por rango de su tipo, las piedras sin etiqueta con el rango "no listado" y, a igual rango, la menor distancia de piso (`Bot._goals`, `bot/priority.py::order_by_priority`). Mapa de metin por zona: `spawns` es categoría de zona; sin `spawns.file` en el perfil de zona se deriva `profiles/zonas/<zona>.mapa.json` (ignorado por git, no se lista como perfil). Líneas de base regeneradas desde main (única diferencia con main: `spawns.file`, probada en `tests/test_profiles.py`).
 - **main b353ff2 (Fase 6c) integrado en desarrollo:** regla del metin a la vista sin cámara, "etiqueta dudosa" y movimiento solo con teclado (`navigation.mode`, `bot/keynav.py`) conviven con perfiles, habilidades y prioridad. Líneas de base de "sin cambios de comportamiento" regeneradas desde main.
 - **main 3c1b74c (recoger a pie) integrado en desarrollo:** las habilidades se bajan y se suben con `_set_dismounted` (una sola cuenta de montado con recoger, y la marca `logs/a_pie.flag` también las cubre). El perfil `Farfarfa` quedó con `pickup.dismount: true`. Líneas de base regeneradas desde main.
@@ -54,6 +55,14 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 **Rama `main`: Fase 6c + recoger a pie, 992 tests pasan.**
 
 ## Decisiones tomadas sin Enzo (noche del 2026-11-20)
+- **Integracion de la Fase 6e (2026-11-20):**
+  - `stats.metins_by_type` se cuenta en `Bot._broken` (roto real), con el tipo leido del panel (`_Attack.slug`). El conteo de objetos por tipo (catalogo) se dispara cuando desaparece el objeto actual del RECOGER nuevo: `_Cur.seen` guarda su firma y recorte mientras esta visible y `_count_current` lo cuenta (sin firma = "Objeto sin identificar"). Se quitaron `_Pickup.seen`/`_count_picked`; los objetos abandonados (`item_max_s`) no se cuentan.
+  - Prioridad: con `_cur` no se elige otro aunque la prioridad prefiera otro tipo. El escaneo mientras ataca (`_scan_find`) y `_go_next` usan `_goals`, asi que el proximo metin es el primero por prioridad (y a igual rango el mas cercano) entre los que cumplen los filtros.
+  - Habilidades: `_skill_safe` es falso con el barrido de camara activo (`_scan`); el arrastre vertical es sincronico (no se interpone). Tras una habilidad en ATACAR el reclic pendiente respeta la regla de main (no reclickea con la vida bajando).
+  - Modo bichos: RECOGER vuelve a BICHOS (`_bi_after_pickup`); la correccion de angulo tras RECOGER NO corre en bichos (no hay metin ni camara que alinear) y el escaneo mientras ataca tampoco aplica.
+  - REVIVIR: al entrar se descartan `_cur`, `_next` y `_scan` (sin restaurar camara); la correccion de angulo no corre en REVIVIR/MUERTO.
+  - Interfaz: la pestana Control suma "Coordenadas fallidas" (%, de `coords_total`/`coords_failed` del @@STATUS) y la pestana Zona el boton "Calibrar angulo vertical" (`calibrate.py camara --ui --en-perfil`). `camera_pitch.ref_horizon_frac` va al perfil de PERSONAJE (es del gusto del jugador); el resto de `camera_pitch`, `attack.*` y `pickup.*` nuevos quedan en config general sin pantalla.
+  - Tests ajustados a main: los guiones de ciclo de `test_schedule`/`test_history` usan roto real (vida 0.05 y +20 s); en `test_skills` ya no se exige reclic tras una habilidad; `test_bichos_sim` acepta que el conteo de objetos (estimado) siga un objeto fijo. PENDIENTE: con habilidades + recoger a pie las semillas 1 y 3 del simulador dejan objetos sin recoger (el bot cree haber llegado a ~17 u); `test_skills` usa las semillas 2 y 4. Sin habilidades pasan todas.
 - **Revisión general:** ver la sección "Revisión general (noche del 2026-11-20)" al final del bloque de estado (el tope de tiempo ahora tampoco corta en RECOGER ni REVIVIR, igual que la parada programada; `align_deg` queda sin uso).
 - **Pausa automática y parada programada:** decisiones en la sección "Pausa automática y parada programada" (observar la desactiva, solo pulsaciones/clics/rueda cuentan, sin posición esperada del mouse, RECOGER y REVIVIR retrasan la parada).
 - **Interfaz completa (tanda 2):** decisiones en la sección "Interfaz completa (tanda 2)" (Duplicar no cambia el perfil elegido; Crear y Nueva sí; migrar siempre con confirmación en la ventana).
@@ -61,6 +70,39 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 - **Prioridad + distancia de piso:** con `zone.metin_priority` vacía se elige exactamente como en main (el más cercano por piso entre etiquetas objetivo y piedras). Con lista: rango de prioridad del tipo (piedra sin etiqueta = "no listado" = `len(lista)`) y, a igual rango, la menor distancia de piso. Se mantiene el log "Elegido X por prioridad (mas cerca habia Y)".
 - **Modo bichos (Fase 13):** las decisiones (señuelo primero, recogida periódica, bloqueo si no junta nada, caminata corta = tramo de EXPLORAR, valores estimados de `zone.bichos`) están en la sección "Fase 13 — modo bichos".
 - **Mapa de metin por zona:** el archivo va en el perfil de zona (`spawns.file`); si no lo define, se deriva `profiles/zonas/<zona>.mapa.json`. Cambiar de zona en la interfaz usa el mapa de esa zona. El mapa viejo `data/mapa_metin.json` de main no se migra solo (copiarlo a mano al archivo de la zona si se quiere conservar).
+
+## Fase 6e (correcciones tras la prueba de las 09:47, 2026-11-20): `main` `2288eab`, 1262 tests
+**PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1A).
+- **0. Roto real** (`b2dfd5b`):
+  - Un metin cuenta como roto solo si la última vida leída era ≤ `attack.broken_hp_ratio` (10%), la piedra ya no se ve en su lugar y pasaron ≥ `attack.min_break_s` (15 s) de ataque.
+  - Si se pierde el panel con la vida alta, es una deselección: vuelve a clickear el mismo metin.
+  - El mapa de metin y el resumen cuentan solo roturas reales. En `data/mapa_metin.json` les borré la hora de rotura a (681, 148) y (725, 113), que venían de roturas falsas; hay copia en `.bak`.
+- **1. Recoger** (`1af16e2`, merge en `e966f51`):
+  - Toma un objeto y no lo cambia: aprieta Z cada `pickup.z_interval_s` (0.4 s) hasta que la etiqueta desaparece.
+  - A los `reposition_s` (3 s) se reacomoda; se rinde a los `item_max_s` (15 s).
+  - Se sube al caballo recién cuando no queda ningún objeto válido.
+- **2. Sin reclics mientras pega:**
+  - Con la vida bajando (`hp_progress_s`) no reclickea.
+  - Reclickea solo si se pierde el panel o si la vida no baja durante `reclick_stall_s`.
+  - El reclic va al punto de la piedra más alejado de los nombres de monstruos (`monster_clear_px`).
+- **3. Trabado yendo al metin**, con o sin monstruos: a los `walk_stuck_s` (5 s) quieto, espacio y reclic; después un paso al costado (`sidestep_s`) y reclic, siempre al mismo metin. Son hasta `max_unstick` intentos y después pasa a DESTRABAR, sin perder el metin.
+- **4. Metin en curso** (`_CurrentMetin`): no elige otro hasta romperlo. Si lo pierde, lo busca en la misma zona de la pantalla o por su posición estimada, y lo suelta a los `target_keep_s` (25 s).
+- **5 y 6** (`8cff1b9`): ver la sección siguiente.
+- **7. Coordenadas** (`0bb7462`, merge en `2288eab`):
+  - Descarta lecturas con poca confianza (`coords_filter.min_score`) y saltos imposibles. El límite de salto sale de la velocidad medida por el propio tracker, con tope en `max_speed`.
+  - Una posición con más de `stale_s` (3 s) sin lectura buena cuenta como "sin coordenadas".
+  - El resumen final cuenta las lecturas fallidas y descartadas, y hay un WARNING si pasan 5 s sin lectura buena.
+  - Con debug activo, guarda recortes de las lecturas fallidas en `debug/run_*/coordenadas/`.
+  - Las 17 capturas reales de `samples/` se leen con confianza 1.0.
+- **No hecho:** distinguir la animación de ataque del personaje. La vida que baja es la prueba de que está atacando.
+
+## Angulo vertical de la camara y busqueda mientras se ataca (2026-11-20)
+- **Angulo vertical** (`bot/vision/pitch.py`, `bot/camera_pitch.py`, `calibrate.py camara`): se mide la fila del horizonte (donde termina el piso) en una franja central; `camera_pitch.ref_horizon_frac` (null = no corrige) es el angulo que Enzo quiere. Corrige con arrastres del clic derecho (`GameInput.drag`) despues de romper y recoger, cada `camera_pitch.every_s` explorando, al final de cada barrido y durante la busqueda mientras ataca. El sentido y la ganancia del arrastre se aprenden solos. Para calibrar: dejar la camara como le gusta y correr `.venv\Scripts\python.exe calibrate.py camara`.
+- **Buscar el proximo metin mientras ataca** (`Bot._scan_*`, `Bot._go_next`, claves `attack.scan_*` / `next_keep_s`): con la vida bajando desde hace 5 s gira Q/E de a un paso, recuerda el primer metin objetivo que ve (sin ningun clic), vuelve la camara y, al terminar RECOGER, gira hacia el y va directo. Si girar corta el ataque (la vida deja de bajar), vuelve la camara y no busca mas mientras ataca en esa corrida (WARNING en el log).
+- Sin probar en el juego: el sentido del arrastre vertical, si Q/E cortan el ataque y los valores de la medicion del horizonte con terreno en pendiente.
+
+## Estado actual (2026-11-20, noche)
+**Fase 6d (los 6 puntos de la prueba de las 01:15) en `main`. PRÓXIMO PASO: la prueba de Enzo** (`PRUEBAS_ESTA_NOCHE.md`, punto 1).
 
 ### Fase 6d: qué cambió (pedido de Enzo tras la prueba de las 01:15)
 - **1. Elegir el metin más cercano** (`bot/ground.py`, `Bot._pick_goal`):

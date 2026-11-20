@@ -40,7 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "debug": {"enabled": False, "dir": "debug", "explore_every_s": 30.0, "max_images": 400, "jpeg_quality": 80,
               "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                                "bloqueado": 20, "explorar": 40},
-              "reason_memory_s": 60.0},
+              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0},
     # Alarma sonora (bot/alarm.py): beep de `freq` Hz y `beep_ms` ms, pausa `pause_ms`, en bucle.
     # max_seconds: corta sola a los N segundos (0 = suena hasta stop()).
     "alarm": {"freq": 1000, "beep_ms": 400, "pause_ms": 300, "max_seconds": 0},
@@ -94,8 +94,14 @@ DEFAULTS: dict[str, Any] = {
                "mount_after": True, "here_above_city_px": 30},
     # Filtro de coordenadas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
     # history: lecturas que se recuerdan para detectar trabas.
+    # min_score: confianza minima del lector (las 17 capturas reales leen 1.0; el lector ya corta en vision.coords.min_score).
+    # speed_*: velocidad medida con las lecturas aceptadas; limite de salto = min(max_speed, max(vel*speed_factor,
+    # min_speed_limit))*dt + slack. no_read_warn_s: aviso sin lectura buena; stale_s: mas viejo que esto = zona desconocida.
     "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0,
-                       "max_dt_s": 0.5, "history": 512},
+                       "max_dt_s": 0.5, "history": 512, "min_score": 0.95, "speed_factor": 1.6,
+                       "min_speed_limit": 10.0, "speed_window": 30, "speed_min_samples": 5, "speed_percentile": 90.0,
+                       "speed_min_dt_s": 0.2, "speed_move_min": 3.0, "no_read_warn_s": 5.0, "stale_s": 3.0,
+                       "report_every_min": 5.0},
     # Deteccion de "no me muevo" (bot/tracking.py): desplazamiento maximo < min_move en window_s segundos.
     # max_attempts / unstuck_radius_px / back_key_s: rutina de destrabe (bot/bot.py).
     # Episodios de traba (bot/tracking.py::StuckEpisode): resolve_dist = alejarse tanto del origen cierra el episodio;
@@ -136,16 +142,46 @@ DEFAULTS: dict[str, Any] = {
                "blocked_window_frac": 0.8,
                # Ir a un metin lejano con clic: el personaje camina solo. Mientras se mueve no cuenta el estancamiento de
                # vida (tope walk_max_s). Trabado en el camino con monstruos cerca: ESPACIO unstick_space_s y reclic.
-               "walk_max_s": 25.0, "unstick_space_s": 1.5},
-    # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero),
-    # caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z. Cada tramo dura step_s (menos si el objeto esta cerca:
-    # proporcional a su distancia hasta full_step_px, minimo min_step_s); el punto del objeto es el centro inferior de su
-    # etiqueta + item_below_label_px. arrive_px = Z cuando ese punto queda a tanto de los pies. stall_steps tramos sin
-    # acercarse al menos stall_gain_px cuentan como un intento (tries_per_item intentos y se ignora). Ver config.example.jsonc.
-    "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+               "walk_max_s": 25.0, "unstick_space_s": 1.5,
+               # Roto REAL: el panel desaparece con la ultima vida leida <= broken_hp_ratio, la piedra ya no se ve a
+               # <= broken_gone_px de su ultimo punto y pasaron >= min_break_s desde que se confirmo el ataque. Vida baja
+               # pero piedra visible: espera broken_wait_s y reclic. Panel perdido con vida alta = deseleccion: reclic en el
+               # mismo metin (max_deselect_reclicks; reclick_wait_s de gracia tras cada reclic antes de juzgar de nuevo).
+               "broken_hp_ratio": 0.10, "broken_gone_px": 90, "min_break_s": 15.0, "broken_wait_s": 3.0,
+               "max_deselect_reclicks": 6, "reclick_wait_s": 1.0,
+               # Pegando (la vida bajo en los ultimos hp_progress_s) no se reclickea. Vida quieta reclick_stall_s -> reclic.
+               # El reclic apunta al punto del cuerpo de la piedra mas alejado de las etiquetas de monstruos (descarta los
+               # a <= monster_clear_px; clear_offsets_px = desplazamientos candidatos respecto del punto de clic).
+               "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
+               "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
+                                     [15, -15]],
+               # Trabado yendo al metin: quieto walk_stuck_s con la vida sin bajar -> ESPACIO + reclic en el mismo metin;
+               # despues un paso al costado (A/D/W+A/W+D) de sidestep_s + reclic; max_unstick intentos y recien ahi DESTRABAR.
+               "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+               # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
+               # se elige otro; si no aparece en target_keep_s se lo suelta.
+               "relocate_px": 150, "target_keep_s": 25.0,
+               # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
+               # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
+               "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+               "scan_hp_margin_s": 2.0},
+    # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
+    # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
+    # su etiqueta desaparezca (gone_cycles capturas sin verla). A los reposition_s sigue ahi: reacomodo (llegada a
+    # arrive_px * reposition_frac); a los item_max_s se rinde con ese objeto. Ver config.example.jsonc.
+    "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
-               "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
-               "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
+               "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
+               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
+    # Angulo vertical de la camara (bot/vision/pitch.py, bot/camera_pitch.py). ref_horizon_frac = null: no corrige (se mide con
+    # `calibrate.py camara`). Ver config.example.jsonc.
+    "camera_pitch": {"enabled": True, "ref_horizon_frac": None, "tolerance": 0.04, "gain_px_per_frac": 600.0,
+                     "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
+                     "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
+                     "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+                     "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
+                     "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
+                     "min_valid_px": 20, "min_floor_rows": 40},
     # EXPLORAR: barrido de camara (pasos de Q/E) y caminata hacia un punto aleatorio del poligono.
     # border_margin: destino de cada tramo a >= esta distancia del borde; leg_s / leg_units: tope de tiempo y largo de un
     # tramo recto; max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO; min_leg_sep_deg / recent_legs: el
@@ -412,7 +448,9 @@ def resolve_path(p: str | Path) -> Path:
 
 # Claves que ya no se usan: si estan en el config.json se ignoran con un WARNING (no es un error).
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
-                 ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"))
+                 ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
+                 ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
+                 ("pickup", "press_interval_ms"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -760,6 +798,29 @@ def _validate_controls_safety_input(cfg: dict) -> None:
             raise ConfigError(f"input.{k} debe ser [min, max] con 0 <= min <= max")
 
 
+def _validate_camera_pitch(cfg: dict) -> None:
+    """camera_pitch: angulo vertical de la camara (referencia opcional + parametros de la medicion y del arrastre)."""
+    c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
+    if not isinstance(c.get("enabled"), bool):
+        raise ConfigError("camera_pitch.enabled debe ser true o false")
+    ref = c.get("ref_horizon_frac")
+    if ref is not None and (not isinstance(ref, (int, float)) or isinstance(ref, bool) or not 0 <= ref <= 1):
+        raise ConfigError("camera_pitch.ref_horizon_frac debe ser null o un numero entre 0 y 1")
+    positive = ("tolerance", "gain_px_per_frac", "max_drag_px", "max_steps", "every_s", "drag_s", "drag_steps",
+                "calib_samples", "gain_ema", "drag_clear_px", "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val",
+                "row_floor_frac", "run_rows", "min_valid_px")
+    nonneg = ("min_confidence", "calib_pause_s", "min_gain_move_frac", "sample_top_px", "min_sat", "min_floor_rows")
+    for k in positive + nonneg:
+        v = c.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
+            raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
+    if not 0 < c["gain_ema"] <= 1 or not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5:
+        raise ConfigError("camera_pitch.gain_ema y row_floor_frac deben estar en (0, 1] y strip_half_frac en (0, 0.5]")
+    if c["sample_top_px"] >= c["sample_bottom_px"]:
+        raise ConfigError("camera_pitch.sample_top_px debe ser menor que sample_bottom_px")
+    _require_numbers(c.get("player_box_px"), "camera_pitch.player_box_px", 3)
+
+
 def _validate_tracking_navigation(cfg: dict) -> None:
     """coords_filter, stuck, loop, attack, pickup, explore, captcha_wait y navigation."""
     def nums(sec: str, keys: tuple[str, ...], positive: tuple[str, ...] = ()) -> dict:
@@ -769,8 +830,14 @@ def _validate_tracking_navigation(cfg: dict) -> None:
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
                 raise ConfigError(f"{sec}.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
         return d
-    nums("coords_filter", ("max_speed", "slack", "accept_after", "consistency_dist", "max_dt_s", "history"),
-         ("max_speed", "accept_after", "max_dt_s", "history"))
+    cf = nums("coords_filter", ("max_speed", "slack", "accept_after", "consistency_dist", "max_dt_s", "history",
+                                "min_score", "speed_factor", "min_speed_limit", "speed_window", "speed_min_samples",
+                                "speed_percentile", "speed_min_dt_s", "speed_move_min", "no_read_warn_s", "stale_s",
+                                "report_every_min"),
+              ("max_speed", "accept_after", "max_dt_s", "history", "speed_factor", "min_speed_limit", "speed_window",
+               "speed_min_samples", "speed_min_dt_s", "no_read_warn_s", "stale_s"))
+    if cf["min_score"] > 1 or not 0 < cf["speed_percentile"] <= 100:
+        raise ConfigError("coords_filter.min_score debe ser <= 1 y speed_percentile estar en (0, 100]")
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
@@ -788,14 +855,29 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("attack", ("confirm_timeout_s", "hp_stall_s", "max_reclicks", "max_seconds", "broken_confirm_cycles",
                     "discard_minutes", "discard_radius", "discard_error_frac", "max_wrong_selections", "blocked_s",
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
-                    "unstick_space_s"),
+                    "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
+                    "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
+                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
+                    "next_keep_s", "scan_hp_margin_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
-          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s"))
-    nums("pickup", ("press_interval_ms", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
-                    "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "stall_steps",
-                    "stall_gain_px", "track_px", "tries_per_item", "same_spot_u"),
+          "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
+          "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
+          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
+          "next_keep_s"))
+    a = cfg["attack"]
+    if not isinstance(a.get("scan_enabled"), bool):
+        raise ConfigError("attack.scan_enabled debe ser true o false")
+    if not 0 < a["broken_hp_ratio"] <= 1:
+        raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
+    offs = a["clear_offsets_px"]
+    if not isinstance(offs, list) or not all(isinstance(o, list) and len(o) == 2 and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in o) for o in offs):
+        raise ConfigError("attack.clear_offsets_px debe ser una lista de pares [dx, dy]")
+    nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
+                    "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
+                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
-          "full_step_px", "stall_steps", "track_px", "tries_per_item", "same_spot_u"))
+          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"))
     nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s"),
          ("press_hold_s", "chunk_s"))
     if cfg["skill_timing"]["chunk_s"] > 0.5:
@@ -807,6 +889,7 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                      "settle_s", "settle_frames", "edge_return_u"),
          ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
     nums("volver", ("max_seconds",), ("max_seconds",))
+    _validate_camera_pitch(cfg)
     nums("captcha_wait", ("poll_s", "clear_confirm"), ("poll_s", "clear_confirm"))
     n = nums("navigation", ("probe_radius_px", "arrive_dist", "explore_margin", "min_segment_px", "min_segment_game",
                             "min_sin", "fit_segments", "max_ratio_error", "relearn_after_rejects", "phi_smooth_deg",
@@ -1002,6 +1085,10 @@ def validate_config(cfg: dict) -> None:
     v = debug.get("reason_memory_s")
     if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
         raise ConfigError("debug.reason_memory_s debe ser un numero >= 0")
+    for k in ("max_coord_crops", "coord_crop_every_s"):
+        v = debug.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"debug.{k} debe ser un numero >= 0")
     per = _require_dict(debug.get("max_per_kind"), "debug.max_per_kind")
     for k, v in per.items():
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:

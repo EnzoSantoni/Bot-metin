@@ -64,7 +64,8 @@ def test_dt_grande_esta_acotado_por_max_dt_s():
     tr = CoordTracker(CFG)
     tr.update(c(100, 100), 0)
     tr.update(None, 5)
-    assert tr.update(c(200, 100), 10) == (100, 100)   # 100 u en 10 s serian plausibles, pero dt se acota a max_dt_s
+    tr.update(c(200, 100), 10)
+    assert tr.last_known == (100, 100)   # 100 u en 10 s serian plausibles, pero dt se acota a max_dt_s
     assert tr.update(c(112, 100), 10.1) == (112, 100)
 
 

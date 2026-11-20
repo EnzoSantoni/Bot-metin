@@ -51,7 +51,9 @@ STAT_FIELDS = (("state", "Estado", "Qué está haciendo el bot ahora."), ("time"
                ("captchas", "Captchas", "Captchas detectados."), ("unstucks", "Destrabes", "Veces que se destrabó."),
                ("skills_cast", "Habilidades lanzadas", "Habilidades que el bot lanzó."),
                ("lures", "Señuelos usados", "Señuelos usados (solo modo bichos)."),
-               ("deaths", "Muertes (revividas)", "Veces que murió el personaje y cuántas veces logró revivir."))
+               ("deaths", "Muertes (revividas)", "Veces que murió el personaje y cuántas veces logró revivir."),
+               ("coords", "Coordenadas fallidas", "Porcentaje de lecturas de coordenadas (debajo del minimapa) que no salieron. "
+                                                  "Si es alto, revisá la captura o el tamaño de la ventana."))
 WS_MINIMIZEBOX = 0x00020000
 GWL_STYLE = -16
 
@@ -739,6 +741,10 @@ class App:
         self.btn_redo_zone = ttk.Button(top, text="Rehacer la zona", command=self.redo_zone)
         self.btn_redo_zone.pack(side="left")
         add_tooltip(self.btn_redo_zone, "Marcá de nuevo las esquinas de la zona de farmeo caminando por el juego (guía paso a paso).")
+        self.btn_calib_pitch = ttk.Button(top, text="Calibrar ángulo vertical", command=self.calibrate_pitch)
+        self.btn_calib_pitch.pack(side="left", padx=GAP)
+        add_tooltip(self.btn_calib_pitch, "Mide el ángulo vertical de la cámara tal como la dejaste y lo guarda como referencia "
+                                          "(camera_pitch.ref_horizon_frac, en el perfil del personaje). El bot la corrige solo.")
         btn_refresh = ttk.Button(top, text="Recargar", command=self.refresh_zone)
         btn_refresh.pack(side="left", padx=GAP)
         add_tooltip(btn_refresh, "Vuelve a leer la zona y el mapa de metin.")
@@ -831,6 +837,17 @@ class App:
                                                   personaje=self.vars["personaje"].get(), zona=self.vars["zona"].get(),
                                                   config=self._calib_config()),
             lambda rc: (self.refresh_overrides(), self.refresh_zone()))
+
+    def calibrate_pitch(self) -> None:
+        """Abre la guia de `calibrate.py camara` (mide el horizonte; guarda en el perfil del personaje)."""
+        if self.metin.locked or self._calib is not None:
+            return
+        self._open_calibrate(
+            cr.CAMARA_TITLE, cr.CAMARA_STEPS,
+            lambda _n: cr.build_calibrate_command("camara", servidor=self.vars["servidor"].get(),
+                                                  personaje=self.vars["personaje"].get(), zona=self.vars["zona"].get(),
+                                                  config=self._calib_config()),
+            lambda rc: self.refresh_overrides())
 
     # ------------------------------------------------------------------ modo de farmeo
     FARM_ADVANCED = (
@@ -1361,7 +1378,7 @@ class App:
         for w in (self.prio_check, *self.prio_buttons):
             w.configure(state="normal" if b.options else "disabled")
         idle = b.options and self._calib is None   # las guias de calibracion necesitan el bot detenido y de a una
-        for w in (self.btn_add_metin, self.btn_redo_zone):
+        for w in (self.btn_add_metin, self.btn_redo_zone, self.btn_calib_pitch):
             w.configure(state="normal" if idle else "disabled")
         self.banner.set_enabled(idle)
         for strip in self.strips.values():
@@ -1412,6 +1429,7 @@ class App:
         v["skills_cast"].set(str(s.skills_cast))
         v["lures"].set(str(s.lures) if s.farm_mode == "bichos" else "-")
         v["deaths"].set(f"{s.deaths} ({s.revives})")
+        v["coords"].set(f"{100.0 * s.coords_failed / s.coords_total:.1f}%" if s.coords_total else "-")
         self.update_zone_position(s)
         self.live_tree.delete(*self.live_tree.get_children())
         for name, n in hv.live_item_rows(s.items_by_type):

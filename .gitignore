@@ -29,3 +29,5 @@ ui_settings.json
 
 # Mapa de metin por zona (aprendido jugando)
 profiles/zonas/*.mapa.json
+
+.claude/worktrees/

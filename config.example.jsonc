@@ -65,7 +65,11 @@
     "jpeg_quality": 80,
     "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                      "bloqueado": 20, "explorar": 40},
-    "reason_memory_s": 60.0
+    "reason_memory_s": 60.0,
+    // Lecturas de coordenadas fallidas o descartadas: recorte x4 de la zona en <run>/coordenadas/NNNN_<motivo>.png
+    // (motivo: sin_lectura, confianza, salto). max_coord_crops: tope por corrida; coord_crop_every_s: separacion minima.
+    "max_coord_crops": 60,
+    "coord_crop_every_s": 1.0
   },
 
   // Alarma sonora (captcha o muerte): winsound.Beep en un hilo hasta que se la para.
@@ -142,8 +146,18 @@
   //  consistentes entre si (a <= consistency_dist unidades) que se aceptan como teletransporte real.
   //  max_dt_s: tope del dt usado en el filtro (una pausa en las lecturas no habilita saltos grandes).
   //  history: lecturas que se recuerdan para detectar trabas.
+  //  min_score: confianza minima de la lectura (las capturas reales dan 1.0; el lector ya descarta < vision.coords.min_score).
+  //  Velocidad medida: el filtro mide su velocidad con las lecturas aceptadas mientras el personaje se mueve (percentil
+  //  speed_percentile de las ultimas speed_window velocidades de >= speed_move_min u/s, con dt >= speed_min_dt_s; hacen
+  //  falta speed_min_samples). Limite de salto = min(max_speed, max(vel_medida*speed_factor, min_speed_limit))*dt + slack;
+  //  sin medicion todavia, max_speed.
+  //  no_read_warn_s: segundos seguidos sin lectura buena para avisar en el log (una vez por episodio).
+  //  stale_s: una ultima lectura buena mas vieja que esto se trata como "sin coordenadas" (zona desconocida).
+  //  report_every_min: cada cuanto se loguea el conteo de lecturas (0 = solo al final).
   "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0, "max_dt_s": 0.5,
-                    "history": 512},
+                    "history": 512, "min_score": 0.95, "speed_factor": 1.6, "min_speed_limit": 10.0, "speed_window": 30,
+                    "speed_min_samples": 5, "speed_percentile": 90.0, "speed_min_dt_s": 0.2, "speed_move_min": 3.0,
+                    "no_read_warn_s": 5.0, "stale_s": 3.0, "report_every_min": 5.0},
 
   // "No me muevo": trabado si en los ultimos window_s segundos el desplazamiento maximo es < min_move unidades
   // (solo mientras el bot intenta moverse: CoordTracker.mark_moving).
@@ -209,27 +223,62 @@
              "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
              "wrong_monsters_min": 1, "blocked_window_frac": 0.8,
-             "walk_max_s": 25.0, "unstick_space_s": 1.5},
+             "walk_max_s": 25.0, "unstick_space_s": 1.5,
+             //  ROTO REAL (un metin de 80.000 de vida no cae en 20 s): solo cuenta como roto si el panel desaparece con la
+             //  ultima vida leida <= broken_hp_ratio, la piedra ya no se ve (ni etiqueta ni piedra lejana) a <= broken_gone_px
+             //  de su ultimo punto de pantalla durante broken_confirm_cycles ciclos, y pasaron >= min_break_s desde que se
+             //  confirmo el ataque. Vida baja pero la piedra sigue ahi: espera broken_wait_s y reclic. Panel perdido con vida
+             //  alta = DESELECCION (clic en un bicho): reclic en el mismo metin, hasta max_deselect_reclicks; despues BUSCAR
+             //  (con el metin en curso; a la segunda vez se descarta). reclick_wait_s: gracia tras un reclic antes de juzgar
+             //  el panel de nuevo. El mapa de metin y el contador solo suben con roturas reales.
+             "broken_hp_ratio": 0.10, "broken_gone_px": 90, "min_break_s": 15.0, "broken_wait_s": 3.0,
+             "max_deselect_reclicks": 6, "reclick_wait_s": 1.0,
+             //  NO RECLICKEAR SI PEGA: si la vida bajo en los ultimos hp_progress_s no se hace ningun clic. Vida quieta
+             //  reclick_stall_s -> reclic. El reclic va al punto del cuerpo de la piedra mas alejado de las etiquetas de
+             //  monstruos (descarta los a <= monster_clear_px); clear_offsets_px = desplazamientos [dx, dy] candidatos
+             //  respecto del punto de clic. (hp_stall_s ya no se usa: lo reemplaza reclick_stall_s.)
+             "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
+             "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
+                                  [15, -15]],
+             //  TRABADO YENDO AL METIN: tras el clic, coordenadas quietas (< stuck.min_move) walk_stuck_s con la vida sin bajar
+             //  (haya o no monstruos) -> 1) ESPACIO unstick_space_s + reclic en el mismo metin; 2) un paso al costado (A, D,
+             //  W+A, W+D, alternando) de sidestep_s + reclic; hasta max_unstick intentos y recien ahi DESTRABAR.
+             "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+             //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
+             //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
+             //  target_keep_s se lo suelta.
+             "relocate_px": 150, "target_keep_s": 25.0,
+             //  Buscar el proximo metin MIENTRAS se ataca: con scan_enabled, la vida del metin bajando desde hace scan_after_s y el
+             //  panel confirmado, la camara gira de a un paso de Q/E (explore.camera_step_s) hasta scan_steps pasos o hasta ver un
+             //  metin objetivo (distinto del que se ataca) y vuelve la misma cantidad de pasos a su posicion original. Entre paso y
+             //  paso espera la compuerta explore.settle_s / settle_frames y comprueba que la vida siga bajando: si un giro corta el
+             //  ataque (la vida deja de bajar hp_progress_s + scan_hp_margin_s), vuelve la camara, avisa y no busca mas mientras ataca en esta
+             //  corrida. NUNCA hace clic en otro metin hasta romper el actual y recoger. Lo encontrado se recuerda next_keep_s
+             //  segundos: al terminar RECOGER gira esos pasos y va directo a el (a <= relocate_px del punto recordado).
+             "scan_enabled": true, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+             "scan_hp_margin_s": 2.0},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
   //  cada objeto (el mas cercano al personaje primero), camina hasta el y aprieta Z, hasta que no queden.
   //  dismount: true = se baja del caballo para recoger y se sube al terminar; false = recoge montado (mismo flujo).
-  //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha). press_interval_ms: pausa tras cada Z.
-  //  SIN clics: despues de bajarse, camina con W/A/S/D hasta quedar encima o al lado de cada objeto y aprieta Z
-  //  (de paso puede juntar yang). Elige el objeto mas cercano (distancia de piso), toma su direccion sobre el piso desde
-  //  los pies, la parte en 8 sectores de 45 grados (W, W+D, D, S+D, S, S+A, A, W+A) y mantiene esas teclas un tramo de
-  //  step_s (proporcional a la distancia si el objeto esta a menos de full_step_px, minimo min_step_s); despues vuelve a
-  //  mirar. El punto del objeto = centro inferior de su etiqueta + item_below_label_px. arrive_px: Z cuando ese punto esta
-  //  a <= arrive_px de los pies. Cada Z sin que desaparezca el objeto, y cada stall_steps tramos sin acercarse al menos
-  //  stall_gain_px, cuentan como un intento: tries_per_item intentos y el objeto se ignora (valido mientras el personaje
-  //  no se mueva same_spot_u unidades; track_px: tolerancia para reconocer la misma etiqueta). Si el personaje sale de la
-  //  zona se corta la recogida. Termina tras empty_confirm_cycles ciclos sin objetos validos, max_presses Z o
-  //  max_seconds (cuenta desde que empieza a recoger). (arrive_px, step_s, full_step_px, stall_*: ESTIMADOS.)
-  "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+  //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha).
+  //  SIN clics: despues de bajarse, camina con W/A/S/D hasta quedar encima de cada objeto. Elige el mas cercano (distancia
+  //  de piso) y NO lo cambia hasta que desaparece o se abandona. Toma su direccion sobre el piso desde los pies, la parte
+  //  en 8 sectores de 45 grados (W, W+D, D, S+D, S, S+A, A, W+A) y mantiene esas teclas un tramo de step_s (proporcional
+  //  a la distancia si esta a menos de full_step_px, minimo min_step_s); despues vuelve a mirar. El punto del objeto =
+  //  centro inferior de su etiqueta + item_below_label_px. arrive_px: llegada = ese punto a <= arrive_px de los pies.
+  //  Ya encima: Z cada z_interval_s (la Z del servidor tiene retraso) mientras la etiqueta siga; desaparecida =
+  //  gone_cycles capturas seguidas sin verla cerca de su ultimo punto (track_px) -> recogido, sigue el proximo. A los
+  //  reposition_s sin que desaparezca, se reacomoda caminando a su punto con radio de llegada arrive_px * reposition_frac
+  //  y sigue con Z. A los item_max_s desde que empezo con el objeto se rinde (queda ignorado mientras el personaje no
+  //  se mueva same_spot_u unidades). Si sale de la zona se corta la recogida. Se sube al caballo solo cuando no queda
+  //  ningun objeto valido durante empty_confirm_cycles ciclos, o por max_presses Z o max_seconds (desde que empieza a
+  //  recoger). (arrive_px, step_s, full_step_px, reposition_*, item_max_s: ESTIMADOS.)
+  "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
              "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
-             "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
-             "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
+             "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
+             "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...
@@ -248,6 +297,29 @@
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
               "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0},
+
+  // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
+  //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
+  //  Enzo quiere conservar: null = no corrige (se mide con `calibrate.py camara`, que lo guarda aca). Con referencia, despues de
+  //  romper cada metin (antes de buscar), cada every_s mientras explora y durante la busqueda mientras ataca, si el horizonte
+  //  se fue mas de tolerance, arrastra con el CLIC DERECHO en vertical (drag_s s, drag_steps pasos) desde un punto libre del piso
+  //  (a >= drag_clear_px de etiquetas, piedras y personaje). dy = gain * (medido - ref), tope max_drag_px, hasta max_steps
+  //  arrastres por correccion; gain (px por unidad de horizon_frac; gain_px_per_frac es el inicial) se aprende solo, con signo,
+  //  comparando antes y despues de cada arrastre (promedio gain_ema; se ignora si el horizonte se movio menos de
+  //  min_gain_move_frac). Medicion con confianza < min_confidence: no corrige. calib_samples / calib_pause_s: capturas de
+  //  `calibrate.py camara`.
+  //  Medicion: franja central de +-strip_half_frac del ancho; el color del piso sale de una muestra a sample_top_px..sample_bottom_px
+  //  debajo del personaje; un pixel es piso si su tono difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila
+  //  es piso con >= row_floor_frac de pixeles piso (descartando UI y el rectangulo del personaje player_box_px = [medio ancho,
+  //  arriba, abajo]); el horizonte es la primera fila que deja de serlo run_rows seguidas. min_valid_px: pixeles utiles minimos por
+  //  fila; min_floor_rows: menos filas de piso que eso = medicion dudosa. (Medidos sobre samples/, ver PROGRESS.md.)
+  "camera_pitch": {"enabled": true, "ref_horizon_frac": null, "tolerance": 0.04, "gain_px_per_frac": 600.0,
+                   "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
+                   "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
+                   "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+                   "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
+                   "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
+                   "min_valid_px": 20, "min_floor_rows": 40},
 
   // ACERCARSE: confirmar el tipo de una piedra lejana (sin etiqueta) con HOVER. Entra desde BUSCAR/EXPLORAR cuando la
   //  piedra elegida (la mas cercana al personaje, ver vision.ground) no tiene etiqueta: mueve el mouse sobre su cuerpo

@@ -168,6 +168,8 @@ class Status:
     deaths: int = 0                   # muertes de la corrida
     revives: int = 0                  # revives logrados
     fight_s: float = 0.0              # segundos peleando (modo bichos)
+    coords_total: int = 0             # lecturas de coordenadas intentadas
+    coords_failed: int = 0            # lecturas sin resultado
     skills: list = field(default_factory=list)   # [{name, key, remaining_s}]
     items_by_type: list = field(default_factory=list)    # [{id, name, count}]
     metins_by_type: dict = field(default_factory=dict)   # {slug: cantidad}
@@ -247,7 +249,8 @@ def status_from_dict(d: dict) -> Status:
                   paused=bool(d.get("paused", False)), auto_paused=bool(d.get("auto_paused", False)), profiles=prof if isinstance(prof, dict) else {},
                   skills_cast=_as_int(d.get("skills_cast")),
                   farm_mode=str(d.get("farm_mode") or "metin"), lures=_as_int(d.get("lures")), deaths=_as_int(d.get("deaths")),
-                  revives=_as_int(d.get("revives")),
+                  revives=_as_int(d.get("revives")), coords_total=_as_int(d.get("coords_total")),
+                  coords_failed=_as_int(d.get("coords_failed")),
                   fight_s=_as_float(d.get("fight_s")), skills=parse_skills_status(d.get("skills")),
                   items_by_type=parse_items_status(d.get("items_by_type")),
                   metins_by_type=parse_metins_status(d.get("metins_by_type")),

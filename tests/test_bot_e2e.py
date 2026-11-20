@@ -42,7 +42,7 @@ def no_input_after(env, idx):
 
 # ---------------------------------------------------------------- 1. farmeo normal
 def test_farmeo_normal():
-    env = farm_env()
+    env = farm_env(z_needed=3)   # la Z del servidor tiene retraso: cada objeto necesita 3 Z seguidas
     far = env.world.add_metin((330, 150), name=OSC)
     ava = env.world.add_metin((560, 175), name=AVA)
     dist = env.track_zone()
@@ -57,7 +57,7 @@ def test_farmeo_normal():
     assert len(w.picked) == 8 and all(i.kind == "item" and not i.reserved_other for i in w.picked)
     assert any(i.kind == "yang" for i in w.items) and any(i.reserved_other for i in w.items)
     assert all(env.state_at(t) != "RECOGER" for t, _ in w.bad_item_clicks)   # al recoger nunca clickea yang/reservados
-    assert w.z_presses > 0 and w.t < 400
+    assert w.z_presses >= 3 * 8 and w.t < 400
     m = len(w.broken)
     print(f"METRICAS farmeo: {m} metin en {w.t:.0f}s simulados ({m / (w.t / 60):.2f}/min), "
           f"{len(w.clicks_on_metin) / m:.2f} clics/metin, {env.count_unstucks()} destrabes")
@@ -202,7 +202,7 @@ def test_metin_invulnerable_reclics_descarte_y_no_se_vuelve_a_elegir():
     assert env.run_until(lambda: any("descartado" in t.reason for t in env.transitions), max_s=300) == "cond"
     t_d = env.world.t
     n = len(env.world.clicks_on_metin)
-    assert n == 1 + atk["max_reclicks"]
+    assert n >= 1 + 2 * atk["max_unstick"]   # clic inicial + un reclic por cada intento de la escalera (dos escaleras)
     assert env.run_until(max_s=atk["discard_minutes"] * 60 - 30) == "limite"
     assert len(env.world.clicks_on_metin) == n, "volvio a elegir el metin descartado"
     assert m.hp == 1.0 and env.world.t - t_d > 500

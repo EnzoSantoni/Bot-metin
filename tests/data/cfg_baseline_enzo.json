@@ -25,19 +25,116 @@
   "blocked_s": 4.0,
   "blocked_window_frac": 0.8,
   "broken_confirm_cycles": 2,
+  "broken_gone_px": 90,
+  "broken_hp_ratio": 0.1,
+  "broken_wait_s": 3.0,
   "circle_min_path": 4.0,
   "circle_ratio": 2.5,
+  "clear_offsets_px": [
+   [
+    0,
+    -15
+   ],
+   [
+    0,
+    15
+   ],
+   [
+    0,
+    25
+   ],
+   [
+    -15,
+    0
+   ],
+   [
+    15,
+    0
+   ],
+   [
+    -25,
+    0
+   ],
+   [
+    25,
+    0
+   ],
+   [
+    -15,
+    15
+   ],
+   [
+    15,
+    15
+   ],
+   [
+    -15,
+    -15
+   ],
+   [
+    15,
+    -15
+   ]
+  ],
   "confirm_timeout_s": 6.0,
   "discard_error_frac": 0.3,
   "discard_minutes": 10.0,
   "discard_radius": 8.0,
+  "hp_progress_s": 4.0,
   "hp_stall_s": 8.0,
+  "max_deselect_reclicks": 6,
   "max_reclicks": 3,
   "max_seconds": 120.0,
+  "max_unstick": 4,
   "max_wrong_selections": 3,
+  "min_break_s": 15.0,
+  "monster_clear_px": 25,
+  "next_keep_s": 60.0,
+  "reclick_stall_s": 5.0,
+  "reclick_wait_s": 1.0,
+  "relocate_px": 150,
+  "scan_after_s": 5.0,
+  "scan_enabled": true,
+  "scan_hp_margin_s": 2.0,
+  "scan_steps": 12,
+  "sidestep_s": 0.6,
+  "target_keep_s": 25.0,
   "unstick_space_s": 1.5,
   "walk_max_s": 25.0,
+  "walk_stuck_s": 5.0,
   "wrong_monsters_min": 1
+ },
+ "camera_pitch": {
+  "calib_pause_s": 0.3,
+  "calib_samples": 5,
+  "drag_clear_px": 140,
+  "drag_s": 0.3,
+  "drag_steps": 6,
+  "enabled": true,
+  "every_s": 30.0,
+  "gain_ema": 0.5,
+  "gain_px_per_frac": 600.0,
+  "max_drag_px": 150,
+  "max_steps": 3,
+  "min_confidence": 0.5,
+  "min_floor_rows": 40,
+  "min_gain_move_frac": 0.01,
+  "min_sat": 10,
+  "min_valid_px": 20,
+  "player_box_px": [
+   110,
+   140,
+   130
+  ],
+  "ref_horizon_frac": null,
+  "row_floor_frac": 0.5,
+  "run_rows": 8,
+  "sample_bottom_px": 170,
+  "sample_top_px": 70,
+  "strip_half_frac": 0.12,
+  "tol_hue": 10,
+  "tol_val": 22,
+  "tolerance": 0.04
  },
  "captcha_wait": {
   "clear_confirm": 2,
@@ -65,13 +162,26 @@
   "history": 512,
   "max_dt_s": 0.5,
   "max_speed": 30.0,
-  "slack": 2.0
+  "min_score": 0.95,
+  "min_speed_limit": 10.0,
+  "no_read_warn_s": 5.0,
+  "report_every_min": 5.0,
+  "slack": 2.0,
+  "speed_factor": 1.6,
+  "speed_min_dt_s": 0.2,
+  "speed_min_samples": 5,
+  "speed_move_min": 3.0,
+  "speed_percentile": 90.0,
+  "speed_window": 30,
+  "stale_s": 3.0
  },
  "debug": {
+  "coord_crop_every_s": 1.0,
   "dir": "debug",
   "enabled": true,
   "explore_every_s": 30.0,
   "jpeg_quality": 80,
+  "max_coord_crops": 60,
   "max_images": 400,
   "max_per_kind": {
    "bloqueado": 20,
@@ -205,19 +315,20 @@
   "dismount": true,
   "empty_confirm_cycles": 5,
   "full_step_px": 200,
+  "gone_cycles": 2,
   "item_below_label_px": 10,
+  "item_max_s": 15.0,
   "look_s": 1.0,
-  "max_presses": 30,
-  "max_seconds": 20.0,
+  "max_presses": 200,
+  "max_seconds": 90.0,
   "min_step_s": 0.1,
   "mount_wait_s": 2.0,
-  "press_interval_ms": 350,
+  "reposition_frac": 0.5,
+  "reposition_s": 3.0,
   "same_spot_u": 3.0,
-  "stall_gain_px": 8,
-  "stall_steps": 5,
   "step_s": 0.25,
   "track_px": 80,
-  "tries_per_item": 2
+  "z_interval_s": 0.4
  },
  "safety": {
   "corner_poll_ms": 50,
