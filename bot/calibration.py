@@ -574,7 +574,8 @@ SUMMARY: list[tuple[str, list[tuple[str, str]]]] = [
         ("explore.max_without_metin_s", "tiempo sin ver metin antes de ir al centro: ver cuanto tarda en aparecer uno"),
     ]),
     ("Fase 6b: acercarse (approach) y atacar", [
-        ("approach.blind_screen_px", "distancia en pantalla a la que se ataca sin camara calibrada: probar en el juego"),
+        ("approach.hover_wait_s", "espera tras mover el mouse sobre una piedra lejana hasta que aparece su etiqueta: probar en el juego"),
+        ("vision.ground.horizon_frac", "horizonte para comparar distancias con perspectiva: verifica el orden con samples/real_tres_metin_hover.png"),
         ("approach.blind_player_radius", "radio (u) donde vale un descarte sin camara: a ojo con el debug"),
         ("approach.max_seconds", "tope de la caminata hacia una piedra lejana: cronometra una caminata real"),
         ("attack.blocked_s", "tiempo quieto con la vida sin bajar antes de dar ESPACIO: mira el log de ATACAR"),

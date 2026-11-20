@@ -287,7 +287,7 @@ class SimWorld(SimGame):
         vec = np.asarray(vec, dtype=float)
         best = None
         for m in self.metins:
-            if m.alive and (off := self.visible_offset(m.pos)) is not None:
+            if m.alive and (off := self.visible_offset(m.pos, self.far_dist)) is not None:   # tambien la piedra lejana (sin etiqueta)
                 d = math.hypot(off[0] - vec[0], off[1] - vec[1])
                 if d <= self.click_tol_px and (best is None or d < best[0]):
                     best = (d, m)

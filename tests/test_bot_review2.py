@@ -183,7 +183,8 @@ def test_i2_piedra_fantasma_no_hace_loop():
         return p
     env.bot._perceive = per
     env.run_until(max_s=600)
-    assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= int(env.cfg["approach"]["max_tries_per_spot"])
+    # la 1a aproximacion es a ciegas (sin camara, posicion del jugador) y las siguientes ya ubicadas: un tope de 1 + max_tries
+    assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= 1 + int(env.cfg["approach"]["max_tries_per_spot"])
     assert env.bot.ignored
 
 

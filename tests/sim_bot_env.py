@@ -34,6 +34,7 @@ CLIENT = Rect(8, 31, W, H)
 LABEL_W, LABEL_H = 80, 10
 CAPTCHA_RECT = Rect(1600, 400, 152, 194)
 DEATH_RECT = Rect(10, 10, 100, 20)
+HOVER_PX = 40   # radio alrededor del cuerpo de una piedra lejana donde el mouse hace aparecer su etiqueta
 
 
 class SimControl:
@@ -241,8 +242,12 @@ class SimEnv:
                 if foff is not None:
                     fc = (round(player[0] + foff[0]), round(player[1] + foff[1]))
                     if 40 <= fc[0] < W - 40 and 40 <= fc[1] < H - 40:
-                        far.append(FarMetin(Rect(fc[0] - 25, fc[1] - 60, 50, 70), fc, 0.9, self.mask.allows(*fc)))
-                continue
+                        if self._hovered(fc):   # el mouse esta encima: el juego muestra su nombre aunque este lejos
+                            off = foff
+                        else:
+                            far.append(FarMetin(Rect(fc[0] - 25, fc[1] - 60, 50, 70), fc, 0.9, self.mask.allows(*fc)))
+                if off is None:
+                    continue
             cp = (round(player[0] + off[0]), round(player[1] + off[1]))
             label = Rect(cp[0] - LABEL_W // 2, cp[1] - 65 - LABEL_H // 2, LABEL_W, LABEL_H)
             if label.x < 0 or label.y < 0 or label.right > W or label.bottom > H or not (0 <= cp[0] < W and 0 <= cp[1] < H):
@@ -277,6 +282,11 @@ class SimEnv:
             captcha=CaptchaInfo(CAPTCHA_RECT, 1.0) if w.captcha_active else None,
             death=DeathInfo(DEATH_RECT, None, 1.0) if w.dead else None, player_xy=player,
             far_metins=far, monsters=monsters, monsters_near=count_near(monsters, player, cfg=cfg))
+
+    def _hovered(self, base: tuple[int, int]) -> bool:
+        """El cursor esta sobre el cuerpo de una piedra lejana (cuyo punto base es `base`): se ve su etiqueta."""
+        cx, cy = self.window.screen_to_client(*self.backend.cursor)
+        return math.hypot(cx - base[0], cy - (base[1] - 25)) <= HOVER_PX
 
     def _panel(self) -> PanelInfo | None:
         sel = self.world.selected

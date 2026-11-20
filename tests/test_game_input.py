@@ -351,3 +351,25 @@ def test_hold_zero_seconds_still_presses_once():
     g, be, _, _ = make()
     assert g.hold("move_up", 0)
     assert be.events == [("key_down", "w"), ("key_up", "w")]
+
+
+def test_hover_only_moves_the_mouse_with_jitter_and_mask_check():
+    g, be, _, _ = make()
+    for _ in range(20):
+        be.events.clear()
+        assert g.hover_at(500, 400, open_mask())
+        assert [e[0] for e in be.events] == ["move_to"]   # sin clic ni teclas
+        _, sx, sy = be.events[0]
+        assert (sx - 8 - 500) ** 2 + (sy - 31 - 400) ** 2 <= (g.cfg["input"]["click_jitter_px"] + 1) ** 2
+    be.events.clear()
+    assert g.hover_at(100, 100, open_mask(blocked=Rect(50, 50, 200, 200))) is False
+    assert g.hover_at(1900, 100, open_mask(w=2000, h=1200)) is False   # fuera del cliente
+    assert be.events == []
+    with pytest.raises(ValueError):
+        g.hover_at(10, 10, None)
+
+
+def test_hover_not_ready_sends_nothing():
+    g, be, _, _ = make(ready=False)
+    assert g.hover_at(500, 400, open_mask()) is False
+    assert be.events == []

@@ -159,10 +159,14 @@
   //  con >= wrong_monsters_min monstruos cerca -> ESPACIO, Escape y reclic (sigue contando para max_wrong_selections).
   //  blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
   //  Si el personaje sale de la zona atacando un metin cuya posicion queda afuera (o no se conoce), esa posicion se descarta.
+  //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
+  //  vida (hp_stall_s) hasta walk_max_s. Quieto stuck.window_s con la vida sin bajar y >= stuck.monsters_min monstruos cerca
+  //  -> ESPACIO unstick_space_s y reclic (cuenta para max_reclicks). (walk_max_s, unstick_space_s: ESTIMADOS.)
   "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
              "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
-             "wrong_monsters_min": 1, "blocked_window_frac": 0.8},
+             "wrong_monsters_min": 1, "blocked_window_frac": 0.8,
+             "walk_max_s": 25.0, "unstick_space_s": 1.5},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
@@ -187,29 +191,35 @@
   //  walk_timeout_s: tope de un tramo de VOLVER/CENTRO. (camera_steps, border_margin, leg_*, max_without_metin_s: ESTIMADOS.)
   //  visited_keep: puntos recientes que la exploracion trata de no repetir. leg_tiebreak_units: desempate al azar
   //  (unidades) entre destinos de tramo parecidos.
+  //  settle_s / settle_frames: el barrido (y el giro de MIRAR) gira en pasos y despues de cada uno espera este tiempo Y
+  //  esta cantidad de percepciones completas antes del siguiente (para analizar lo que aparecio). (ESTIMADOS.)
   "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
-              "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0},
+              "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
+              "settle_s": 0.6, "settle_frames": 2},
 
-  // ACERCARSE: caminar hacia una piedra lejana (sin etiqueta) hasta que aparezca el nombre. Entra desde BUSCAR/EXPLORAR
-  //  si no hay etiqueta valida y hay una piedra permitida, no ignorada y cuya posicion estimada (o el jugador, sin camara)
-  //  esta en la zona. Etiqueta de un objetivo -> ATACAR; etiqueta de otro tipo donde estaba la piedra -> esa posicion se
-  //  ignora ignore_minutes (radio ignore_radius, mas el error de la camara). lost_cycles ciclos sin verla -> BUSCAR.
+  // ACERCARSE: confirmar el tipo de una piedra lejana (sin etiqueta) con HOVER. Entra desde BUSCAR/EXPLORAR cuando la
+  //  piedra elegida (la mas cercana al personaje, ver vision.ground) no tiene etiqueta: mueve el mouse sobre su cuerpo
+  //  (sin clic), espera hover_wait_s y busca una etiqueta a <= hover_label_px de la piedra. Etiqueta objetivo -> clic y
+  //  ATACAR (el personaje camina solo hasta la piedra); etiqueta de otro tipo -> esa posicion se ignora ignore_minutes
+  //  (radio ignore_radius, mas el error de la camara) y vuelve a BUSCAR; sin etiqueta tras hover_tries hovers -> clic
+  //  igual (el panel de ATACAR confirma el tipo). No gira la camara ni camina con W.
+  //  lost_cycles ciclos sin ver la piedra -> BUSCAR (SIN ignorarla). max_seconds: tope de todo el acercamiento.
   //  label_match_px: una etiqueta a esa distancia de la piedra es "esa piedra". match_px: seguimiento entre ciclos.
   //  label_exclude_down_px: la piedra de una etiqueta visible (hasta tantos px debajo de ella) no es "lejana".
-  //  Perder la piedra de vista tambien ignora su posicion. max_tries_per_spot: aproximaciones a una misma posicion sin
-  //  llegar a atacar antes de ignorarla (se reinicia al atacar).
-  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego; es lo normal en modo teclado): un metin con etiqueta
-  //  se ataca si el personaje esta adentro del poligono o en la franja de tolerancia (no mas afuera) y la etiqueta queda a
-  //  <= blind_screen_px del personaje en pantalla; una piedra lejana sin etiqueta, solo si el personaje esta adentro.
+  //  max_tries_per_spot: aproximaciones a una misma posicion sin llegar a atacar antes de ignorarla (se reinicia al atacar).
+  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego; es lo normal en modo teclado): un metin (con etiqueta
+  //  o piedra) se ataca/persigue si el personaje esta adentro del poligono o en la franja de tolerancia (no mas afuera),
+  //  sin limite de distancia en pantalla (la clave vieja approach.blind_screen_px se ignora).
   //  Un descarte o ignorado se guarda con la posicion del JUGADOR y solo aplica a menos de blind_player_radius
   //  unidades de ese lugar (y a lo que se ve en el mismo sitio de la pantalla), no a todo.
   //  far_monsters_n / far_monsters_px: una piedra lejana SIN humo (criterio secundario) con >= n etiquetas de monstruos a
   //  menos de px de ella es un falso positivo (un grupo de bichos) y se ignora. Las que tienen humo no se filtran.
   "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
-               "blind_screen_px": 160, "blind_player_radius": 25.0, "max_tries_per_spot": 3,
-               "far_monsters_n": 2, "far_monsters_px": 200},
+               "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+               "far_monsters_n": 2, "far_monsters_px": 200,
+               "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2},
 
   // CENTRO (regla D / E): como VOLVER pero el destino es el centro del poligono; termina a <= arrive_dist unidades y
   //  sigue con barrido + EXPLORAR. Su tope de tiempo y sus episodios de traba son los de VOLVER (volver.max_seconds).
@@ -275,6 +285,11 @@
   },
 
   "vision": {
+    // Plano del piso (bot/ground.py): compara distancias con perspectiva (mas abajo y mas grande = mas cerca) para elegir
+    //  el metin mas cercano. horizon_frac: fila del horizonte (fraccion del alto); focal_frac: focal (fraccion del ancho);
+    //  feet_dy_px: los pies del personaje quedan tanto debajo de su punto; min_dv_px: acota (fila - horizonte) abajo.
+    //  ESTIMADOS: verificados con samples/real_tres_metin_hover.png; el orden no cambia con horizon_frac 0.10-0.19.
+    "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).

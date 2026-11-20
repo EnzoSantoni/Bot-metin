@@ -143,6 +143,28 @@ class GameInput:
             self._delay()
             return True
 
+    def hover_at(self, x: int, y: int, mask: ScreenMask | None) -> bool:
+        """Solo mueve el mouse a (x, y) de cliente (sin clic), con el mismo chequeo de mascara y jitter que `click_at`.
+        Sirve para que el juego muestre la etiqueta de lo que hay debajo."""
+        if mask is None:
+            raise ValueError("hover_at requiere la mascara de la captura actual")
+        with self._action() as ready:
+            if not ready or not self._window_unchanged():
+                return False
+            if not mask.allows(x, y):
+                logger.warning("Hover rechazado en (%d, %d): zona no permitida", x, y)
+                return False
+            x, y = self._jitter(x, y, mask)
+            try:
+                sx, sy = self.window.client_to_screen(x, y, strict=True)
+            except ValueError:
+                logger.warning("Hover rechazado en (%d, %d): fuera del cliente", x, y)
+                return False
+            self.control.check()
+            self.backend.move_to(sx, sy)
+            self.control.sleep(self._rand_s("move_settle_ms"))
+            return True
+
     def press(self, action: str, hold_s: float | None = None) -> bool:
         """Aprieta la tecla (o combinacion) de `controls[action]`."""
         keys = self._key_spec(action)

@@ -51,8 +51,9 @@ def watch_clicks(env):
     orig = w.click_screen
 
     def spy(vec):
-        near = [math.dist(off, vec) for pt in [m.pos for m in w.metins if m.alive] + [i.pos for i in w.items]
-                if (off := w.visible_offset(pt)) is not None]
+        # una piedra lejana (sin etiqueta, hasta far_dist) tambien es un metin: el clic izquierdo sobre ella esta permitido
+        near = [math.dist(off, vec) for pt, dist in [(m.pos, w.far_dist) for m in w.metins if m.alive]
+                + [(i.pos, None) for i in w.items] if (off := w.visible_offset(pt, dist)) is not None]
         out.append(min(near) if near else None)
         return orig(vec)
     w.click_screen = spy
@@ -86,8 +87,8 @@ def test_farmeo_completo_solo_con_teclado(seed):
     assert why == "cond", (why, env.transitions[-5:])
     assert clicks and not ground_clicks(clicks), ground_clicks(clicks)
     assert max(dist) <= tol(env)
-    k = keys_down(env)
-    assert k.get("w", 0) > 0
+    # ahora a los metin lejanos se va con clic sobre ellos (el personaje camina solo): W ya no es imprescindible
+    assert len(env.world.clicks_on_metin) >= len(targets)
     assert not env.bot.camera.has_a0          # sin clics en el piso la camara no aprende nada
 
 
@@ -205,14 +206,16 @@ def test_view_right_key_al_reves_se_aprende_en_pocos_giros():
     assert math.dist(tuple(env.world.pos), target) <= float(env.cfg["center"]["arrive_dist"]) + 3
 
 
-def test_view_right_key_al_reves_se_aprende_tambien_acercandose_a_una_piedra():
+def test_acercarse_a_una_piedra_no_gira_la_vista_ni_invierte_las_teclas():
+    """ACERCARSE ya no gira la camara (hover + clic): Q/E no se aprietan por ir a la piedra y la tecla no se invierte."""
     env = kenv(1, start=(520.0, 160.0))
     env.world.add_metin((640.0, 150.0), name=OSC)
     flips = []
     orig = env.bot.keynav.flip_keys
     env.bot.keynav.flip_keys = lambda: (flips.append(env.world.t), orig())[1]
     env.run_until(lambda: env.world.broken, max_s=600)
-    assert env.world.broken and len(flips) == 1 and env.bot.keynav.view_right_key == "camera_left"
+    assert env.world.broken and not flips and env.bot.keynav.view_right_key == "camera_right"
+    assert any(t.new == "ACERCARSE" for t in env.transitions)
 
 
 def test_view_right_key_correcta_no_se_invierte():
