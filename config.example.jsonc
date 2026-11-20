@@ -166,10 +166,13 @@
             // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = mirar con Q/E y caminar hacia la
             // direccion elegida con la combinacion de W/A/S/D mas cercana (sin girar) durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
             "back_s": 1.0, "look_walk_s": 1.2,
-            // Rodeado sin avanzar (en EXPLORAR, VOLVER, CENTRO y ACERCARSE): con >= monsters_min monstruos cerca y menos de
-            // min_move de movimiento en surrounded_s segundos, ESPACIO surrounded_space_s (montado empuja) y sigue en el mismo
-            // estado. Tras surrounded_max veces seguidas sin avanzar, el DESTRABAR de siempre.
-            "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
+            // TRABADO RAPIDO (EXPLORAR, VOLVER y CENTRO caminando; y ATACAR yendo al metin, ver attack): si deberia estar
+            // moviendose (W/A/S/D sostenida, clic de ataque) y las coordenadas se mueven menos de min_move durante fast_s
+            // segundos, esta trabado (objeto, borde, un bicho o un grupo). Con >= monsters_min monstruos cerca: ESPACIO
+            // surrounded_space_s (montado empuja); sin monstruos: un paso al costado (attack.sidestep_s, A/D/W+A/W+D alternando).
+            // Sigue en el mismo estado. Tras surrounded_max reacciones seguidas sin avanzar, el DESTRABAR de siempre.
+            // Reemplaza a surrounded_s y a attack.walk_stuck_s (obsoletas: si estan en config.json se ignoran con un WARNING).
+            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -215,10 +218,19 @@
              "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
              "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
                                   [15, -15]],
-             //  TRABADO YENDO AL METIN: tras el clic, coordenadas quietas (< stuck.min_move) walk_stuck_s con la vida sin bajar
-             //  (haya o no monstruos) -> 1) ESPACIO unstick_space_s + reclic en el mismo metin; 2) un paso al costado (A, D,
-             //  W+A, W+D, alternando) de sidestep_s + reclic; hasta max_unstick intentos y recien ahi DESTRABAR.
-             "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+             //  TRABADO YENDO AL METIN: tras el clic, coordenadas quietas (< stuck.min_move) stuck.fast_s con la vida sin bajar
+             //  -> con >= stuck.monsters_min monstruos cerca ESPACIO unstick_space_s + reclic en el mismo metin; sin monstruos
+             //  un paso al costado (A, D, W+A, W+D, alternando) de sidestep_s + reclic; hasta max_unstick intentos y recien ahi
+             //  DESTRABAR. No se juzga con la camara girada ni con la vida bajando; arrive_px: confirmado y con la piedra a
+             //  esa distancia (px) del personaje ya llego, quieto es normal. (walk_stuck_s es obsoleta: ahora es stuck.fast_s.)
+             "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
+             //  PUNTO DE CLIC EN EL CUERPO DE LA PIEDRA: el de la etiqueta (vision.metin.click_dy debajo de ella) cae en la base
+             //  o en el piso; se corre hacia arriba label_click_up_frac * click_dy px (medido: la piedra lejana queda ~45 px
+             //  debajo del centro de la etiqueta, click_dy 65). Con una piedra lejana asociada se usa el centro de su rect.
+             //  VERIFICACION RAPIDA: a los confirm_check_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
+             //  (piedra/etiqueta relocalizada; si cae en el mismo punto, quick_up_px mas arriba por intento), hasta quick_reclicks;
+             //  despues el flujo de siempre (confirm_timeout_s). No cuentan para max_reclicks.
+             "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.

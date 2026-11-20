@@ -42,19 +42,19 @@ def test_el_tope_walk_max_s_vuelve_a_contar_el_estancamiento():
 
 
 def test_quieto_con_vida_sin_bajar_reclickea_por_estancamiento():
-    """Con la escalera de trabado apagada (walk_stuck_s enorme) la vida quieta reclick_stall_s reclickea como siempre."""
+    """Con la escalera de trabado apagada (stuck.fast_s enorme) la vida quieta reclick_stall_s reclickea como siempre."""
     h = Harness(lambda h, n: perc_far(panel=target_panel(1.0)) if h.bot.state is State.ATACAR else perc(metins=[metin()]),
-                attack={"reclick_stall_s": 1.0, "blocked_s": 50.0, "max_reclicks": 2, "walk_stuck_s": 1000.0})
+                attack={"reclick_stall_s": 1.0, "blocked_s": 50.0, "max_reclicks": 2}, stuck={"fast_s": 1000.0})
     h.run_until(lambda: h.clicks() >= 2)
 
 
-def _stuck_script(label_x=1000):
+def _stuck_script(label_x=1000, n_near=0):
     """Camina 12 ciclos hacia el metin y queda quieto (trabado); el panel confirma el metin con vida entera."""
     def script(h, n):
         xy = (500 + min(n, 12), 150)
         m = metin(click=(label_x + min(n, 20) * 5, 500))   # el metin se corre en pantalla al caminar y queda quieto
         if h.bot.state is State.ATACAR:
-            return perc_far(coords=xy, panel=target_panel(1.0), metins=[m])
+            return perc_far(coords=xy, panel=target_panel(1.0), metins=[m], n_near=n_near)
         return perc(coords=xy, metins=[m])
     return script
 
@@ -70,19 +70,19 @@ def _clicks_xy(h):
     return out
 
 
-def test_trabado_sin_monstruos_a_los_5_s_espacio_y_reclic_en_el_mismo_metin(caplog):
+def test_trabado_con_monstruos_a_los_18_s_espacio_y_reclic_en_el_mismo_metin(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(_stuck_script(), attack={"unstick_space_s": 1.5, "blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h = Harness(_stuck_script(n_near=2), attack={"unstick_space_s": 1.5, "blocked_s": 50.0, "reclick_stall_s": 50.0})
     h.run_until(lambda: h.clicks() >= 2, limit=300)
     msgs = messages(caplog)
     assert h.keys("space") >= 1 and h.keys("a") == 0 and h.keys("d") == 0
     assert any("Trabado yendo al metin" in m and "intento 1/4" in m and "ESPACIO" in m for m in msgs)
     assert any(m.startswith("Reclic en") and "trabado, intento 1" in m for m in msgs)
-    assert _clicks_xy(h)[-1] == (1100, 500)   # el mismo metin, donde esta ahora
+    assert _clicks_xy(h)[-1] == (1100, 476)   # el mismo metin, donde esta ahora (al cuerpo de la piedra, 24 px arriba)
     assert h.bot._cur is not None and h.bot._cur.unstick_n == 1
 
 
-def test_trabado_despues_del_espacio_va_al_costado_y_reclickea_sin_cambiar_de_metin(caplog):
+def test_trabado_sin_monstruos_va_al_costado_alternando_y_reclickea_sin_cambiar_de_metin(caplog):
     caplog.set_level(logging.INFO)
     # otro metin mas cerca del personaje: no se tiene que elegir nunca
     other = metin(click=(950, 560))

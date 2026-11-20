@@ -11,6 +11,7 @@ from test_bot_behavior import messages
 from test_bot_states import Harness, metin, perc, target_panel
 
 A_POINT = (1000, 500)     # metin atacado (pegado al personaje)
+AIM = (1000, 476)         # el clic va 24 px mas arriba, al cuerpo de la piedra
 B_POINT = (300, 400)      # otro metin, lejos del personaje
 RIGHT_KEY, LEFT_KEY = "e", "q"   # controls.camera_right / camera_left
 
@@ -81,9 +82,11 @@ def make(**kw):
 def test_no_gira_si_la_vida_no_baja(caplog):
     caplog.set_level(logging.INFO)
     h, _ = make(drop=False)
+    h.cfg["stuck"]["fast_s"] = 1000.0   # quieto y sin pegar es "trabado": aca se prueba solo que el barrido no arranca
     h.run_until(lambda: h.bot.state is State.ATACAR)
-    for _ in range(300):
+    for _ in range(100):   # ~15 s atacando con la vida quieta (a los ~20 s se descarta el metin y EXPLORAR si gira la camara)
         h.bot.step()
+    assert h.bot.state is State.ATACAR
     assert net_rotation(h) == 0 and not any(e[0] == "key_down" and e[1] in (RIGHT_KEY, LEFT_KEY) for e in h.be.events)
     assert not any("Mientras ataco" in m for m in messages(caplog))
 
@@ -114,7 +117,7 @@ def test_barrido_encuentra_otro_metin_vuelve_la_camara_y_no_hace_clic(caplog):
     n = h.bot._next
     assert n.kind == "metin_de_oscuridad" and abs(n.rel) == 3 and n.point == B_POINT
     assert any("Mientras ataco: encontre metin_de_oscuridad a 3 pasos (300, 400)" in m for m in messages(caplog))
-    assert [c[0] for c in left_clicks(h)] == [A_POINT]          # ningun clic en otro metin
+    assert [c[0] for c in left_clicks(h)] == [AIM]          # ningun clic en otro metin
     assert net_rotation(h) == 0                                   # la camara quedo en su posicion original
     # 3 pasos de ida y 3 de vuelta, en sentidos opuestos
     keys = [e[1] for e in h.be.events if e[0] == "key_down" and e[1] in (RIGHT_KEY, LEFT_KEY)]
@@ -175,8 +178,8 @@ def test_despues_de_romper_y_recoger_va_directo_al_que_encontro(caplog):
     assert any(m.startswith("Metin roto") for m in msgs)
     assert any("Voy al metin que encontre mientras atacaba" in m for m in msgs)
     clicks = left_clicks(h)
-    assert clicks[0] == (A_POINT, 0) and len(clicks) == 2
-    assert clicks[-1][0] == B_POINT and abs(clicks[-1][1]) == 3   # el clic al recordado, con la camara girada 3 pasos
+    assert clicks[0] == (AIM, 0) and len(clicks) == 2
+    assert clicks[-1][0] == (B_POINT[0], B_POINT[1] - 24) and abs(clicks[-1][1]) == 3   # el clic al recordado, con la camara girada 3 pasos
     assert h.bot._next is None
     assert h.states().index(State.RECOGER) < len(h.states()) - 1
     assert State.EXPLORAR not in h.states()   # fue directo: sin explorar

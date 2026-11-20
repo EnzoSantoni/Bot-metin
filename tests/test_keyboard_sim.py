@@ -12,7 +12,7 @@ from sim_game import Box, make_a0
 
 OSC, NEG = "metin_de_oscuridad", "metin_negro"
 INSIDE_METINS = [((500, 160), OSC), ((600, 150), NEG), ((680, 165), OSC), ((470, 180), NEG)]
-CLICK_TOL_PX = 25.0     # todo clic izquierdo cae a esta distancia de un metin (RECOGER ya no clickea objetos)
+CLICK_TOL_PX = 30.0     # todo clic izquierdo cae a esta distancia de un metin (RECOGER ya no clickea objetos); el clic va al centro del cuerpo, ~24 px sobre la base
 MARGIN = 4.0            # margen de redondeo/latencia sobre outside_tolerance
 
 

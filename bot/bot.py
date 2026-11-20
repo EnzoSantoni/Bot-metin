@@ -103,6 +103,7 @@ class BotStats:
     centros: int = 0             # veces que se fue al CENTRO
     approaches: int = 0          # acercamientos a piedras lejanas
     surrounded: int = 0          # ESPACIO por estar rodeado de monstruos sin avanzar (caminando)
+    sidesteps: int = 0           # pasos al costado por quedar quieto caminando sin monstruos cerca
     elapsed_s: float = 0.0
     coords: CoordStats = field(default_factory=CoordStats)   # el tracker escribe aca
     time_by_state: dict[str, float] = field(default_factory=dict)
@@ -153,6 +154,9 @@ class _Attack:
     first_drop_t: float | None = None           # hora de la primera baja de vida (desde ahi "viene pegando")
     cm: _CurrentMetin | None = None             # contadores del metin de este ataque; pasa a `Bot._cur` al confirmarlo el panel
     stone: bool = False                         # el clic fue sobre una piedra sin etiqueta a la vista
+    aim: tuple[int, int] | None = None          # ultimo punto realmente clickeado (`click` sigue a la etiqueta en pantalla)
+    quick_t: float = 0.0                        # hora del clic desde la que corre `attack.confirm_check_s`
+    quick: int = 0                              # reclics rapidos hechos por clic sin panel (`attack.quick_reclicks`)
 
 
 @dataclass
@@ -178,7 +182,8 @@ class _Surround:
     """Seguimiento de "rodeado de monstruos sin avanzar" mientras se camina."""
     ref: tuple[int, int]               # posicion de referencia
     since: float                       # desde cuando el personaje esta cerca de `ref`
-    n: int = 0                         # ESPACIO seguidos sin que el personaje avance
+    n: int = 0                         # reacciones (ESPACIO / paso al costado) seguidas sin que el personaje avance
+    origin: tuple[int, int] | None = None   # posicion de la primera reaccion: moverse de ahi < `stuck.resolve_dist` no es avanzar
 
 
 @dataclass
@@ -879,6 +884,19 @@ class Bot:
         near = [d for d in p.metins if math.dist(d.click_point, pt) <= lim]
         return min(near, key=lambda d: math.dist(d.click_point, pt)) if near else None
 
+    def _aim(self, det: MetinDetection, p: Perception) -> tuple[int, int]:
+        """Punto de clic en el CENTRO del cuerpo de la piedra de la etiqueta `det`: el centro del rect de la piedra lejana
+        asociada (a <= `approach.label_match_px` de su click_point) o, si no hay, su click_point corrido hacia arriba
+        `attack.label_click_up_frac` * `vision.metin.click_dy` px (el click_point cae en la base o en el piso)."""
+        cp = det.click_point
+        lim = float(self.apr["label_match_px"])
+        under = [f for f in p.far_metins if f.allowed and math.dist(f.rect.center, cp) <= lim]
+        if under:
+            return min(under, key=lambda f: math.dist(f.rect.center, cp)).rect.center
+        up = round(float(self.atk["label_click_up_frac"]) * float(self.cfg["vision"]["metin"]["click_dy"]))
+        pt = (cp[0], cp[1] - up)
+        return pt if p.mask.allows(*pt) else cp
+
     def _goals(self, cands: list[_Cand], far: list[_FarCand], p: Perception) -> list[tuple[Goal, float]]:
         """Metin objetivo con etiqueta y piedras lejanas elegibles, de la mas cercana al personaje (distancia de piso, con
         perspectiva) a la mas lejana. Base de una etiqueta: la piedra lejana que esta debajo o, si no, su punto de clic."""
@@ -922,7 +940,7 @@ class Bot:
         g = ranked[i][0]
         if g.kind == "etiqueta":
             c: _Cand = g.ref
-            if not self._click_attack(c.det.click_point, c.gp, p, t):
+            if not self._click_attack(self._aim(c.det, p), c.gp, p, t):
                 return None
             self._log_choice(ranked, i)
             self._no_target_t = t
@@ -964,7 +982,7 @@ class Bot:
         for g, _ in ranked:
             if g.kind == "etiqueta":
                 cand: _Cand = g.ref
-                screen, gp, point = cand.det.click_point, cand.gp, cand.det.click_point
+                screen, gp, point = cand.det.click_point, cand.gp, self._aim(cand.det, p)
             else:
                 fc: _FarCand = g.ref
                 screen, gp, point = fc.far.center, fc.gp, fc.far.rect.center
@@ -1085,14 +1103,14 @@ class Bot:
         self._last_click_vec = (point[0] - p.player_xy[0], point[1] - p.player_xy[1])
         pos = self.tracker.position
         self._atk = _Attack(t, point, gp, t, t, pos, last_drop_t=t, trail=[] if pos is None else [(t, pos)],
-                            start_pos=pos, ref=pos)
+                            start_pos=pos, ref=pos, aim=point, quick_t=t)
         self._atk.stone = self._label_of(point, p) is None
         self._atk.cm = self._current_for(point, gp, p, t)
         return True
 
     def _try_attack(self, cands: list[_Cand], p: Perception, t: float) -> bool:
         """Clic en el primer candidato cuyo clic se pueda mandar."""
-        return any(self._click_attack(c.det.click_point, c.gp, p, t) for c in cands)
+        return any(self._click_attack(self._aim(c.det, p), c.gp, p, t) for c in cands)
 
     # ------------------------------------------------------------------ ACERCARSE
     def _hover_label(self, p: Perception, a: _Approach) -> MetinDetection | None:
@@ -1118,7 +1136,9 @@ class Bot:
             logger.info("Hover sobre piedra (%d, %d): etiqueta %s", a.point[0], a.point[1], d.name)
             cand = next((c for c in self._candidates(p, t) if c.det is d), None)
             if cand is not None:
-                if self._click_attack(d.click_point, cand.gp, p, t):
+                lim = float(self.apr["label_match_px"])   # el hover ya cayo sobre el cuerpo: se clickea ese mismo punto
+                point = a.point if math.dist(a.point, d.click_point) <= lim else self._aim(d, p)
+                if self._click_attack(self._clear_point(point, p), cand.gp, p, t):
                     self._clear_tries(a)
                     return State.ATACAR, f"etiqueta de metin objetivo en el hover ({d.name})"
                 gp = cand.gp or a.gp
@@ -1208,6 +1228,8 @@ class Bot:
                                       seconds=float(self.apr["no_label_ignore_s"]))
                 return self._after_reject(p, t, f"se selecciono otra cosa ({what}): posicion ignorada")
             return State.BUSCAR, f"se selecciono otra cosa ({what})"
+        if self._quick_check(a, kind, p, t):
+            return None
         need = int(self.atk["broken_confirm_cycles"])
         ended = False
         if kind == "target_metin":
@@ -1237,8 +1259,8 @@ class Bot:
         if self._scan is not None and self._scan.steps != 0:
             return None   # camara girada y la vida sin bajar: ni reclic ni destrabe; `_scan_guard` corta el barrido enseguida
         if kind == "target_metin" or not a.confirmed:
-            quiet = t - max(a.move_t, a.last_click_t)
-            if quiet >= float(self.atk["walk_stuck_s"]) and t - a.hp_down_t >= float(self.atk["walk_stuck_s"]):
+            quiet, fast = t - max(a.move_t, a.last_click_t), float(self.stuck["fast_s"])
+            if quiet >= fast and t - a.hp_down_t >= fast and not self._arrived_at(a, p):
                 return self._unstick_ladder(a, quiet, p, t)
         if a.confirmed:
             if kind == "target_metin":
@@ -1253,6 +1275,37 @@ class Bot:
                 return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
             return self._reclick(a, "sin confirmar", p, t)
         return None
+
+    def _arrived_at(self, a: _Attack, p: Perception) -> bool:
+        """Confirmado, sin ninguna baja de vida todavia y con la piedra a <= `attack.arrive_px` del personaje: ya llego y
+        espera el primer golpe, quieto es normal (despues de pegar, la vida bajando ya lo dice)."""
+        return a.confirmed and a.first_drop_t is None and math.dist(a.click, p.player_xy) <= float(self.atk["arrive_px"])
+
+    def _quick_check(self, a: _Attack, kind: str | None, p: Perception, t: float) -> bool:
+        """Verificacion rapida del clic: sin ningun panel `attack.confirm_check_s` despues del clic, reclic inmediato mejor
+        apuntado (piedra o etiqueta relocalizada en esta captura; si cae en el mismo punto, `attack.quick_up_px` mas arriba por
+        intento). Hasta `attack.quick_reclicks` por clic. True si hizo clic (el ciclo esta usado)."""
+        if (a.confirmed or kind is not None or a.pending is not None or a.quick >= int(self.atk["quick_reclicks"])
+                or t - a.quick_t < float(self.atk["confirm_check_s"]) or (self._scan is not None and self._scan.steps != 0)):
+            return False
+        point = self._relocate(a, p, self._candidates(p, t, check_discards=False))
+        a.quick_t = t
+        if point is None:
+            return False   # no se ve la piedra: el flujo de siempre decide (se mira de nuevo en confirm_check_s)
+        a.quick += 1
+        if a.aim is not None and math.dist(point, a.aim) < 3:
+            point = (point[0], point[1] - int(self.atk["quick_up_px"]) * a.quick)
+        point = self._clear_point(point, p)
+        if not p.mask.allows(*point):
+            return False
+        logger.info("Clic sin panel en %g s: reclic mejor apuntado en (%d, %d)", float(self.atk["confirm_check_s"]),
+                    point[0], point[1])
+        self._dbg("reclic", f"clic sin panel: reclic en {point}")
+        if not self.gi.click_at(*point, p.mask):
+            return False
+        self._planned = a.click = a.aim = point
+        a.quick_t = self.clock()
+        return True
 
     def _read_panel(self, a: _Attack, panel: Any, t: float) -> None:
         """Panel con el metin objetivo: confirma el ataque y sigue la vida (cuando BAJA es que esta pegando)."""
@@ -1373,9 +1426,10 @@ class Bot:
             a.click = min(near, key=lambda d: math.dist(d.click_point, a.click)).click_point
 
     def _unstick_ladder(self, a: _Attack, quiet: float, p: Perception, t: float) -> Transition:
-        """Trabado yendo al metin (quieto `attack.walk_stuck_s`, vida sin bajar, haya o no monstruos): 1) ESPACIO y reclic en
-        el MISMO metin; 2) un paso al costado (A, D, W+A, W+D) y reclic; tras `attack.max_unstick` intentos, DESTRABAR
-        (sin soltar el metin en curso)."""
+        """Trabado yendo al metin (quieto `stuck.fast_s`, vida sin bajar): con >= `stuck.monsters_min` monstruos cerca
+        ESPACIO y reclic en el MISMO metin; sin monstruos un paso al costado (A, D, W+A, W+D, alternando) y reclic; tras
+        `attack.max_unstick` intentos, DESTRABAR (sin soltar el metin en curso). Una sola reaccion por episodio: el reclic
+        sale en el ciclo siguiente y reinicia el reloj de quieto."""
         c = a.cm
         c.unstick_n += 1
         n, mx = c.unstick_n, int(self.atk["max_unstick"])
@@ -1389,15 +1443,15 @@ class Bot:
             self._atk = None
             return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
         a.trail = []
-        if n == 1:
-            logger.info("Trabado yendo al metin (quieto %.0f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
+        if p.monsters_near >= int(self.stuck["monsters_min"]):
+            logger.info("Trabado yendo al metin (quieto %.1f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
                         "ESPACIO y reclic en el mismo metin", quiet, p.monsters_near, n, mx)
             self._dbg("bloqueado", "trabado yendo al metin: ESPACIO + reclic")
             if not self._hold_space(float(self.atk["unstick_space_s"])):
                 return None
         else:
-            name, actions = SIDESTEPS[(n - 2) % len(SIDESTEPS)]
-            logger.info("Trabado yendo al metin (quieto %.0f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
+            name, actions = SIDESTEPS[(n - 1) % len(SIDESTEPS)]
+            logger.info("Trabado yendo al metin (quieto %.1f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
                         "paso al costado (%s) y reclic en el mismo metin", quiet, p.monsters_near, n, mx, name)
             self._dbg("bloqueado", f"trabado yendo al metin: paso al costado {name} + reclic")
             if self._hold_chunked(lambda sec: self.gi.hold_keys(actions, sec), float(self.atk["sidestep_s"])) == "captcha":
@@ -1470,11 +1524,11 @@ class Bot:
         lim = float(self.apr["match_px"])
         near = [c for c in cands if math.dist(c.det.click_point, a.click) <= lim]
         if near:
-            return min(near, key=lambda c: math.dist(c.det.click_point, a.click)).det.click_point
+            return self._aim(min(near, key=lambda c: math.dist(c.det.click_point, a.click)).det, p)
         stones = [f for f in p.far_metins if f.allowed and math.dist(f.rect.center, a.click) <= lim]
         if stones:
             return min(stones, key=lambda f: math.dist(f.rect.center, a.click)).rect.center
-        return cands[0].det.click_point if cands else None
+        return self._aim(cands[0].det, p) if cands else None
 
     # ------------------------------------------------------------------ angulo vertical de la camara
     def _pitch_capture(self) -> Any:
@@ -2595,32 +2649,52 @@ class Bot:
         return self.state is State.EXPLORAR and self._ex is not None and self._ex.phase != "sweep"
 
     def _surrounded(self, p: Perception, t: float) -> bool:
-        """Rodeado sin avanzar mientras camina: con >= `stuck.monsters_min` monstruos cerca y menos de `stuck.min_move` de
-        movimiento en `stuck.surrounded_s`, ESPACIO `stuck.surrounded_space_s` (montado empuja) y sigue en el mismo estado. Si
-        tras `stuck.surrounded_max` ESPACIO seguidos sigue sin avanzar, el DESTRABAR de siempre. True si uso el ciclo."""
+        """Trabado caminando (EXPLORAR/VOLVER/CENTRO): menos de `stuck.min_move` de movimiento en `stuck.fast_s` mientras
+        deberia moverse. Con >= `stuck.monsters_min` monstruos cerca ESPACIO `stuck.surrounded_space_s` (montado empuja); sin
+        ellos un paso al costado (`attack.sidestep_s`, alternando). Sigue en el mismo estado. Si tras `stuck.surrounded_max`
+        reacciones seguidas sigue sin avanzar, el DESTRABAR de siempre. True si uso el ciclo."""
         pos = self.tracker.position
-        if not self._walking_now() or pos is None or p.monsters_near < int(self.stuck["monsters_min"]):
+        if not self._walking_now() or pos is None:
             self._sur = None
             return False
         sr = self._sur
-        if sr is None or math.dist(pos, sr.ref) >= float(self.stuck["min_move"]):
+        if sr is None:
             self._sur = _Surround(pos, t)
             return False
-        if t - sr.since < float(self.stuck["surrounded_s"]):
+        if math.dist(pos, sr.ref) >= float(self.stuck["min_move"]):
+            if sr.n and sr.origin is not None and math.dist(pos, sr.origin) < float(self.stuck["resolve_dist"]):
+                sr.ref, sr.since = pos, t   # lo movio la propia reaccion (paso al costado): no es avanzar, la cuenta sigue
+            else:
+                self._sur = _Surround(pos, t)
+            return False
+        quiet = t - sr.since
+        if quiet < float(self.stuck["fast_s"]):
             return False
         n = p.monsters_near
+        crowd = n >= int(self.stuck["monsters_min"])
         if sr.n >= int(self.stuck["surrounded_max"]):
             self._sur = None
-            logger.info("Rodeado de %d monstruos y sin avanzar tras %d ESPACIO: DESTRABAR", n, sr.n)
-            self._enter(*self._stuck_transition(self.state, t, f"rodeado de {n} monstruos sin avanzar"))
+            logger.info("Trabado caminando (%d monstruos cerca) tras %d reacciones sin avanzar: DESTRABAR", n, sr.n)
+            self._enter(*self._stuck_transition(self.state, t, f"trabado caminando, {n} monstruos cerca"))
             return True
-        logger.info("Rodeado de %d monstruos sin avanzar: ESPACIO y sigo", n)
-        self._dbg("bloqueado", f"rodeado de {n} monstruos sin avanzar: ESPACIO")
-        self.stats.surrounded += 1
+        if sr.n == 0:
+            sr.origin = pos
         sr.n += 1
-        if self._hold_space(float(self.stuck["surrounded_space_s"])):
+        if crowd:
+            logger.info("Rodeado de %d monstruos sin avanzar: ESPACIO y sigo", n)
+            self._dbg("bloqueado", f"rodeado de {n} monstruos sin avanzar: ESPACIO")
+            self.stats.surrounded += 1
+            done = self._hold_space(float(self.stuck["surrounded_space_s"]))
+        else:
+            name, actions = SIDESTEPS[(sr.n - 1) % len(SIDESTEPS)]
+            logger.info("Trabado caminando (quieto %.1f s, sin monstruos): paso al costado (%s) y sigo", quiet, name)
+            self._dbg("bloqueado", f"trabado caminando sin monstruos: paso al costado {name}")
+            self.stats.sidesteps += 1
+            done = self._hold_chunked(lambda sec: self.gi.hold_keys(actions, sec), float(self.atk["sidestep_s"])) != "captcha"
+        if done:
             self.tracker.forget_reference()
-            self._walk = self._leg = None   # el tramo en curso ya no vale: ESPACIO movio al personaje
+            self._walk = self._leg = None   # el tramo en curso ya no vale: el personaje se movio
+            self._zero_streak = 0           # una sola reaccion por episodio: el contador de tramos quietos empieza de cero
             sr.ref, sr.since = pos, self.clock()
         return True
 

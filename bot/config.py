@@ -79,9 +79,11 @@ DEFAULTS: dict[str, Any] = {
               "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
               # Modo teclado (navigation.mode): back_s = S de ATRAS; look_walk_s = W despues de girar la vista en MIRAR.
               "back_s": 1.0, "look_walk_s": 1.2,
-              # Rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO/ACERCARSE): monsters_min monstruos cerca y movimiento < min_move
-              # en surrounded_s -> ESPACIO surrounded_space_s y seguir; surrounded_max veces seguidas sin avanzar -> DESTRABAR.
-              "surrounded_s": 2.0, "surrounded_space_s": 1.5, "surrounded_max": 3},
+              # Trabado RAPIDO (EXPLORAR/VOLVER/CENTRO caminando, y ATACAR yendo al metin): si deberia moverse (W/A/S/D
+              # sostenida, clic de ataque) y las coordenadas se mueven < min_move durante fast_s -> con >= monsters_min monstruos
+              # cerca ESPACIO surrounded_space_s, si no un paso al costado (attack.sidestep_s); y sigue en el mismo estado.
+              # surrounded_max reacciones seguidas sin avanzar -> DESTRABAR. (Reemplaza a surrounded_s y attack.walk_stuck_s.)
+              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -111,9 +113,15 @@ DEFAULTS: dict[str, Any] = {
                "hp_progress_s": 4.0, "reclick_stall_s": 5.0, "monster_clear_px": 25,
                "clear_offsets_px": [[0, -15], [0, 15], [0, 25], [-15, 0], [15, 0], [-25, 0], [25, 0], [-15, 15], [15, 15], [-15, -15],
                                      [15, -15]],
-               # Trabado yendo al metin: quieto walk_stuck_s con la vida sin bajar -> ESPACIO + reclic en el mismo metin;
-               # despues un paso al costado (A/D/W+A/W+D) de sidestep_s + reclic; max_unstick intentos y recien ahi DESTRABAR.
-               "walk_stuck_s": 5.0, "sidestep_s": 0.6, "max_unstick": 4,
+               # Trabado yendo al metin: quieto stuck.fast_s con la vida sin bajar -> con monstruos cerca ESPACIO + reclic en el
+               # mismo metin; sin monstruos un paso al costado (A/D/W+A/W+D, alternando) de sidestep_s + reclic; max_unstick
+               # intentos y recien ahi DESTRABAR. arrive_px: confirmado y con la piedra a esta distancia del personaje ya llego
+               # (no se juzga trabado por estar quieto).
+               "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
+               # Punto de clic: el de la etiqueta (click_dy debajo de ella) se corre hacia arriba label_click_up_frac * click_dy
+               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_check_s del clic sin panel
+               # de metin, reclic mejor apuntado (hasta quick_reclicks; si cae en el mismo punto, quick_up_px mas arriba).
+               "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
                "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
@@ -410,7 +418,7 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"))
+                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -782,11 +790,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
-                   "progress_tol", "memory_dirs", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s",
+                   "progress_tol", "memory_dirs", "back_s", "look_walk_s", "fast_s", "surrounded_space_s",
                    "surrounded_max"),
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
-          "forward_chunk_s", "back_s", "look_walk_s", "surrounded_s", "surrounded_space_s", "surrounded_max"))
+          "forward_chunk_s", "back_s", "look_walk_s", "fast_s", "surrounded_space_s", "surrounded_max"))
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
@@ -800,16 +808,19 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "circle_ratio", "circle_min_path", "wrong_monsters_min", "blocked_window_frac", "walk_max_s",
                     "unstick_space_s", "broken_hp_ratio", "broken_gone_px", "min_break_s", "broken_wait_s",
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
-                    "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
-                    "next_keep_s", "scan_hp_margin_s", "keep_with_others_s"),
+                    "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
+                    "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
+                    "confirm_check_s", "quick_reclicks", "quick_up_px"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
-          "monster_clear_px", "walk_stuck_s", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s"))
+          "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
+          "next_keep_s", "keep_with_others_s", "confirm_check_s"))
     a = cfg["attack"]
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")
+    if not 0 <= a["label_click_up_frac"] < 1:
+        raise ConfigError("attack.label_click_up_frac debe estar en [0, 1)")
     if not 0 < a["broken_hp_ratio"] <= 1:
         raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
     offs = a["clear_offsets_px"]

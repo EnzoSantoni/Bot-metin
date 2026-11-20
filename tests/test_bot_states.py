@@ -215,7 +215,8 @@ def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
             return perc(panel=target_panel(0.5))
         return perc(metins=[metin()])
 
-    h = Harness(script, attack={"reclick_stall_s": 1.0, "max_reclicks": 2, "walk_stuck_s": 1000.0})
+    h = Harness(script, attack={"reclick_stall_s": 1.0, "max_reclicks": 2},
+                stuck={"fast_s": 1000.0})
     if camera:
         h.train_camera()
     h.run_until(lambda: State.EXPLORAR in h.states())
