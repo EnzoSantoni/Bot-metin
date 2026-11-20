@@ -1,0 +1,151 @@
+"""UNA vuelta de camara con lista de candidatos en el mapa (simulador con camara en perspectiva y rumbo del minimapa).
+
+Escenarios: elige el mas cercano y gira directo sin segunda vuelta; empate -> el mas cerca del centro de la zona; un metin
+encontrado mientras ataca se recupera por su posicion en el mapa despues de girar; vuelta sin nada -> punto del mapa de metin o
+centro; candidato que no aparece tras girar -> camina hacia el; Q/E al reves se corrige con el rumbo medido."""
+import logging
+import math
+
+import pytest
+
+import bot.input.base as base
+from bot.spawns import Spot, SpawnMap
+from sim_bot_env import SimEnv, make_cfg
+
+OSC, NEG = "metin_de_oscuridad", "metin_negro"
+K = 13.0                    # unidades del juego por unidad de piso del simulador (igual a explore.ground_scale_u)
+FACING_WEST = 3 * math.pi / 2   # phi del simulador: el frente de la pantalla mira al oeste (rumbo = phi - 90 grados)
+FACING_EAST = math.pi / 2
+FACING_NORTH = 0.0
+
+
+@pytest.fixture(autouse=True)
+def fast(monkeypatch):
+    monkeypatch.setattr(base, "_sleep", lambda s: None)
+
+
+def env_for(phi, start=(560.0, 150.0), right_key_ok=True, **kw):
+    cfg = make_cfg()
+    if right_key_ok:   # en el simulador la tecla camera_left sube el rumbo: con esto Q/E ya estan bien supuestas
+        cfg["navigation"]["keyboard"]["view_right_key"] = "camera_left"
+    return SimEnv(3, phi=phi, start=start, cfg=cfg, heading=True, pinhole_k=K, **kw)
+
+
+def msgs(caplog):
+    return [r.getMessage() for r in caplog.records]
+
+
+def count(caplog, text):
+    return sum(1 for m in msgs(caplog) if text in m)
+
+
+def laps(caplog):
+    return count(caplog, " grados en ")
+
+
+def test_una_sola_vuelta_elige_el_mas_cercano_y_gira_directo(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_WEST)
+    near = env.world.add_metin((600.0, 150.0), name=OSC)     # 40 u al este
+    env.world.add_metin((640.0, 170.0), name=OSC)            # 89 u
+    env.world.add_metin((690.0, 130.0), name=NEG)            # 132 u
+    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
+    assert env.world.clicks_on_metin[0][1] is near
+    ms = msgs(caplog)
+    lap = [m for m in ms if m.startswith("Vuelta de busqueda: ") and "candidatos (mejor" in m]
+    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (600," in lap[0]
+    assert laps(caplog) == 1   # una vuelta, no mas
+    assert count(caplog, "Giro hacia el candidato en (600, 150) del mapa") == 1
+    assert not any("sin nueva vuelta" in m for m in ms)
+    # la escala del juego se estima bien: el candidato quedo a 40 u +- 15 %
+    first = next(m for m in ms if m.startswith("Candidato: metin_de_oscuridad en (600"))
+    assert "a 40 u" in first or "a 39 u" in first or "a 41 u" in first
+
+
+def test_empate_de_distancia_gana_el_mas_cerca_del_centro(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_NORTH, start=(520.0, 160.0))   # los dos metin quedan a los costados: no se ven al empezar
+    east = env.world.add_metin((590.0, 160.0), name=OSC)     # 70 u, hacia el centro de la zona (598, 156)
+    env.world.add_metin((450.0, 160.0), name=OSC)            # 70 u, hacia el borde oeste
+    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
+    assert env.world.clicks_on_metin[0][1] is east
+
+
+def test_metin_encontrado_mientras_ataca_se_recupera_por_posicion_en_el_mapa(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_EAST)
+    a = env.world.add_metin((590.0, 150.0), name=OSC, dps=0.012)   # a la vista, se rompe en ~80 s
+    b = env.world.add_metin((510.0, 175.0), name=OSC)               # atras de la camara: solo se ve girando
+    assert env.run_until(lambda: not b.alive, max_s=600) == "cond"
+    ms = msgs(caplog)
+    assert not a.alive
+    assert any(m.startswith("Mientras ataco: encontre") and "del mapa" in m for m in ms)
+    first_b = next(i for i, m in enumerate(ms) if m.startswith("Mientras ataco: encontre"))
+    broke = next(i for i, m in enumerate(ms) if m.startswith("Metin roto"))
+    assert first_b < broke
+    # despues de romper y recoger va directo a B girando hacia su posicion: sin vuelta nueva y sin "eleccion normal"
+    after = ms[broke:]
+    assert any("Lista de candidatos (sin nueva vuelta)" in m for m in after)
+    assert any("Giro hacia el candidato" in m for m in after)
+    assert not any(" grados en " in m for m in after) and not any("eleccion normal" in m for m in ms)
+    assert [m for _, m in env.world.clicks_on_metin][:2] == [a, b] or b in [m for _, m in env.world.clicks_on_metin]
+
+
+def test_vuelta_sin_nada_va_al_centro_de_la_zona(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_WEST, start=(560.0, 160.0))
+    center = env.bot.navigator.return_target((560.0, 160.0))
+    env.run_until(lambda: any("voy al centro" in m for m in msgs(caplog)), max_s=120)
+    assert laps(caplog) <= 1 and any("0 candidatos" in m for m in msgs(caplog))
+    d0 = math.dist(env.world.pos, center)
+    env.run_until(lambda: math.dist(env.world.pos, center) < d0 - 25, max_s=120)
+    assert math.dist(env.world.pos, center) < d0 - 25
+
+
+def test_vuelta_sin_nada_va_al_punto_listo_del_mapa_de_metin(caplog):
+    caplog.set_level(logging.INFO)
+    sm = SpawnMap(None, 6.0, respawn_s=0.0, revisit_s=0.0, clock_wall=lambda: 1e6)
+    sm.spots.append(Spot(650.0, 150.0))
+    env = env_for(FACING_WEST, start=(560.0, 160.0), bot_kw={"spawn_map": sm})
+    env.run_until(lambda: any("voy al punto (650, 150)" in m for m in msgs(caplog)), max_s=120)
+    assert any("voy al punto (650, 150)" in m for m in msgs(caplog))
+    assert not any("voy al centro" in m for m in msgs(caplog))
+    env.run_until(lambda: env.world.pos[0] > 610, max_s=120)
+    assert env.world.pos[0] > 610
+
+
+def test_candidato_no_visible_tras_girar_camina_hacia_el_sin_nueva_vuelta(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_WEST, start=(540.0, 150.0))
+    m = env.world.add_metin((705.0, 150.0), name=OSC)        # a 165 u: mas lejos que far_dist, el simulador no lo muestra
+    env.bot.cands.add((705.0, 150.0), "piedra", False, 0.0)   # pero el bot lo recuerda en el mapa
+    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
+    assert env.world.clicks_on_metin[0][1] is m
+    ms = msgs(caplog)
+    assert any("Candidato no visible tras girar: camino hacia" in x for x in ms)
+    assert not any(" grados en " in x for x in ms)
+
+
+def test_si_q_e_estan_al_reves_lo_detecta_con_el_rumbo_y_llega_igual(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_NORTH, start=(540.0, 150.0), right_key_ok=False)   # hay que girar 90 grados: el signo importa
+    m = env.world.add_metin((620.0, 150.0), name=OSC)
+    env.bot.cands.add((620.0, 150.0), "metin_de_oscuridad", True, 0.0)
+    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
+    assert env.world.clicks_on_metin[0][1] is m
+    assert any("Q/E giran al reves" in x for x in msgs(caplog))
+
+
+def test_candidatos_vencidos_no_cuentan(caplog):
+    caplog.set_level(logging.INFO)
+    env = env_for(FACING_WEST)
+    env.bot.cands.add((600.0, 150.0), "metin_de_oscuridad", True, -1000.0)   # visto hace mucho
+    env.run_until(lambda: any("Vuelta de busqueda" in m for m in msgs(caplog)), max_s=60)
+    assert not any("sin nueva vuelta" in m for m in msgs(caplog))
+
+
+def test_sin_rumbo_legible_vuelve_al_comportamiento_anterior():
+    env = SimEnv(3, phi=FACING_WEST, heading=False, start=(560.0, 150.0))
+    m = env.world.add_metin((600.0, 150.0), name=OSC)
+    assert env.run_until(lambda: not m.alive, max_s=400) == "cond"
+    assert len(env.bot.cands) == 0

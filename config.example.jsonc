@@ -286,7 +286,25 @@
   "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
-              "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0},
+              "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0,
+              "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+              "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
+              "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
+              "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+              "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
+  //  UNA VUELTA (con el rumbo de la camara leido del cono del minimapa, vision.minimap): el barrido gira en pasos hasta sweep_deg
+  //  grados acumulados (tope: camera_steps * sweep_max_factor pasos) y arma la LISTA de candidatos con su posicion en el MAPA
+  //  (coordenadas del juego: jugador + ground_scale_u x vector de piso girado al rumbo de la camara). Al terminar elige el
+  //  mejor: etiquetas antes que piedras, el mas cercano y, a igual distancia (candidate_tie_u), el mas cerca del centro de la
+  //  zona; solo dentro de la zona o la tolerancia. Gira directo hacia el (aim_tol_deg, hasta aim_max_turns giros, mide el rumbo
+  //  logrado con el minimapa), espera la compuerta y va al candidato de pantalla mas cercano a la posicion esperada; si no
+  //  aparece camina candidate_walk_u hacia el (candidate_walk_tries veces) y vuelve a mirar. No hay otra vuelta mientras la lista
+  //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Una
+  //  etiqueta objetivo a menos de sweep_cut_floor de piso (muy pegada) corta la vuelta y se ataca. Vuelta sin nada: va al
+  //  punto listo del mapa de metin o, si no hay, al centro (si esta a mas de center_return_u) y vuelve a mirar desde ahi.
+  //  ground_scale_u (ESTIMADO de events.log/bot.log del 2026-11-20: 10-20 u por unidad de piso, mediana ~13) se afina solo
+  //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
+  //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
   // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
   //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
@@ -412,6 +430,15 @@
     //  feet_dy_px: los pies del personaje quedan tanto debajo de su punto; min_dv_px: acota (fila - horizonte) abajo.
     //  ESTIMADOS: verificados con samples/real_tres_metin_hover.png; el orden no cambia con horizon_frac 0.10-0.19.
     "ground": {"horizon_frac": 0.14, "focal_frac": 0.7, "feet_dy_px": 40, "min_dv_px": 20},
+    // Rumbo de la camara desde el cono (abanico mas claro) del minimapa (bot/vision/minimap.py). Medido en
+    //  debug/run_20261120_121005: el minimapa tiene el norte fijo, el personaje esta en (ancho + center_dx, center_dy) y el cono
+    //  mide ~40 grados (~20 a pie). Se muestrea cada step_deg entre r_min y r_max px (sin pixeles rojos ni V < min_val, min_samples
+    //  validos por rayo); cono = arco con exceso de V sobre la mediana > max(min_excess, rel_frac x percentil 95) y ancho
+    //  width_deg [min, max]. El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el mismo marco de las coordenadas.
+    //  heading_offset_deg: correccion inicial; el bot la aprende (EMA offset_ema) contra el rumbo medido de W (keynav).
+    "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
+                "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
+                "heading_offset_deg": 0.0, "offset_ema": 0.3},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).
