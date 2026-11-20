@@ -183,21 +183,23 @@
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
   //  cada objeto (el mas cercano al personaje primero), camina hasta el y aprieta Z, hasta que no queden.
   //  dismount: true = se baja del caballo para recoger y se sube al terminar; false = recoge montado (mismo flujo).
-  //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha). press_interval_ms: pausa tras cada Z.
-  //  SIN clics: despues de bajarse, camina con W/A/S/D hasta quedar encima o al lado de cada objeto y aprieta Z
-  //  (de paso puede juntar yang). Elige el objeto mas cercano (distancia de piso), toma su direccion sobre el piso desde
-  //  los pies, la parte en 8 sectores de 45 grados (W, W+D, D, S+D, S, S+A, A, W+A) y mantiene esas teclas un tramo de
-  //  step_s (proporcional a la distancia si el objeto esta a menos de full_step_px, minimo min_step_s); despues vuelve a
-  //  mirar. El punto del objeto = centro inferior de su etiqueta + item_below_label_px. arrive_px: Z cuando ese punto esta
-  //  a <= arrive_px de los pies. Cada Z sin que desaparezca el objeto, y cada stall_steps tramos sin acercarse al menos
-  //  stall_gain_px, cuentan como un intento: tries_per_item intentos y el objeto se ignora (valido mientras el personaje
-  //  no se mueva same_spot_u unidades; track_px: tolerancia para reconocer la misma etiqueta). Si el personaje sale de la
-  //  zona se corta la recogida. Termina tras empty_confirm_cycles ciclos sin objetos validos, max_presses Z o
-  //  max_seconds (cuenta desde que empieza a recoger). (arrive_px, step_s, full_step_px, stall_*: ESTIMADOS.)
-  "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+  //  mount_wait_s: espera tras cada Ctrl+G (se vigila el captcha).
+  //  SIN clics: despues de bajarse, camina con W/A/S/D hasta quedar encima de cada objeto. Elige el mas cercano (distancia
+  //  de piso) y NO lo cambia hasta que desaparece o se abandona. Toma su direccion sobre el piso desde los pies, la parte
+  //  en 8 sectores de 45 grados (W, W+D, D, S+D, S, S+A, A, W+A) y mantiene esas teclas un tramo de step_s (proporcional
+  //  a la distancia si esta a menos de full_step_px, minimo min_step_s); despues vuelve a mirar. El punto del objeto =
+  //  centro inferior de su etiqueta + item_below_label_px. arrive_px: llegada = ese punto a <= arrive_px de los pies.
+  //  Ya encima: Z cada z_interval_s (la Z del servidor tiene retraso) mientras la etiqueta siga; desaparecida =
+  //  gone_cycles capturas seguidas sin verla cerca de su ultimo punto (track_px) -> recogido, sigue el proximo. A los
+  //  reposition_s sin que desaparezca, se reacomoda caminando a su punto con radio de llegada arrive_px * reposition_frac
+  //  y sigue con Z. A los item_max_s desde que empezo con el objeto se rinde (queda ignorado mientras el personaje no
+  //  se mueva same_spot_u unidades). Si sale de la zona se corta la recogida. Se sube al caballo solo cuando no queda
+  //  ningun objeto valido durante empty_confirm_cycles ciclos, o por max_presses Z o max_seconds (desde que empieza a
+  //  recoger). (arrive_px, step_s, full_step_px, reposition_*, item_max_s: ESTIMADOS.)
+  "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
              "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
-             "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
-             "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
+             "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
+             "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...

@@ -90,15 +90,14 @@ DEFAULTS: dict[str, Any] = {
                # Ir a un metin lejano con clic: el personaje camina solo. Mientras se mueve no cuenta el estancamiento de
                # vida (tope walk_max_s). Trabado en el camino con monstruos cerca: ESPACIO unstick_space_s y reclic.
                "walk_max_s": 25.0, "unstick_space_s": 1.5},
-    # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero),
-    # caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z. Cada tramo dura step_s (menos si el objeto esta cerca:
-    # proporcional a su distancia hasta full_step_px, minimo min_step_s); el punto del objeto es el centro inferior de su
-    # etiqueta + item_below_label_px. arrive_px = Z cuando ese punto queda a tanto de los pies. stall_steps tramos sin
-    # acercarse al menos stall_gain_px cuentan como un intento (tries_per_item intentos y se ignora). Ver config.example.jsonc.
-    "pickup": {"press_interval_ms": 350, "empty_confirm_cycles": 5, "max_presses": 30, "max_seconds": 20.0,
+    # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
+    # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
+    # su etiqueta desaparezca (gone_cycles capturas sin verla). A los reposition_s sigue ahi: reacomodo (llegada a
+    # arrive_px * reposition_frac); a los item_max_s se rinde con ese objeto. Ver config.example.jsonc.
+    "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
-               "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "stall_steps": 5, "stall_gain_px": 8,
-               "track_px": 80, "tries_per_item": 2, "same_spot_u": 3.0},
+               "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
+               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
     # EXPLORAR: barrido de camara (pasos de Q/E) y caminata hacia un punto aleatorio del poligono.
     # border_margin: destino de cada tramo a >= esta distancia del borde; leg_s / leg_units: tope de tiempo y largo de un
     # tramo recto; max_without_metin_s: sin ningun objetivo por tanto tiempo -> CENTRO; min_leg_sep_deg / recent_legs: el
@@ -365,7 +364,9 @@ def resolve_path(p: str | Path) -> Path:
 
 # Claves que ya no se usan: si estan en el config.json se ignoran con un WARNING (no es un error).
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
-                 ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"))
+                 ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
+                 ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
+                 ("pickup", "press_interval_ms"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -724,11 +725,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "unstick_space_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s"))
-    nums("pickup", ("press_interval_ms", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
-                    "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "stall_steps",
-                    "stall_gain_px", "track_px", "tries_per_item", "same_spot_u"),
+    nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
+                    "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
+                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
-          "full_step_px", "stall_steps", "track_px", "tries_per_item", "same_spot_u"))
+          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"))
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",

@@ -20,6 +20,7 @@ ARRIVE = 70.0            # pickup.arrive_px por defecto
 # etiquetas (centro): el punto del objeto es el centro inferior + 10 px = (x, y + 18)
 UP_RIGHT = (PLAYER[0] + 500, 450)          # arriba y a la derecha de los pies -> W+D
 DOWN = (PLAYER[0], 800)                    # abajo -> S
+FAST_WALK = {"step_s": 0.02, "min_step_s": 0.01}   # tramos cortos: el hold de teclas duerme de verdad
 LEFT = (PLAYER[0] - 400, FEET[1] - 18)     # a la izquierda, a la misma altura de los pies -> A
 
 
@@ -37,8 +38,11 @@ class Floor:
     la direccion caminada (suma normalizada de las teclas); Z junta el objeto si su punto esta a <= `ARRIVE` de los pies.
     `log` anota en orden ("combo", "W+D") por cada tramo, ("z", hay_objeto_cerca), ("g",) y ("click",)."""
 
-    def __init__(self, h, pts, pickable=True, blocked=False):
+    def __init__(self, h, pts, pickable=True, blocked=False, z_needed=1, misplaced_until=0):
         self.h, self.pickable, self.blocked = h, pickable, blocked
+        self.z_needed, self.zs = z_needed, 0          # retraso de la Z: cuantas Z cerca hacen falta para juntar un objeto
+        self.misplaced_until = misplaced_until        # las primeras N Z no juntan nada (mal ubicado) aunque se vea cerca
+        self.z_log = []                               # (n_objetos_restantes_antes, tiempo) de cada Z
         self.items = [list(map(float, p)) for p in pts]
         self.seen, self.down, self.leg, self.log = 0, set(), set(), []
 
@@ -72,8 +76,12 @@ class Floor:
             elif e == ("key_down", "z"):
                 near = [i for i in self.items if math.dist(item_point(i), FEET) <= ARRIVE]
                 self.log.append(("z", bool(near)))
-                if near and self.pickable:
-                    self.items.remove(near[0])
+                self.z_log.append((len(self.items), self.h.clock.t))
+                if near and self.pickable and len(self.z_log) > self.misplaced_until:
+                    self.zs += 1
+                    if self.zs >= self.z_needed:
+                        self.zs = 0
+                        self.items.remove(near[0])
             elif e == ("key_down", "g"):
                 self.log.append(("g",))
         self.seen = len(ev)
@@ -163,31 +171,70 @@ def test_un_monstruo_pegado_ya_no_importa_y_no_hay_clics():
     assert "monsters" not in {x for c in h.calls if c[0] is State.RECOGER for x in c[1]}   # RECOGER ya no mira monstruos
 
 
-def test_objeto_inalcanzable_se_ignora_sin_loop_infinito(caplog):
+def test_objeto_inalcanzable_se_abandona_a_item_max_s_sin_loop_infinito(caplog):
     caplog.set_level(logging.INFO)
-    h = floor_harness([UP_RIGHT], floor_kw={"blocked": True})   # las teclas no lo acercan (pared)
+    h = floor_harness([UP_RIGHT], floor_kw={"blocked": True}, pickup=FAST_WALK)   # las teclas no lo acercan (pared)
     start(h)
-    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=300)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
     assert h.keys("z") == 0 and h.clicks() == 0
     assert h.keys("g") == 2 and not h.bot._dismounted
-    assert "no se puede juntar" in caplog.text and "sin acercarme" in caplog.text
+    assert "me rindo con el objeto" in caplog.text and h.bot.stats.items == 0
 
 
-def test_objeto_que_no_se_puede_juntar_estando_encima_se_ignora():
-    h = floor_harness([DOWN], floor_kw={"pickable": False}, pickup={"press_interval_ms": 0})
+def test_z_se_repite_hasta_que_desaparece_la_etiqueta_y_recien_ahi_el_siguiente(caplog):
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN, LEFT], floor_kw={"z_needed": 4})   # el juego tarda 4 Z en juntar cada uno
     start(h)
-    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=300)
-    assert h.keys("z") == 2          # tries_per_item
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    assert not h.floor.items and h.bot.stats.items == 2
+    assert h.keys("z") == 8 and h.clicks() == 0 and h.keys("g") == 2
+    # ninguna Z se dio con el primer objeto ya juntado antes de la cuarta, ni con el segundo antes de que el primero se fuera
+    counts = [n for n, _ in h.floor.z_log]
+    assert counts == [2, 2, 2, 2, 1, 1, 1, 1]
+    ts = [t for _, t in h.floor.z_log]
+    assert all(b - a >= 0.4 - 1e-9 for a, b in zip(ts, ts[1:]))          # z_interval_s
+    assert "Z (4) esperando que desaparezca" in caplog.text and "recogido tras 4 Z" in caplog.text
+
+
+def test_se_reacomoda_a_los_reposition_s_y_sigue_con_z(caplog):
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN], floor_kw={"misplaced_until": 9})     # las primeras 9 Z no juntan: mal ubicado
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    assert "reacomodo sobre el objeto" in caplog.text and "me rindo" not in caplog.text
+    assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 10
+    t0 = h.floor.z_log[0][1]
+    first_rep = next(r for r in caplog.records if "reacomodo" in r.message)
+    assert first_rep is not None and h.floor.z_log[-1][1] - t0 >= 3.0
+
+
+def test_abandona_a_item_max_s_y_pasa_al_siguiente(caplog):
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN, LEFT], floor_kw={"pickable": False}, pickup=dict(FAST_WALK, item_max_s=6.0))
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert caplog.text.count("me rindo con el objeto") == 2 and h.bot.stats.items == 0
     assert h.keys("g") == 2 and not h.bot._dismounted and h.clicks() == 0
+    assert len(h.floor.z_log) >= 6
 
 
-def test_tras_un_z_fallido_da_un_tramo_corto_antes_del_siguiente():
-    h = floor_harness([(FEET[0] + 30, FEET[1] - 18)], floor_kw={"pickable": False}, pickup={"press_interval_ms": 0})
+def test_no_se_sube_mientras_quede_un_objeto_valido():
+    h = floor_harness([DOWN, LEFT], floor_kw={"z_needed": 5})
     start(h)
-    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=300)
-    h.floor._events()
-    seq = [e[0] for e in h.floor.log if e[0] in ("z", "combo")]
-    assert seq[:2] == ["z", "combo"] and seq[-1] == "z" and seq.count("z") == 2   # Z, tramo corto, Z (y se ignora)
+    h.run_until(lambda: h.keys("z") >= 6)                 # ya junto el primero y va por el segundo
+    assert h.keys("g") == 1 and h.bot.state is State.RECOGER and h.bot._dismounted
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    assert not h.floor.items and h.keys("g") == 2 and kinds(h)[-1] == "g"
+
+
+def test_el_objeto_actual_no_cambia_aunque_aparezca_otro_mas_cercano():
+    h = floor_harness([DOWN], floor_kw={"z_needed": 4})
+    start(h)
+    h.run_until(lambda: h.keys("z") >= 1)
+    h.floor.items.append([FEET[0] + 20.0, FEET[1] - 18.0])     # aparece uno encima de los pies
+    n = len(h.floor.items)
+    h.run_until(lambda: len(h.floor.items) < n, limit=300)
+    assert h.floor.items == [[FEET[0] + 20.0, FEET[1] - 18.0]]   # se termino con el primero antes de ir al nuevo
 
 
 def test_fuera_de_la_zona_corta_la_recogida_y_vuelve():
@@ -306,5 +353,5 @@ def test_dismounted_solo_se_asigna_en_un_lugar():
 def test_recoger_no_tiene_ningun_clic_en_el_codigo():
     import inspect
     import bot.bot as mod
-    for name in ("_do_recoger", "_pickup_step", "_pickup_walk", "_pickup_press", "_pickup_stall", "_pickup_look"):
+    for name in ("_do_recoger", "_pickup_step", "_pickup_walk", "_pickup_follow", "_pickup_look"):
         assert "click_at" not in inspect.getsource(getattr(mod.Bot, name)), name

@@ -42,7 +42,7 @@ def no_input_after(env, idx):
 
 # ---------------------------------------------------------------- 1. farmeo normal
 def test_farmeo_normal():
-    env = farm_env()
+    env = farm_env(z_needed=3)   # la Z del servidor tiene retraso: cada objeto necesita 3 Z seguidas
     far = env.world.add_metin((330, 150), name=OSC)
     ava = env.world.add_metin((560, 175), name=AVA)
     dist = env.track_zone()
@@ -57,7 +57,7 @@ def test_farmeo_normal():
     assert len(w.picked) == 8 and all(i.kind == "item" and not i.reserved_other for i in w.picked)
     assert any(i.kind == "yang" for i in w.items) and any(i.reserved_other for i in w.items)
     assert all(env.state_at(t) != "RECOGER" for t, _ in w.bad_item_clicks)   # al recoger nunca clickea yang/reservados
-    assert w.z_presses > 0 and w.t < 400
+    assert w.z_presses >= 3 * 8 and w.t < 400
     m = len(w.broken)
     print(f"METRICAS farmeo: {m} metin en {w.t:.0f}s simulados ({m / (w.t / 60):.2f}/min), "
           f"{len(w.clicks_on_metin) / m:.2f} clics/metin, {env.count_unstucks()} destrabes")
