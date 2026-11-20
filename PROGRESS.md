@@ -2,6 +2,43 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## PARA ENZO AL LEVANTARSE (resumen de la noche del 2026-11-20)
+**Qué terminé** (todo con tests, commit y push; 1722 tests pasan en `desarrollo`):
+- **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)** en `103aae8`, `04fea11` y `0c66ec3`, más el resumen en `2a48cb7`. Pasados a `desarrollo` en `eb77fbc`.
+  - Elige el metin más cercano por perspectiva.
+  - Va a los metin con hover y clic.
+  - Recoge con W/A/S/D, sin clics.
+  - Gira la cámara de a pasos, con pausa entre uno y otro.
+  - Vuelve a la zona por coordenadas, sin girar la cámara para caminar.
+  - Guarda un mapa de dónde aparecen los metin.
+- **`desarrollo`:**
+  - Fase 12 parte 2: historial de sesiones y objetos por tipo, agrupados por cómo se ve su etiqueta y renombrables (`b3f3743`).
+  - Fase 13: modo bichos (`e104243`).
+  - Fase 14: revivir al morir, apagado por defecto (`14e8b59`).
+  - Interfaz completa: 8 pestañas, ayudas al pasar el mouse, validación, franja de aviso y botón para migrar `config.json` a los perfiles, guías de calibración en pantalla (`a289fcb`, `7ce9a7c`).
+  - Pausa automática si tocás el mouse o el teclado, y parada programada por hora o por cantidad de metin (`2941d4e`).
+  - Revisión general y sus correcciones (`a7ce748`).
+
+**Qué quedó a medias o pendiente:**
+- Nada se probó en el juego. Todos los valores nuevos son estimados, sobre todo:
+  - la perspectiva (`vision.ground`);
+  - la distancia para apretar Z (`pickup.arrive_px` 70);
+  - el tiempo de reaparición de los metin (`spawns.respawn_s` 240);
+  - los de `zone.bichos`.
+- **Fase 14:** la parte del caballo necesita tus capturas (PRUEBAS, punto 8). Sin eso, revive y sigue a pie.
+- **`config.json` de esta carpeta:** pisa la zona y los tipos de metin del perfil. Hasta que aprietes "Migrar config.json a los perfiles" en la interfaz, lo que edites en las pestañas Metin y Zona no se usa.
+- **Correcciones que no pasé a `main`:** 4 arreglos de la revisión aplican también a `main`. Uno se da al salir de RECOGER: si sale el captcha mientras se sube al caballo, el bot quedaba con un dato de VOLVER colgado. Los otros: el tope de tiempo cortaba en RECOGER y REVIVIR, los archivos se guardaban sin escritura atómica, y el log cuando el captcha vuelve durante la subida. No los pasé porque me pediste trabajar en `desarrollo`. Se portan cuando digas.
+- `navigation.keyboard.align_deg` quedó sin uso; sacarla cambia las líneas de base, así que lo dejé.
+- Inclinar la cámara con clic derecho: no lo hice (ver decisiones).
+
+**Qué probar primero:**
+1. **`main`, PRUEBAS punto 1 (Fase 6d):** es la base de todo lo demás.
+2. **`desarrollo`, punto 9:** abrir la interfaz, migrar `config.json` y recorrer las pestañas.
+3. **Punto 10, pausa automática:** que no se pause sola con el mouse del bot.
+4. Después, el resto de los puntos de PRUEBAS en orden.
+
+**Decisiones que tomé sin vos:** en cada sección ("Decisiones tomadas sin Enzo") y en el PROGRESS.md de `main`.
+
 ## Estado actual (2026-11-20)
 **Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades), 12 (prioridad de metin, historial y conteo de objetos por tipo) 13 (modo bichos) y 14 (revivir al morir, apagado por defecto) hechas, y la interfaz completa (tanda 1: Metin y Zona, base común; tanda 2: Personaje, Modo bichos, migrar config.json y pulido), con 1710 tests pasando (más la pausa automática y la parada programada).** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`" y la sección de la Fase 14). `main` no se tocó.
 
