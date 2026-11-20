@@ -67,6 +67,8 @@ WRONG_PANEL_KINDS = ("other", "other_metin")
 BRAKE_DIRS = 4      # direcciones (cada 360/BRAKE_DIRS grados) que prueba el clic de freno
 SCREEN_DIRS = {"up": (0.0, -1.0), "down": (0.0, 1.0)}   # direccion de pantalla de W y de S
 HOLD_EPS = 1e-9
+# El tope de tiempo no corta en estos estados: espera a que terminen (RECOGER tiene su propio tope)
+_NO_CUT_STATES = (State.CAPTCHA, State.RECOGER)
 END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER sin lograrlo)
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
@@ -319,7 +321,8 @@ class Bot:
         try:
             self._remount_if_marked()
             while self.state is not State.FIN:
-                if limit is not None and self.state is not State.CAPTCHA and self.clock() - self._t_start >= limit:
+                if (limit is not None and self.state not in _NO_CUT_STATES
+                        and self.clock() - self._t_start >= limit):
                     self._remount_quiet()
                     self._finish("tiempo")
                     break
@@ -423,6 +426,8 @@ class Bot:
             self._vl_since = None
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
+        if self.state is not new:
+            return   # un captcha durante la subida ya cambio el estado: no se ejecuta el bloque de `new`
         self._walk = None
         if new not in WALKING_STATES and new is not State.DESTRABAR:
             self._leg = None   # un tramo de teclado solo se evalua dentro de los estados que caminan
@@ -1131,6 +1136,8 @@ class Bot:
         return self._mount_wait()
 
     def _remount_quiet(self) -> None:
+        if self.state is State.MUERTO:
+            return   # muerto: nunca Ctrl+G
         try:
             self._remount()
         except Exception:  # noqa: BLE001
@@ -2073,8 +2080,10 @@ class Bot:
         """Espera pasiva: nada de input mientras el panel este. Lo resuelve una persona."""
         self._clear = self._clear + 1 if p.captcha is None else 0
         if self._clear >= int(self.cw["clear_confirm"]):
-            self.alarm.stop()
-            if not self._remount():   # volvio el panel mientras se subia: se sigue esperando
+            self.alarm.stop()   # silencio mientras se sube (el Ctrl+G no debe sonar con la alarma)
+            if not self._remount():
+                # volvio el panel mientras se subia: el estado ya es CAPTCHA (no es un captcha nuevo); se sigue esperando
+                logger.warning("Volvio el panel mientras me subia: sigo esperando (mismo captcha)")
                 self._clear = 0
                 self.alarm.start("captcha")
                 return None

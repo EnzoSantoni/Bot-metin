@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from bot.fileutil import atomic_write_text
 from bot.input.base import VALID_KEYS, parse_keys
 
 logger = logging.getLogger(__name__)
@@ -822,8 +823,7 @@ def validate_config(cfg: dict) -> None:
 
 def save_config(cfg: dict, path: str | Path = "config.json") -> None:
     """Guarda la config como JSON indentado UTF-8."""
-    resolve_path(path).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
-                                  encoding="utf-8")
+    atomic_write_text(resolve_path(path), json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
 
 
 def load_config(path: str | Path = "config.json") -> dict:

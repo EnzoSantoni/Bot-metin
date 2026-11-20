@@ -15,7 +15,13 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
   - Revisión general con sus correcciones (`a7ce748`).
   - Detalle y pendientes, arriba del PROGRESS.md de `desarrollo`.
 
-**Qué quedó pendiente en `main`:** 4 arreglos de la revisión general que también aplican acá (ver el PROGRESS.md de `desarrollo`) no están portados, porque pediste trabajar en `desarrollo`. Son casos raros: captcha justo mientras se sube al caballo, el tope de tiempo en medio de una recogida, y guardado de archivos no atómico.
+**Arreglos de la revisión general portados a `main` (2026-11-20, mañana; `tests/test_revision_general.py`):**
+- Captcha justo mientras se sube al caballo al salir de RECOGER: queda en CAPTCHA sin arrastrar datos de VOLVER.
+- El tope de tiempo no corta en CAPTCHA ni en RECOGER (RECOGER tiene su propio tope).
+- Nunca se aprieta Ctrl+G estando muerto.
+- Guardado atómico de `config.json` y del mapa de metin (`bot/fileutil.py`).
+- Log cuando el panel del captcha vuelve durante la subida.
+- No porté nada de las funciones nuevas de `desarrollo`.
 
 **Qué probar primero:**
 1. `PRUEBAS_ESTA_NOCHE.md`, punto 1, en esta carpeta (`main`). Es lo que más cambió: elige el metin más cercano, va con hover y clic, camina con W/A/S/D sin girar la cámara y recoge sin clics.
