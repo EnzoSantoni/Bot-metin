@@ -251,3 +251,27 @@ def test_ventana_recien_abierta_sin_asteriscos_ni_avisos_viejos_de_pisado(tmp_pa
         assert app._override_warnings and "pisa" not in app.warn_label.cget("text")
     finally:
         root.destroy()
+
+
+# ------------------------------------------------------------------ portados desde main (33ce243)
+from bot.spawns import SpawnMap  # noqa: E402
+
+
+def test_tope_de_tiempo_corta_en_buscar():
+    h = Harness(lambda h, n: perc())
+    h.bot.state = State.BUSCAR
+    ran = []
+    h.bot.step = lambda: ran.append(1)
+    h.bot.run(max_minutes=0)
+    assert not ran and h.bot.state is State.FIN
+
+
+def test_mapa_de_metin_guarda_atomico_y_no_deja_tmp(tmp_path, monkeypatch):
+    p = tmp_path / "mapa.json"
+    m = SpawnMap(p, 6.0, clock_wall=lambda: 1000.0)
+    m.record_broken((100.0, 100.0))
+    first = p.read_text(encoding="utf-8")
+    monkeypatch.setattr(os, "replace", _boom)
+    m.record_broken((200.0, 200.0))   # falla el guardado: WARNING, el archivo anterior queda
+    assert p.read_text(encoding="utf-8") == first
+    assert not list(tmp_path.glob("*.tmp"))
