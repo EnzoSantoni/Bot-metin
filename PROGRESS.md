@@ -2,7 +2,47 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
-## PARA ENZO AL LEVANTARSE (resumen de la noche del 2026-11-20)
+## PARA ENZO AL VOLVER (resumen del 2026-11-20, tarde): Fase 6g, más eficiente
+**Qué hice** (los 5 puntos de la prueba de las 12:10; commit y push de cada uno; `main` con 1392 tests):
+1. **Clic al centro de la piedra** (`3b125e2`):
+   - Antes el clic caía 6 a 22 px debajo de la piedra, en el piso. Lo medí en 10 pares reales de capturas de las 12:10.
+   - Ahora va al centro del cuerpo.
+   - Si a los 0,5 s el panel no muestra el metin, vuelve a hacer clic mejor apuntado (hasta 2 veces).
+2. **Trabado en 1,8 s** (`3b125e2`):
+   - Coordenadas quietas mientras debería moverse = trabado.
+   - Reacción: espacio con bichos cerca, paso al costado sin bichos, y sigue o vuelve a hacer clic en el mismo metin.
+   - No cuenta mientras gira la cámara, con la vida bajando ni ya llegado.
+3. **Una sola vuelta de búsqueda** (`87db579`):
+   - El rumbo de la cámara sale del **cono del minimapa** (estable ±2° en las capturas reales).
+   - Cada candidato se guarda con su posición en el mapa: tu posición + escala × distancia de piso. La escala inicial es 13 u, medida de la corrida, y se aprende en vivo.
+   - Al terminar la vuelta elige el mejor y gira directo hacia él, sin dar más vueltas.
+   - Los metin que ve mientras ataca quedan en esa misma lista.
+   - Si en la vuelta no ve nada, va al punto listo del mapa de metin o al centro.
+4. **Detector por estructura** (`c8e285f`):
+   - Busca piedra + aura + humo sin mirar el color.
+   - En las capturas reales encontró 57 de 57 piedras sin falsos (el de color: 34 de 57).
+   - Con el tono cambiado a verde, azul o violeta sigue encontrando todas.
+   - Queda en `"ambos"` (color + estructura) hasta probarlo en el juego.
+   - Para un metin nuevo: `calibrate.py metin` (nombre y tono) y, como mucho, 2 o 3 capturas (`CAPTURAS_METIN.md`).
+5. **"Ciudad 1"** (`c1bcd51`):
+   - El mapa de metin pasa a `data\Ciudad 1.mapa.json`. Al primer arranque migra solo `data\mapa_metin.json`, que queda como `.migrado`.
+   - En `desarrollo`, el perfil de zona se renombra a "Ciudad 1". El nombre viejo sigue funcionando.
+
+**Qué quedó a medias o sin verificar:**
+- Nada se probó en el juego.
+- **A mirar en el log:**
+  - que el cono del minimapa use el mismo norte que las coordenadas (el desfase se aprende solo);
+  - el valor de la escala ("Escala del mapa" en el log);
+  - que el trabado de 1,8 s no salte estando quieto a propósito.
+- **Ángulo vertical:** sigue apagado hasta que pases las capturas de `CAPTURAS_CAMARA.md`.
+- **Metin de otro color:** el detector está listo; para validarlo faltan las capturas de `CAPTURAS_METIN.md`.
+- **Procesos colgados:**
+  - Un subagente dejó un `python.exe` colgado (PID 27964, ~20 MB, esperando entrada). No lo maté porque al subagente se le negó el permiso. Cerralo vos con `taskkill /PID 27964 /F`.
+  - Otro dejó dos archivos sueltos fuera del proyecto: `C:\Program Files\Git\crops.py` y `C:\Program Files\Git\c1.png`. Se pueden borrar.
+
+**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto **1C**, en esta carpeta (`main`): una corrida de 15 minutos mirando el clic, el trabado, la vuelta única y el detector.
+
+## Resumen de la noche del 2026-11-20 (anterior)
 **Qué terminé:**
 - **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)**, con commit y push de cada uno (`103aae8`, `04fea11`, `0c66ec3`), 1167 tests. Detalle en "Fase 6d: qué cambió".
 - **`desarrollo`** (1722 tests, último `4ed051f`):
