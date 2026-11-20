@@ -48,7 +48,9 @@ def test_b1_metin_afuera_de_la_zona_sin_camara_no_hace_loop(seed):
     env.run_until(max_s=300)
     assert sum(1 for t in env.transitions if t.new == "ATACAR") <= 1
     assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= 3
-    assert max(zd) <= tol(env)
+    # sin camara, con el jugador en la franja y el metin a la vista se ataca (regla del metin a la vista): puede asomarse
+    # unas unidades mas alla de la tolerancia persiguiendolo, pero no hay loop
+    assert max(zd) <= tol(env) + 5
     assert len(env.world.clicks_on_metin) <= 3 and m.alive
 
 

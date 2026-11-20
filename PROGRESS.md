@@ -2,8 +2,23 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
-## Estado actual (2026-11-19)
-**Fase 6b completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
+## Estado actual (2026-11-19, noche)
+**Fase 6c (correcciones tras la prueba de la 6b de las 22:43) en `main`: 980 tests pasan. PRÓXIMO PASO: Enzo repite la prueba de la 6b** (ver `PRUEBAS_ESTA_NOCHE.md`, punto 1).
+
+### Fase 6c: qué cambió (pedido de Enzo tras la prueba de las 22:43)
+- **Diagnóstico de la prueba:** el jugador estaba en (689, 107), ADENTRO del polígono a 5,7 u del borde norte. La zona estaba bien. Lo que falló fue la regla: sin cámara calibrada exigía que el jugador estuviera a ≥ 15 u del borde (`explore_margin`).
+- **Regla nueva del metin a la vista** (`Bot._zone_reason`):
+  - Con la posición del metin estimada, vale la zona del METIN.
+  - Sin cámara, un metin con etiqueta a ≤ `approach.blind_screen_px` (160 px) se ataca si el jugador está adentro o en la franja de tolerancia.
+  - Una piedra lejana sin etiqueta se persigue si el jugador está adentro (sin margen).
+- **"tipo ignorado (metin_negro)" era falso:** era el cartel de un monstruo que se parecía un poco a la plantilla sin llegar al umbral. Ahora el log dice "etiqueta dudosa (se parece a X, score; no alcanza el umbral)". `config.json` y las plantillas estaban bien: Metin Negro es objetivo (lo prueba `tests/test_metin.py` con una captura real).
+- **Movimiento solo con teclado** (`navigation.mode: "teclado"`, por defecto; `"clic"` vuelve al modo anterior):
+  - `bot/keynav.py` (`KeyboardNav`) mide el rumbo con tramos de W y gira la vista con Q/E. Aprende la velocidad de giro, la de caminata y si Q/E están al revés (WARNING en el log).
+  - EXPLORAR, VOLVER, CENTRO, ACERCARSE y DESTRABAR (MIRAR = girar + W; ATRAS = S) ya no clickean el piso.
+  - El clic izquierdo queda solo para el metin (clic y reclic) y para los objetos de RECOGER.
+  - Claves nuevas: `navigation.keyboard.*`, `stuck.back_s` y `stuck.look_walk_s`. Valores iniciales estimados: 15 u/s y 60°/s; se aprenden solos.
+
+**Antes (Fase 6b):** completa en código: 903 tests pasan, revisada y corregida, y `debug.enabled: true` en `config.json`. PRÓXIMO PASO: la segunda prueba de Enzo en el juego** (ver "A probar por Enzo → Fase 6b"). Con el resultado, el log, la carpeta `debug/run_*` y la calibración de los valores estimados se cierra la Fase 6. **No tocar la lógica de la Fase 6 hasta esa prueba.**
 - **GitHub (2026-11-19):** el proyecto está en https://github.com/EnzoSantoni/Bot-metin, rama `main`, con el primer commit `21724e4` (pusheado y verificado).
   - Autor: el que tenía configurado git en la PC de Enzo.
   - Excluidos por `.gitignore`: `.venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `logs/`, `debug/`, `config.json`, `.claude/settings.local.json` y **`samples/`**, este último pendiente de la decisión de Enzo (ver "A probar por Enzo → GitHub").

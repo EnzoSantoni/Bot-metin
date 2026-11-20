@@ -134,7 +134,10 @@
             "resolve_dist": 10.0, "monsters_min": 2, "space_s": 2.0, "forward_s": 1.0,
             "repeat_max": 3, "repeat_window_s": 120.0, "look_steps": 4, "look_step_s": 0.8,
             "min_dir_sep_deg": 60.0, "dir_step_deg": 30.0, "episode_ttl_s": 120.0,
-            "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5},
+            "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
+            // Modo teclado (navigation.mode = "teclado"): ATRAS = S durante back_s; MIRAR = girar la vista hacia la direccion
+            // elegida y W durante look_walk_s (los dos en tramos, con la zona chequeada entre tramos).
+            "back_s": 1.0, "look_walk_s": 1.2},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -188,9 +191,10 @@
   //  label_exclude_down_px: la piedra de una etiqueta visible (hasta tantos px debajo de ella) no es "lejana".
   //  Perder la piedra de vista tambien ignora su posicion. max_tries_per_spot: aproximaciones a una misma posicion sin
   //  llegar a atacar antes de ignorarla (se reinicia al atacar).
-  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego): un metin con etiqueta solo se ataca si el personaje
-  //  esta adentro del poligono con margen (navigation.explore_margin) y la etiqueta queda a <= blind_screen_px del personaje
-  //  en pantalla. Un descarte o ignorado se guarda con la posicion del JUGADOR y solo aplica a menos de blind_player_radius
+  //  SIN CAMARA LISTA (no se sabe donde esta el metin en el juego; es lo normal en modo teclado): un metin con etiqueta
+  //  se ataca si el personaje esta adentro del poligono o en la franja de tolerancia (no mas afuera) y la etiqueta queda a
+  //  <= blind_screen_px del personaje en pantalla; una piedra lejana sin etiqueta, solo si el personaje esta adentro.
+  //  Un descarte o ignorado se guarda con la posicion del JUGADOR y solo aplica a menos de blind_player_radius
   //  unidades de ese lugar (y a lo que se ve en el mismo sitio de la pantalla), no a todo.
   //  far_monsters_n / far_monsters_px: una piedra lejana SIN humo (criterio secundario) con >= n etiquetas de monstruos a
   //  menos de px de ella es un falso positivo (un grupo de bichos) y se ignora. Las que tienen humo no se filtran.
@@ -247,7 +251,19 @@
     // Sondeos (camara sin calibrar). probe_measure_factor: holgura sobre el largo minimo para poder medir un tramo
     // (cerca del borde el sondeo se acorta por debajo de eso, sin piso). probe_turn_jitter_deg: variacion al azar del
     // giro de ~90 grados entre sondeos.
-    "probe_measure_factor": 1.5, "probe_turn_jitter_deg": 17.0
+    "probe_measure_factor": 1.5, "probe_turn_jitter_deg": 17.0,
+    // mode: "teclado" (por defecto) = el bot camina SOLO con W/A/S/D y gira la vista con Q/E; el clic izquierdo queda para
+    // atacar un metin y recoger objetos. "clic" = caminar con clics en el piso (modo anterior, con la camara aprendida).
+    "mode": "teclado",
+    // Modo teclado (bot/keynav.py). chunk_s: W sostenida entre chequeos; probe_s: W para medir el rumbo cuando no se
+    // conoce; align_deg: si el desvio al destino es mayor, primero se gira la vista; turn_deg_per_s: velocidad inicial de
+    // giro de Q/E (= 360 / (explore.camera_steps * explore.camera_step_s)), el bot la aprende; max_turn_deg: giro maximo
+    // por orden; walk_speed: velocidad inicial de caminata en unidades/s, tambien se aprende; min_step_s: tramo minimo
+    // de W; edge_measure_u: desplazamiento minimo para medir el rumbo cuando el personaje ya paso la guardia de zona
+    // (ahi no hay lugar para tramos largos); view_right_key: tecla (camera_left o camera_right) que gira la VISTA a la derecha (trae al frente lo que
+    // esta a la derecha en pantalla); si esta al reves el bot lo detecta y lo corrige solo.
+    "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
+                 "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"}
   },
 
   "vision": {

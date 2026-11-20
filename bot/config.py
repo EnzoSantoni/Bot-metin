@@ -66,7 +66,9 @@ DEFAULTS: dict[str, Any] = {
               "resolve_dist": 10.0, "monsters_min": 2, "space_s": 2.0, "forward_s": 1.0,
               "repeat_max": 3, "repeat_window_s": 120.0, "look_steps": 4, "look_step_s": 0.8,
               "min_dir_sep_deg": 60.0, "dir_step_deg": 30.0, "episode_ttl_s": 120.0,
-              "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5},
+              "space_fail_max": 2, "forward_chunk_s": 0.3, "progress_tol": 1.0, "memory_dirs": 5,
+              # Modo teclado (navigation.mode): back_s = S de ATRAS; look_walk_s = W despues de girar la vista en MIRAR.
+              "back_s": 1.0, "look_walk_s": 1.2},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -134,6 +136,17 @@ DEFAULTS: dict[str, Any] = {
         # Sondeos (camara sin calibrar): probe_measure_factor = holgura sobre el largo minimo medible;
         # probe_turn_jitter_deg = variacion al azar del giro de ~90 grados entre sondeos.
         "probe_measure_factor": 1.5, "probe_turn_jitter_deg": 17.0,
+        # mode: "teclado" = el bot camina SOLO con W/A/S/D y gira la vista con Q/E (el clic izquierdo queda para atacar y
+        # recoger); "clic" = caminar con clics en el piso (modo anterior, usa la camara aprendida).
+        "mode": "teclado",
+        # Modo teclado (bot/keynav.py): chunk_s = W sostenida entre chequeos; probe_s = W para medir el rumbo cuando no se
+        # conoce; align_deg = si el desvio al destino es mayor, primero se gira; turn_deg_per_s = velocidad inicial de
+        # giro de Q/E (= 360 / (explore.camera_steps * explore.camera_step_s)), se aprende; max_turn_deg = giro maximo
+        # por orden; walk_speed = velocidad inicial de caminata (u/s), se aprende; min_step_s = tramo de W minimo;
+        # edge_measure_u = desplazamiento minimo para medir el rumbo cuando el personaje esta pasado de la guardia de zona;
+        # view_right_key = tecla (camera_left / camera_right) que gira la VISTA a la derecha (se aprende si esta al reves).
+        "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
+                     "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"},
     },
     "vision": {
         # Zonas de interfaz ignoradas. dx/dy: esquina superior izquierda respecto del punto de
@@ -659,10 +672,10 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("stuck", ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s",
                    "resolve_dist", "monsters_min", "space_s", "forward_s", "repeat_max", "repeat_window_s", "look_steps",
                    "look_step_s", "min_dir_sep_deg", "dir_step_deg", "episode_ttl_s", "space_fail_max", "forward_chunk_s",
-                   "progress_tol", "memory_dirs"),
+                   "progress_tol", "memory_dirs", "back_s", "look_walk_s"),
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
-          "forward_chunk_s"))
+          "forward_chunk_s", "back_s", "look_walk_s"))
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_screen_px", "blind_player_radius", "max_tries_per_spot",
                       "far_monsters_n", "far_monsters_px"),
@@ -693,6 +706,15 @@ def _validate_tracking_navigation(cfg: dict) -> None:
              ("probe_radius_px", "arrive_dist", "min_segment_px", "fit_segments", "angle_step_deg", "relearn_after_rejects",
               "settle_s", "segment_timeout_s", "external_rotation_deg", "heading_tolerance_deg", "max_walk_px", "brake_px",
               "probe_measure_factor"))
+    if n.get("mode") not in ("teclado", "clic"):
+        raise ConfigError("navigation.mode debe ser \"teclado\" o \"clic\"")
+    kb = _require_dict(n.get("keyboard"), "navigation.keyboard")
+    for k in ("chunk_s", "probe_s", "align_deg", "turn_deg_per_s", "max_turn_deg", "walk_speed", "min_step_s", "edge_measure_u"):
+        v = kb.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"navigation.keyboard.{k} debe ser un numero > 0")
+    if kb.get("view_right_key") not in ("camera_left", "camera_right"):
+        raise ConfigError("navigation.keyboard.view_right_key debe ser \"camera_left\" o \"camera_right\"")
     _require_numbers(n.get("click_radius_px"), "navigation.click_radius_px", 2)
     cr = n["click_radius_px"]
     if cr[0] <= 0 or cr[0] > cr[1]:

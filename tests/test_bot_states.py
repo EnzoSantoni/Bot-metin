@@ -70,6 +70,7 @@ class FakeAlarm:
 
 def make_cfg(**over):
     cfg = copy.deepcopy(DEFAULTS)
+    cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     cfg["explore"].update(camera_steps=2, camera_step_s=0.01)
@@ -434,10 +435,64 @@ def test_atacar_sin_confirmar_reclickea_y_trabado_destraba():
     assert h.states()[:2] == [State.ATACAR, State.DESTRABAR] and h.clicks() >= 2
 
 
-def test_sin_camara_no_ataca_si_no_esta_inside():
+NEAR_EDGE_XY = (442, 170)   # adentro del poligono a +4.6 u del borde (menos que explore_margin)
+
+
+def _far_screen_metin(px=150):
+    return metin(click=(PLAYER[0] + px, PLAYER[1]))
+
+
+def test_sin_camara_ataca_metin_a_la_vista_cerca_del_borde():
+    """Corrida real 22:43: adentro a +5 u del borde, metin etiquetado a ~150 px y la camara no lista: se ataca."""
+    h = Harness(lambda h, n: perc(coords=NEAR_EDGE_XY, metins=[_far_screen_metin(150)]))
+    assert not h.bot.camera.ready
+    h.bot.step()
+    assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_sin_camara_ataca_en_la_franja_de_tolerancia():
     h = Harness(lambda h, n: perc(coords=TOL_XY, metins=[metin()]))
     h.bot.step()
+    assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_sin_camara_no_ataca_fuera_de_la_tolerancia():
+    h = Harness(lambda h, n: perc(coords=OUT_XY, metins=[metin()]))
+    h.bot.step()
     assert State.ATACAR not in h.states() and h.clicks() == 0
+    p = perc(coords=OUT_XY, metins=[metin()])
+    cands, why = h.bot._label_view(p, 0.0)
+    assert not cands and "sin camara y jugador fuera de la zona" in why[0][1]
+
+
+def test_motivo_etiqueta_dudosa_vs_tipo_ignorado():
+    """Una plantilla objetivo que gana sin pasar el umbral es una duda (no "tipo ignorado"); una que no es objetivo, si."""
+    dudosa = MetinDetection(Rect(900, 430, 80, 10), "metin_negro", 0.62, False, (940, 500), True)
+    otro = MetinDetection(Rect(1100, 430, 80, 10), "metin_de_avaricia", 0.95, False, (1140, 500), True)
+    p = perc(metins=[dudosa, otro])
+    h = Harness(lambda h, n: p)
+    cands, why = h.bot._label_view(p, 0.0)
+    msgs = [m for _, m in why]
+    assert not cands
+    assert msgs == ["etiqueta dudosa (se parece a metin_negro, 0.62; no alcanza el umbral)",
+                    "tipo ignorado (metin_de_avaricia)"]
+
+
+def test_sin_camara_metin_lejos_en_pantalla_no_se_ataca():
+    p = perc(coords=NEAR_EDGE_XY, metins=[_far_screen_metin(300)])
+    h = Harness(lambda h, n: p)
+    h.bot.tracker.update(p.coords, 0.0)
+    cands, why = h.bot._label_view(p, 0.0)
+    assert not cands and "lejos en pantalla" in why[0][1]
+
+
+def test_sin_camara_piedra_lejana_solo_si_el_jugador_esta_adentro():
+    h = Harness(lambda h, n: perc())
+    for xy, ok in ((NEAR_EDGE_XY, True), (TOL_XY, False)):
+        h.bot.tracker.update(Coords(xy[0], xy[1], 1.0), 0.0)
+        h.bot.tracker.forget_reference()
+        r = h.bot._zone_reason(None, h.bot._zone_status(), "piedra lejana")
+        assert (r is None) == ok, (xy, r)
 
 
 def test_camara_lista_filtra_metin_fuera_de_la_zona():
