@@ -179,6 +179,7 @@ class UiBridge:
                 "metins": st.metins, "items": st.items, "captchas": st.captchas, "unstucks": st.unstucks,
                 "elapsed_s": round(st.elapsed_s, 1), "paused": self.control.is_paused,
                 "skills_cast": getattr(st, "skills_cast", 0), "farm_mode": getattr(st, "farm_mode", "metin"),
+                "deaths": getattr(st, "deaths", 0), "revives": getattr(st, "revives", 0),
                 "lures": getattr(st, "lures", 0), "fight_s": round(getattr(st, "fight_s", 0.0), 1),
                 "items_by_type": self._items_by_type(), "metins_by_type": dict(getattr(st, "metins_by_type", {})),
                 "skills": self.bot.skills.snapshot() if hasattr(getattr(self.bot, "skills", None), "snapshot") else [],

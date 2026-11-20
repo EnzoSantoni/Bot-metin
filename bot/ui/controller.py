@@ -114,6 +114,8 @@ class Status:
     skills_cast: int = 0
     farm_mode: str = "metin"          # "metin" | "bichos"
     lures: int = 0                    # senuelos usados (modo bichos)
+    deaths: int = 0                   # muertes de la corrida
+    revives: int = 0                  # revives logrados
     fight_s: float = 0.0              # segundos peleando (modo bichos)
     skills: list = field(default_factory=list)   # [{name, key, remaining_s}]
     items_by_type: list = field(default_factory=list)    # [{id, name, count}]
@@ -174,7 +176,8 @@ def status_from_dict(d: dict) -> Status:
                   unstucks=_as_int(d.get("unstucks")), elapsed_s=_as_float(d.get("elapsed_s")),
                   paused=bool(d.get("paused", False)), profiles=prof if isinstance(prof, dict) else {},
                   skills_cast=_as_int(d.get("skills_cast")),
-                  farm_mode=str(d.get("farm_mode") or "metin"), lures=_as_int(d.get("lures")),
+                  farm_mode=str(d.get("farm_mode") or "metin"), lures=_as_int(d.get("lures")), deaths=_as_int(d.get("deaths")),
+                  revives=_as_int(d.get("revives")),
                   fight_s=_as_float(d.get("fight_s")), skills=parse_skills_status(d.get("skills")),
                   items_by_type=parse_items_status(d.get("items_by_type")),
                   metins_by_type=parse_metins_status(d.get("metins_by_type")))

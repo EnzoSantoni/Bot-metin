@@ -578,6 +578,26 @@
   //  (Las duraciones de los ejemplos son orientativas: medilas en el juego.)
   "character": {"name": "Farfarfa", "class": "", "potions": {"hp_key": "f2", "mp_key": "f3", "auto": true}, "skills": []},
 
+  // revive (perfil de personaje). Revivir solo al morir. APAGADO por defecto: con auto_revive false la muerte termina la
+  // corrida con alarma (como siempre). Con true: clic en "Volver a Empezar Aqui", espera, llamar al caballo, montar y seguir.
+  //  auto_revive: true/false. button_wait_s: espera antes del clic (el boton tarda en habilitarse).
+  //  confirm_wait_s / button_tries: espera tras el clic y cuantas veces se reintenta hasta que la pantalla de muerte
+  //    desaparece (si no, FIN con alarma).
+  //  inventory_wait_s: espera a que se abra el inventario antes de buscar el objeto del caballo.
+  //  max_revives: revives por corrida; al superarlo, FIN con alarma. after_revive_wait_s: espera tras revivir.
+  //  recast_skills: al volver, las habilidades con temporizador quedan vencidas (se pierden los buffs al morir).
+  //  inventory_key: tecla que abre y cierra el inventario (valida, no la de panico/pausa).
+  //  horse_item_template: ruta (desde la raiz del proyecto) de la plantilla PNG del icono del objeto que llama al caballo;
+  //    "" = esa parte se saltea con un WARNING. horse_item_match: score minimo (0-1). horse_item_click: "left" | "right"
+  //    (en Metin2 un objeto se usa con clic derecho). Se busca primero dentro de la ventana del inventario.
+  //  horse_key: si el objeto esta en la barra rapida, su tecla ("" = no usar); tiene prioridad sobre el inventario.
+  //  horse_wait_s: espera a que aparezca el caballo. mount_after: Ctrl+G tras llamarlo (solo si se logro llamarlo).
+  //  here_above_city_px: si solo se detecta el boton "Ciudad", el de "Aqui" esta tantos px mas arriba (en muerte.png: 30).
+  "revive": {"auto_revive": false, "button_wait_s": 3.0, "confirm_wait_s": 1.5, "inventory_wait_s": 1.0, "button_tries": 3, "max_revives": 5,
+             "after_revive_wait_s": 3.0, "recast_skills": true, "inventory_key": "i", "horse_item_template": "",
+             "horse_item_match": 0.8, "horse_item_click": "right", "horse_key": "", "horse_wait_s": 3.0,
+             "mount_after": true, "here_above_city_px": 30},
+
   // zone (perfil de zona)
   //  farm_mode: "metin" | "bichos".
   //  metin_priority: nombres de metin en orden de prioridad; vacia = todos iguales (gana el mas cercano).

@@ -69,6 +69,19 @@ DEFAULTS: dict[str, Any] = {
     "zone": {"name": "", "farm_mode": "metin", "metin_priority": [],
              "bichos": {"lure_key": "f4", "lure_every_s": 60, "min_monsters": 1, "space_s": 2.0, "clear_s": 3.0,
                         "pickup_every_s": 60, "pickup_max_monsters": 1, "idle_s": 20}},
+    # revive (perfil de personaje, bot/revive.py): revivir solo al morir; apagado por defecto (auto_revive false = MUERTO -> FIN).
+    # inventory_wait_s: espera a que se abra el inventario antes de buscar el objeto.
+    # button_wait_s: espera antes del clic en "Volver a Empezar Aqui"; confirm_wait_s / button_tries: espera tras el clic y
+    # reintentos hasta que la pantalla de muerte desaparece; max_revives: por corrida (al superarlo, FIN); after_revive_wait_s:
+    # espera tras revivir; recast_skills: relanzar habilidades al volver; inventory_key: tecla que abre/cierra el inventario;
+    # horse_item_template: plantilla del icono del objeto que llama al caballo ("" = se saltea); horse_item_match: score minimo;
+    # horse_item_click: "left" | "right"; horse_key: tecla del objeto en la barra rapida (gana sobre el inventario);
+    # horse_wait_s: espera a que aparezca el caballo; mount_after: Ctrl+G tras llamarlo; here_above_city_px: si solo se ve
+    # el boton "Ciudad", el de "Aqui" esta tantos px mas arriba.
+    "revive": {"auto_revive": False, "button_wait_s": 3.0, "confirm_wait_s": 1.5, "inventory_wait_s": 1.0, "button_tries": 3, "max_revives": 5,
+               "after_revive_wait_s": 3.0, "recast_skills": True, "inventory_key": "i", "horse_item_template": "",
+               "horse_item_match": 0.8, "horse_item_click": "right", "horse_key": "", "horse_wait_s": 3.0,
+               "mount_after": True, "here_above_city_px": 30},
     # Filtro de coordenadas (bot/tracking.py). Un salto es imposible si dist > max_speed*dt + slack.
     # history: lecturas que se recuerdan para detectar trabas.
     "coords_filter": {"max_speed": 30.0, "slack": 2.0, "accept_after": 3, "consistency_dist": 3.0,
@@ -879,6 +892,36 @@ def _validate_profile_sections(cfg: dict) -> None:
         v = bi.get(k)
         if not isinstance(v, int) or isinstance(v, bool) or v < lo:
             raise ConfigError(f"zone.bichos.{k} debe ser un entero >= {lo}")
+    _validate_revive(cfg, reserved)
+
+
+def _validate_revive(cfg: dict, reserved: set[str]) -> None:
+    """Seccion revive (Fase 14)."""
+    rv = _require_dict(cfg.get("revive"), "revive")
+    for k in ("auto_revive", "recast_skills", "mount_after"):
+        if not isinstance(rv.get(k), bool):
+            raise ConfigError(f"revive.{k} debe ser true o false")
+    for k in ("button_wait_s", "confirm_wait_s", "inventory_wait_s", "after_revive_wait_s", "horse_wait_s"):
+        _num_ge0(rv.get(k), f"revive.{k}")
+    for k, lo in (("button_tries", 1), ("max_revives", 0), ("here_above_city_px", 0)):
+        v = rv.get(k)
+        if not isinstance(v, int) or isinstance(v, bool) or v < lo:
+            raise ConfigError(f"revive.{k} debe ser un entero >= {lo}")
+    m = rv.get("horse_item_match")
+    if not isinstance(m, (int, float)) or isinstance(m, bool) or not 0 < m <= 1:
+        raise ConfigError("revive.horse_item_match debe ser un numero entre 0 (sin incluir) y 1")
+    _check_game_key(rv.get("inventory_key"), "revive.inventory_key", reserved)
+    if not isinstance(rv.get("horse_key"), str):
+        raise ConfigError("revive.horse_key debe ser un texto (vacio = no usar)")
+    if rv["horse_key"].strip():
+        _check_game_key(rv["horse_key"], "revive.horse_key", reserved)
+    if rv.get("horse_item_click") not in ("left", "right"):
+        raise ConfigError("revive.horse_item_click debe ser 'left' o 'right'")
+    tpl = rv.get("horse_item_template")
+    if not isinstance(tpl, str):
+        raise ConfigError("revive.horse_item_template debe ser un texto (vacio = no usar)")
+    if tpl.strip() and not resolve_path(tpl.strip()).is_file():
+        raise ConfigError(f"revive.horse_item_template: no existe la plantilla {tpl!r}")
 
 
 def validate_config(cfg: dict) -> None:

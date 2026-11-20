@@ -58,7 +58,8 @@ def build_record(stats: Any, inicio: datetime, fin: datetime, perfiles: dict, mo
             "objetos": int(stats.items), "objetos_por_tipo": dict(stats.items_by_type),
             "captchas": int(stats.captchas), "destrabes": int(stats.unstucks), "acercamientos": int(stats.approaches),
             "habilidades": int(stats.skills_cast), "farm_mode": str(getattr(stats, "farm_mode", "metin")),
-            "lures": int(getattr(stats, "lures", 0))}
+            "lures": int(getattr(stats, "lures", 0)),
+            "muertes": int(getattr(stats, "deaths", 0)), "revives": int(getattr(stats, "revives", 0))}
 
 
 def append_session(path: Path | None, record: dict) -> bool:

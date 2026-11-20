@@ -36,6 +36,7 @@ RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("server",), "servidor"),
     (("vision", "items", "owner_template"), "personaje"),
     (("character",), "personaje"),
+    (("revive",), "personaje"),
     (("pickup", "dismount"), "personaje"),
     (("coords_filter", "max_speed"), "personaje"),
     (("farm_zone",), "zona"),

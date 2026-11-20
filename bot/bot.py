@@ -31,11 +31,13 @@ from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
 from bot.priority import order_by_priority
+from bot.revive import ReviveCfg, RectMask, find_icon, here_button
 from bot.skills import Skill, SkillScheduler
 from bot.spawns import Spot, SpawnMap
 from bot.tracking import CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
 from bot.vision.coords import read_coords
+from bot.vision.death import find_death
 from bot.vision.far_metin import FarMetin
 from bot.vision.metin import MetinDetection, target_slugs
 from bot.zone import FarmZone, ZoneStatus
@@ -57,6 +59,7 @@ class State(Enum):
     CENTRO = "CENTRO"
     DESTRABAR = "DESTRABAR"
     CAPTCHA = "CAPTCHA"
+    REVIVIR = "REVIVIR"
     MUERTO = "MUERTO"
     FIN = "FIN"
 
@@ -69,7 +72,7 @@ PARTS = {
     State.ACERCARSE: {"metins", "coords", "far", "monsters"},
     State.VOLVER: {"coords"}, State.CENTRO: {"coords"},   # volver al centro se guia solo por coordenadas
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
-    State.MUERTO: set(), State.FIN: set(),
+    State.REVIVIR: set(), State.MUERTO: set(), State.FIN: set(),
 }
 WRONG_PANEL_KINDS = ("other", "other_metin")
 BRAKE_DIRS = 4      # direcciones (cada 360/BRAKE_DIRS grados) que prueba el clic de freno
@@ -109,6 +112,8 @@ class BotStats:
     metins_by_type: dict[str, int] = field(default_factory=dict)   # slug del tipo confirmado en el panel -> metin rotos
     lures: int = 0               # senuelos usados (modo bichos)
     fight_s: float = 0.0         # segundos peleando con ESPACIO (modo bichos)
+    deaths: int = 0              # veces que se vio la pantalla de muerte
+    revives: int = 0             # revives logrados (Fase 14)
     farm_mode: str = "metin"     # "metin" | "bichos"
     elapsed_s: float = 0.0
     time_by_state: dict[str, float] = field(default_factory=dict)
@@ -118,10 +123,20 @@ class BotStats:
         per = ", ".join(f"{k} {v:.0f}s" for k, v in self.time_by_state.items() if v >= 0.5) or "-"
         skills = f" | habilidades lanzadas: {self.skills_cast}" if self.skills_cast > 0 else ""
         bichos = (f" | senuelos: {self.lures} | peleando: {self.fight_s / 60:.1f} min" if self.farm_mode == "bichos" else "")
+        deaths = f" | muertes: {self.deaths} (revividas: {self.revives})" if self.deaths > 0 else ""
         return (f"Metin rotos: {self.metins} | objetos recogidos (estimado): {self.items} | captchas: {self.captchas} | "
                 f"destrabes: {self.unstucks} ({self.episodes} episodios, {self.episodes_resolved} resueltos, "
-                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills}{bichos} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
+                f"{self.centros} al centro) | acercamientos: {self.approaches}{skills}{bichos}{deaths} | tiempo: {self.elapsed_s / 60:.1f} min ({per}) | "
                 f"motivo de fin: {self.end_reason or '-'}")
+
+
+@dataclass
+class _Revive:
+    """Revivir en curso (sobrevive a un captcha): paso actual y estado de lo que ya se hizo."""
+    step: int = 0
+    tries: int = 0              # clics en el boton de revivir
+    inv_open: bool = False      # el inventario quedo abierto (un captcha corto el paso)
+    horse_called: bool = False  # se uso el objeto / tecla del caballo
 
 
 @dataclass
@@ -258,7 +273,9 @@ class Bot:
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
                  coords_fn: Callable[[Any, dict], Any] = read_coords,
                  mount_marker: Path | None = None, spawn_map: SpawnMap | None = None,
-                 catalog: ItemCatalog | None = None) -> None:
+                 catalog: ItemCatalog | None = None,
+                 death_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_death(img, cfg),
+                 icon_fn: Callable[..., Any] = find_icon) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
@@ -283,6 +300,9 @@ class Bot:
         self.vlv, self.apr, self.ctr = cfg["volver"], cfg["approach"], cfg["center"]
         self._stuck_segments = max(1, math.ceil(self.stuck["window_s"] / self.nav["settle_s"]))
         self.bichos = BichosCfg.from_config(cfg)
+        self.rv = ReviveCfg.from_config(cfg)
+        self._death_fn, self._icon_fn = death_fn, icon_fn   # confirmar que la pantalla de muerte se fue / buscar el objeto del caballo
+        self._rv: _Revive | None = None
         self.state = self._home
         self.stats = BotStats(farm_mode=self.farm_mode)
         self.debug = DebugRecorder(cfg)
@@ -425,9 +445,15 @@ class Bot:
         return self._perceive(img, self.cfg, full_captcha=full, parts=PARTS[self.state])
 
     def _decide(self, p: Perception, t: float) -> None:
-        if p.death is not None and self.state not in (State.MUERTO, State.FIN):
-            self._enter(State.MUERTO, "pantalla de muerte")
-            self._finish("muerte")
+        if (p.death is not None and self.state not in (State.MUERTO, State.FIN, State.REVIVIR)
+                and not (self.rv.enabled and (p.captcha is not None or self.state is State.CAPTCHA))):   # con captcha, primero el captcha
+            self.stats.deaths += 1
+            if self.rv.enabled and self.stats.revives < self.rv.max_revives:
+                self._enter(State.REVIVIR, "pantalla de muerte")
+                return
+            if self.rv.enabled:
+                logger.warning("Murio de nuevo y ya se revivio %d veces (revive.max_revives): fin", self.stats.revives)
+            self._give_up_dead("pantalla de muerte")
             return
         if p.captcha is not None and self.state is not State.CAPTCHA:
             self._enter(State.CAPTCHA, "panel Bot Verify detectado")
@@ -453,6 +479,12 @@ class Bot:
         self._last_t = t
         self.stats.elapsed_s = t - self._t_start
 
+    def _give_up_dead(self, why: str) -> None:
+        """Muerte sin revivir: alarma y fin (como siempre)."""
+        self._rv = None
+        self._enter(State.MUERTO, why)
+        self._finish("muerte")
+
     def _finish(self, reason: str) -> None:
         self.stats.end_reason = reason
         self._enter(State.FIN, reason)
@@ -469,7 +501,7 @@ class Bot:
         if old in (State.VOLVER, State.CENTRO) and self._vl_since is not None:
             self._vl_acc += self.clock() - self._vl_since
             self._vl_since = None
-        if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
+        if old is State.RECOGER and new not in (State.CAPTCHA, State.REVIVIR, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
         if old is State.RECOGER and self.farm_mode == "bichos":
             self._bi_after_pickup()
@@ -506,6 +538,12 @@ class Bot:
             self.alarm.start("captcha")
             self.stats.captchas += 1
             self._clear = 0
+        elif new is State.REVIVIR:
+            self._atk = None
+            self.gi.release_all()
+            if self._rv is None:   # (si viene de un captcha, el revivir sigue donde quedo)
+                self._rv = _Revive()
+                self._set_dismounted(True, "muerte")   # el personaje muerto esta a pie
         elif new is State.MUERTO:
             self._atk = None
             self.gi.release_all()
@@ -2365,12 +2403,121 @@ class Bot:
         self._clear = self._clear + 1 if p.captcha is None else 0
         if self._clear >= int(self.cw["clear_confirm"]):
             self.alarm.stop()
-            if not self._remount():   # volvio el panel mientras se subia: se sigue esperando
+            if self._rv is None and not self._remount():   # (revivir en curso: no hay caballo que montar) volvio el panel mientras se subia: se sigue esperando
                 self._clear = 0
                 self.alarm.start("captcha")
                 return None
+            if self._rv is not None:
+                return State.REVIVIR, "el panel desaparecio: sigo revivendo"
             return self._home, "el panel desaparecio"
         return None
+
+    # ------------------------------------------------------------------ REVIVIR (Fase 14)
+    def _do_revivir(self, p: Perception, t: float) -> Transition:
+        """Pasos: boton -> espera -> caballo -> montar -> habilidades. Cada paso devuelve 'ok' | 'captcha' | 'fail'."""
+        steps = (self._rv_button, self._rv_after, self._rv_horse, self._rv_mount, self._rv_skills)
+        rv = self._rv
+        if rv is None:
+            return self._home, "sin revivir en curso"
+        while rv.step < len(steps):
+            res = steps[rv.step](p)
+            if res == "captcha":
+                return None   # `_hold_chunked` ya paso a CAPTCHA; despues se retoma en este paso
+            if res == "fail":
+                self._give_up_dead("no se pudo revivir")
+                return None
+            rv.step += 1
+        self._rv = None
+        logger.warning("Revivido (%d de %d permitidos); sigo farmeando", self.stats.revives, self.rv.max_revives)
+        return self._home, "revivido"
+
+    def _rv_button(self, p: Perception) -> str:
+        """Clic izquierdo en "Volver a Empezar Aqui" (solo ese punto se habilita en la mascara) hasta que la pantalla de
+        muerte desaparece (hasta `button_tries` clics)."""
+        rv, c = self._rv, self.rv
+        if p.death is None:   # se retomo tras un captcha y ya no esta
+            return "ok"
+        rect = here_button(p.death, c)
+        if rect is None:
+            return "fail"
+        if not self._skill_wait(c.button_wait_s):
+            return "captcha"
+        while rv.tries < c.button_tries:
+            rv.tries += 1
+            if not self.gi.click_at(*rect.center, RectMask(rect), "left"):
+                logger.warning("Revivir: el clic en el boton no salio (juego no listo); intento %d de %d", rv.tries, c.button_tries)
+            if not self._skill_wait(c.confirm_wait_s):
+                return "captcha"
+            img = self._peek()
+            if img is not None and self._death_fn(img, self.cfg) is None:
+                self.stats.revives += 1
+                logger.info("Pantalla de muerte superada con %d clic(s)", rv.tries)
+                return "ok"
+        logger.error("Revivir: la pantalla de muerte sigue tras %d clics", rv.tries)
+        return "fail"
+
+    def _rv_after(self, p: Perception) -> str:
+        """Espera tras revivir; el personaje esta a pie (y su posicion puede haber saltado)."""
+        self._set_dismounted(True, "revivir")
+        self.tracker.forget_reference()
+        return "ok" if self._skill_wait(self.rv.after_revive_wait_s) else "captcha"
+
+    def _rv_horse(self, p: Perception) -> str:
+        """Llama al caballo: `horse_key` (barra rapida) o el objeto del inventario por plantilla. Sin ninguno, se saltea."""
+        rv, c = self._rv, self.rv
+        if c.horse_key:
+            if self.gi.press_key(c.horse_key):
+                rv.horse_called = True
+            else:
+                logger.warning("Revivir: el juego no estaba listo, no se uso la tecla del caballo")
+        elif c.horse_item_template:
+            if self._rv_inventory() == "captcha":
+                return "captcha"
+        else:
+            logger.warning("Revivir: sin revive.horse_key ni revive.horse_item_template: no se llama al caballo")
+        if rv.horse_called and not self._skill_wait(c.horse_wait_s):
+            return "captcha"
+        return "ok"
+
+    def _rv_inventory(self) -> str:
+        """Abre el inventario, usa el icono del caballo (clic `horse_item_click`) y lo cierra. 'ok' | 'captcha'."""
+        rv, c = self._rv, self.rv
+        if rv.inv_open:   # un captcha corto el paso con el inventario abierto: se cierra y se empieza de nuevo
+            self.gi.press_key(c.inventory_key)
+            rv.inv_open = False
+        if not self.gi.press_key(c.inventory_key):
+            logger.warning("Revivir: el juego no estaba listo, no se abrio el inventario")
+            return "ok"
+        rv.inv_open = True
+        if not self._skill_wait(c.inventory_wait_s):
+            return "captcha"
+        img = self._peek()
+        rect = None if img is None else self._icon_fn(img, c.horse_item_template, c.horse_item_match, self.cfg)
+        if rect is None:
+            logger.warning("Revivir: no se encontro el objeto del caballo en el inventario (plantilla %s)", c.horse_item_template)
+        elif self.gi.click_at(*rect.center, RectMask(rect), c.horse_item_click):
+            rv.horse_called = True
+        else:
+            logger.warning("Revivir: el clic en el objeto del caballo no salio")
+        self.gi.press_key(c.inventory_key)
+        rv.inv_open = False
+        return "ok"
+
+    def _rv_mount(self, p: Perception) -> str:
+        """Ctrl+G por la cuenta unica (`_remount`), solo si se llamo al caballo."""
+        if not self.rv.mount_after:
+            return "ok"
+        if not self._rv.horse_called:
+            logger.warning("Revivir: no se llamo al caballo, no me monto (sigo a pie)")
+            return "ok"
+        return "ok" if self._remount() else "captcha"
+
+    def _rv_skills(self, p: Perception) -> str:
+        """Al morir se pierden los buffs: todas las habilidades quedan vencidas."""
+        if self.rv.recast_skills and self.skills:
+            self._skills_started = True
+            self.skills.start(self.clock())
+        return "ok"
 
     # MUERTO y FIN no tienen handler: `_decide` termina la corrida apenas se detecta la muerte.
     def _do_muerto(self, p: Perception, t: float) -> Transition:
