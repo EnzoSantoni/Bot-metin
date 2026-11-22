@@ -150,12 +150,28 @@ def test_regla_b_monstruo_seleccionado_espacio_clic_directo_sin_escape(caplog):
     assert not any(e == ("key_down", "esc") for e in env.backend.events)
 
 
-def test_regla_b_monstruo_seleccionado_sigue_contando_para_el_descarte():
+def test_regla_b_monstruo_seleccionado_en_metin_con_nombre_no_se_descarta():
+    """Un metin con nombre (etiqueta) no se descarta por seleccion equivocada repetida: se reintenta y, agotados los clics sin
+    confirmar (`approach.max_clicks`), se aparta unos segundos (no 10 minutos) para elegir otro."""
     h = Harness(lambda h, n: perc_far(panel=__import__("bot.vision.panel", fromlist=["PanelInfo"]).PanelInfo(
         present=True, kind="other", name=None), n_near=3, metins=[metin()]) if h.bot.state is State.ATACAR
         else perc(metins=[metin()]), attack={"max_wrong_selections": 2})
-    h.run_until(lambda: any("seleccion equivocada repetida" in w for _, w in h.seen), limit=200)
-    assert h.keys("space") >= 1 and h.keys("esc") == 0 and len(h.bot.discarded) >= 1
+    h.run_until(lambda: any(w.startswith("sin confirmar:") for _, w in h.seen), limit=400)
+    assert not any("seleccion equivocada repetida" in w for _, w in h.seen)
+    assert h.keys("space") >= 1 and h.keys("esc") == 0
+    assert all(s.expiry - h.clock.t <= 31 for s in h.bot.discarded)   # apartado ~30 s, no el descarte de 10 minutos
+
+
+def test_regla_b_clic_a_piedra_sin_nombre_que_selecciona_monstruo_se_ignora():
+    """Una piedra SIN etiqueta que al clickearla muestra un monstruo si se confirma que no es un metin: se ignora esa posicion."""
+    from bot.vision.panel import PanelInfo
+    h = Harness(lambda h, n: perc_far(panel=PanelInfo(present=True, kind="other", name=None), metins=[metin()])
+                if h.bot.state is State.ATACAR else perc(metins=[metin()]), attack={"max_wrong_selections": 2})
+    h.run_until(lambda: h.bot.state is State.ATACAR)
+    a = h.bot._atk
+    a.stone = True   # el clic fue sobre una piedra sin etiqueta
+    h.run_until(lambda: any("se selecciono otra cosa" in w or "seleccion equivocada repetida" in w for _, w in h.seen), limit=200)
+    assert h.bot.ignored or h.bot.discarded
 
 
 def test_bloqueo_se_detecta_quieto_o_en_circulo_pero_no_caminando_recto():

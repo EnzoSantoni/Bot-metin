@@ -268,8 +268,9 @@ def test_robustez_mundos_aleatorios_con_teclado(seed):
     assert env.run_until(max_s=300) == "limite"
     assert max(dist) <= tol(env)
     assert len(env.world.broken) >= 1 or any(t.new == "EXPLORAR" for t in env.transitions)
+    limits = {**LIMITS, "BUSCAR": 10}   # BUSCAR incluye girar hasta 12 pasos de camara hacia el metin visto mientras se atacaba (~8.6 s)
     for st, secs in env.max_state_seconds(ignore=("CAPTCHA", "EXPLORAR")).items():
-        assert secs <= LIMITS.get(st, 5), (st, secs)
+        assert secs <= limits.get(st, 5), (st, secs)
     assert env.backend.pressed == ([], [])
 
 

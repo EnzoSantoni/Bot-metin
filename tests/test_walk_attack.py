@@ -32,7 +32,7 @@ def test_caminando_no_cuenta_el_estancamiento_de_vida():
 
 def test_el_tope_walk_max_s_vuelve_a_contar_el_estancamiento():
     def script(h, n):
-        xy = (500 + n, 150)
+        xy = (500 + min(n, 25), 150)   # camina ~4 s y frena: el reclic nunca sale en movimiento
         if h.bot.state is State.ATACAR:
             return perc_far(coords=xy, panel=target_panel(1.0))
         return perc(coords=xy, metins=[metin()])

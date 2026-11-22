@@ -242,10 +242,19 @@
              //  PUNTO DE CLIC EN EL CUERPO DE LA PIEDRA: el de la etiqueta (vision.metin.click_dy debajo de ella) cae en la base
              //  o en el piso; se corre hacia arriba label_click_up_frac * click_dy px (medido: la piedra lejana queda ~45 px
              //  debajo del centro de la etiqueta, click_dy 65). Con una piedra lejana asociada se usa el centro de su rect.
-             //  VERIFICACION RAPIDA: a los confirm_check_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
+             //  VERIFICACION RAPIDA: a los confirm_wait_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
              //  (piedra/etiqueta relocalizada; si cae en el mismo punto, quick_up_px mas arriba por intento), hasta quick_reclicks;
              //  despues el flujo de siempre (confirm_timeout_s). No cuentan para max_reclicks.
-             "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
+             "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+             //  RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
+             //  movimiento (coordenadas cambiando); sin confirmar, otro clic recien despues de confirm_wait_s. name_gap_px: el
+             //  clic cae siempre a mas de tantos px debajo del nombre de la etiqueta (nunca sobre el nombre ni la franja de arriba).
+             //  PANEL AUSENTE (error del juego: a veces atacando un metin no aparece la barra de vida): quieto y pegado, sin
+             //  panel y con un monstruo cerca, con panel_recover se hace UN clic derecho (apretar y soltar, sin mover la
+             //  camara) sobre el cuerpo del monstruo por episodio; el juego muestra su nombre y vida y, si se esta atacando un
+             //  metin, el panel vuelve a mostrar la vida del metin. Si en recover_wait_s no vuelve: no ataca, clic izquierdo al
+             //  metin. La senal por animacion del arma no esta implementada (no es confiable sin secuencias etiquetadas).
+             "min_click_gap_s": 1.5, "name_gap_px": 20, "panel_recover": true, "recover_wait_s": 1.5,
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
@@ -398,6 +407,17 @@
                "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                "far_monsters_n": 2, "far_monsters_px": 200,
                "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+               //  ACERCARSE CON TECLADO (navigation.mode = teclado): a mas de click_floor (distancia de piso) del metin elegido se
+               //  alinea la vista con Q/E hasta que la piedra quede a <= center_tol_px del centro horizontal, se camina con W en
+               //  tramos de walk_chunk_s re-detectando la piedra y se FRENA al llegar a click_floor. Quieto (quiet_reads
+               //  lecturas de coordenadas iguales y settle_s sin teclas) se vuelve a ubicar la piedra en la captura nueva y se hace
+               //  UN clic en el centro de su cuerpo. Sin confirmar: otro clic quieto; a los max_clicks se elige otro (la posicion
+               //  se ignora retry_ignore_s, no se descarta). align_turns_max giros seguidos sin centrar: se camina igual.
+               //  Tramos de W sin avanzar: con bichos ESPACIO; sin bichos se cancela el acercamiento (o clic si ya
+               //  esta a <= stuck_click_floor). keys_enabled=false vuelve al clic que camina solo.
+               "keys_enabled": true, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+               "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
+               "stuck_click_floor": 4.0,
                //  ELECCION: una etiqueta objetivo va antes que una piedra sin etiqueta, salvo que la distancia de piso de la
                //  piedra sea < unlabeled_closer_ratio x la de la etiqueta. Las piedras sin etiqueta con la base por debajo de
                //  near_unlabeled_y_frac del alto (cerca del personaje: de cerca los metin siempre muestran su nombre, asi que
