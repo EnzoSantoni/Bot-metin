@@ -89,6 +89,10 @@ DEFAULTS: dict[str, Any] = {
               # cerca ESPACIO surrounded_space_s, si no un paso al costado (attack.sidestep_s); y sigue en el mismo estado.
               # surrounded_max reacciones seguidas sin avanzar -> DESTRABAR. (Reemplaza a surrounded_s y attack.walk_stuck_s.)
               "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+              # Trabado yendo al metin: si tras ESPACIO o el paso al costado la piedra no esta en la captura, antes de pasar a
+              # BUSCAR mira relook_frames capturas mas y despues gira la vista relook_turn_deg hacia el lado donde estaba y,
+              # si tampoco, al otro lado (0 = sin giros).
+              "relook_frames": 2, "relook_turn_deg": 30.0,
               # Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
               # (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino y no se probo en este lugar), se
               # camina con W detour_s y se mira si avanza; un rumbo que no avanza se recuerda (blocked_keep, a blocked_radius_u del
@@ -1050,6 +1054,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
           "forward_chunk_s", "back_s", "look_walk_s", "fast_s", "surrounded_space_s", "surrounded_max"))
     st = cfg["stuck"]
+    if not isinstance(st.get("relook_frames"), int) or isinstance(st.get("relook_frames"), bool) or st["relook_frames"] < 0:
+        raise ConfigError("stuck.relook_frames debe ser un entero >= 0")
+    if not isinstance(st.get("relook_turn_deg"), (int, float)) or isinstance(st.get("relook_turn_deg"), bool) \
+            or not 0 <= st["relook_turn_deg"] <= 90:
+        raise ConfigError("stuck.relook_turn_deg debe ser un numero entre 0 y 90 (0 = sin giros)")
     for k in ("detour_s", "blocked_keep", "blocked_radius_u", "blocked_tol_deg", "probe_blind", "blind_turn_deg"):
         if not isinstance(st.get(k), (int, float)) or isinstance(st.get(k), bool) or st[k] <= 0:
             raise ConfigError(f"stuck.{k} debe ser un numero > 0")

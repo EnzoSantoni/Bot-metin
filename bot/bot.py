@@ -145,6 +145,10 @@ class _Attack:
     trail: list = field(default_factory=list)   # (t, posicion) de la ventana `attack.blocked_s`
     pending: tuple[str, bool] | None = None     # reclic para el proximo ciclo: (motivo, cuenta como reclic)
     low_reads: int = 0                          # lecturas seguidas con la vida por debajo de `pickup.dismount_hp`
+    relook: int = 0                             # capturas extra mirando tras ESPACIO / paso al costado sin ver la piedra
+    relook_turns: int = 0                       # giros chicos dados buscandola (`stuck.relook_turn_deg`)
+    relook_off: float = 0.0                     # giro acumulado de esos giros (rad, + = derecha)
+    relook_side: int = 0                        # lado del primer giro (+1 derecha / -1 izquierda: donde estaba la piedra)
     start_pos: tuple[int, int] | None = None    # posicion del jugador al empezar el ataque
     ref: tuple[int, int] | None = None          # posicion de referencia para medir si el personaje camina
     move_t: float = -math.inf                   # ultima vez que se alejo `stuck.min_move` de `ref` (camina)
@@ -1812,12 +1816,17 @@ class Bot(ApproachKeysMixin):
             return self._discard(a, f"{why}, demasiados reclics", p, t)
         cands = self._candidates(p, t, check_discards=False)   # el metin en curso ya es el elegido
         point = self._relocate(a, p, cands)
+        if point is not None:
+            a.relook = a.relook_turns = a.relook_side = 0
+            a.relook_off = 0.0
         if point is None:
             if not a.confirmed:
                 self._atk = None
                 return State.BUSCAR, "se perdio el metin de vista"   # sin ignorarlo: solo se perdio de vista
             if p.panel is not None and p.panel.present and p.panel.kind == "target_metin" and not a.walking:
                 point = a.click   # el panel sigue mostrando el metin y el personaje esta quieto: su ultimo punto sigue valiendo
+            elif self._relook(a, why, p):
+                return None   # tras ESPACIO / paso al costado: mira otra captura o gira un poco antes de ir a BUSCAR
             else:
                 logger.info("Sin reclic (%s): no veo la piedra en esta captura y no clickeo un punto viejo", why)
                 self._atk = None
@@ -1832,6 +1841,37 @@ class Bot(ApproachKeysMixin):
         self._planned = a.click = point
         a.last_click_t = a.last_drop_t = a.reclick_t = self.clock()
         return None
+
+    def _relook(self, a: _Attack, why: str, p: Perception) -> bool:
+        """Trabado yendo al metin (tras ESPACIO o un paso al costado) y la piedra no esta en esta captura: antes de ir a
+        BUSCAR mira `stuck.relook_frames` capturas mas y despues gira la vista `stuck.relook_turn_deg` hacia el lado donde
+        estaba la piedra y, si tampoco, al otro lado. True si sigue buscando (el reclic queda pendiente para el ciclo
+        siguiente, sin contar otro reclic)."""
+        if not why.startswith(("trabado", "bloqueado")):
+            return False
+        nf = int(self.stuck["relook_frames"])
+        if a.relook < nf:
+            a.relook += 1
+            logger.info("Sin la piedra en esta captura tras %s: miro otra (%d/%d)", why, a.relook, nf)
+            a.pending = (why, False)
+            return True
+        deg = float(self.stuck["relook_turn_deg"])
+        if deg <= 0 or a.relook_turns >= 2:
+            return False
+        if not self._turn_ready():
+            a.pending = (why, False)
+            return True   # se espera la imagen del giro anterior
+        if a.relook_side == 0:
+            a.relook_side = 1 if a.click[0] >= p.player_xy[0] else -1
+        target = math.radians(deg) * a.relook_side * (1 if a.relook_turns == 0 else -1)
+        delta = target - a.relook_off
+        key, secs = self.keynav.plan_turn(delta)
+        logger.info("Sin la piedra tras %s: giro la vista %+.0f grados para buscarla (%s %.2f s)", why, math.degrees(delta),
+                    key, secs)
+        self._search_turn(key, secs)
+        a.relook_off, a.relook_turns = target, a.relook_turns + 1
+        a.pending = (why, False)
+        return True
 
     def _relocate(self, a: _Attack, p: Perception, cands: list[_Cand]) -> tuple[int, int] | None:
         """Punto de clic del metin del ataque en la captura de ahora: su etiqueta o su piedra mas cercana al ultimo punto

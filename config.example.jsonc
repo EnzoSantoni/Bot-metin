@@ -181,6 +181,10 @@
             // Sigue en el mismo estado. Tras surrounded_max reacciones seguidas sin avanzar, el DESTRABAR de siempre.
             // Reemplaza a surrounded_s y a attack.walk_stuck_s (obsoletas: si estan en config.json se ignoran con un WARNING).
             "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+            //  Trabado yendo al metin: si tras ESPACIO o el paso al costado la piedra no aparece en la captura, antes de pasar a
+            //  BUSCAR mira relook_frames capturas mas y despues gira la vista relook_turn_deg hacia el lado donde estaba la piedra
+            //  y, si tampoco la ve, al otro lado (0 = sin giros).
+            "relook_frames": 2, "relook_turn_deg": 30.0,
             // Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
             // (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino, no se sale de la zona y no se
             // probo en ese lugar), se camina con W detour_s y se mira si avanza. Un rumbo que no avanza se recuerda (blocked_keep

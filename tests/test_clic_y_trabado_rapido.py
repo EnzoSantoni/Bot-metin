@@ -272,3 +272,43 @@ def test_las_claves_viejas_se_ignoran_con_aviso(tmp_path, caplog):
     p.write_text(json.dumps({"attack": {"walk_stuck_s": 5.0}, "stuck": {"surrounded_s": 2.0}}), encoding="utf-8")
     cfg = load_config(p)
     assert "walk_stuck_s" not in cfg["attack"] and "surrounded_s" not in cfg["stuck"]
+
+
+# ---------------------------------------------------------------- trabado: sin la piedra tras el paso al costado
+def _relook_script(hide):
+    """Trabado sin monstruos -> paso al costado (A); despues la piedra (y el panel) faltan `hide` capturas de ATACAR."""
+    w = {"hidden": 0}
+
+    def script(h, n):
+        xy = (500 + min(n, 12), 150)
+        m = metin(click=(1300, 500))
+        if h.bot.state is State.ATACAR:
+            if h.keys("a") >= 1 and w["hidden"] < hide:
+                w["hidden"] += 1
+                return perc(coords=xy)   # ni panel ni piedra en esta captura
+            return perc_far(coords=xy, panel=target_panel(1.0), metins=[m])
+        return perc(coords=xy, metins=[m])
+    return script
+
+
+def test_trabado_sin_la_piedra_tras_el_paso_al_costado_mira_otra_captura_antes_de_buscar(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(_relook_script(hide=2), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h.run_until(lambda: h.clicks() >= 2, limit=300)
+    ms = messages(caplog)
+    assert any("Sin la piedra en esta captura tras trabado, intento 1: miro otra" in m for m in ms)
+    assert any(m.startswith("Reclic en") and "trabado, intento 1" in m for m in ms)
+    assert not any("no veo la piedra para reclickear" in m for m in ms)
+    assert h.keys("q") == 0 and h.keys("e") == 0   # la vio de nuevo sin girar
+
+
+def test_trabado_sin_la_piedra_gira_un_poco_a_cada_lado_y_recien_ahi_busca(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(_relook_script(hide=10_000), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h.run_until(lambda: State.BUSCAR in h.states(), limit=400)
+    ms = messages(caplog)
+    assert sum("miro otra" in m for m in ms) == 2
+    turns = [m for m in ms if "giro la vista" in m and "para buscarla" in m]
+    assert len(turns) == 2 and "+30 grados" in turns[0] and "-60 grados" in turns[1]   # primero hacia donde estaba
+    assert h.keys("q") + h.keys("e") >= 2
+    assert any("no veo la piedra para reclickear" in m for m in ms)
