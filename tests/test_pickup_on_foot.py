@@ -196,32 +196,56 @@ def test_z_se_repite_hasta_que_desaparece_la_etiqueta_y_recien_ahi_el_siguiente(
     assert "Z (4) esperando que desaparezca" in caplog.text and "recogido(s)" in caplog.text
 
 
-def test_se_reacomoda_a_los_reposition_s_y_sigue_con_z(caplog):
+def test_se_reacomoda_tras_2_z_y_sigue_con_z(caplog):
     caplog.set_level(logging.INFO)
-    h = floor_harness([DOWN], floor_kw={"misplaced_until": 9})     # las primeras 9 Z no juntan: mal ubicado
+    h = floor_harness([DOWN], floor_kw={"misplaced_until": 2})     # las primeras 2 Z no juntan: mal ubicado
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
-    assert "reacomodo sobre el objeto" in caplog.text and "me rindo" not in caplog.text
-    assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 10
-    t0 = h.floor.z_log[0][1]
-    first_rep = next(r for r in caplog.records if "reacomodo" in r.message)
-    assert first_rep is not None and h.floor.z_log[-1][1] - t0 >= 3.0
+    assert "reacomodo sobre el objeto (" in caplog.text and "tras 2 Z" in caplog.text
+    assert "salteo" not in caplog.text and "me rindo" not in caplog.text
+    assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 3
 
 
-def test_abandona_a_item_max_s_y_pasa_al_siguiente(caplog):
+def test_saltea_tras_4_z_con_reacomodo_y_pasa_al_siguiente(caplog):
+    """Objetos que no se juntan: 4 Z (con un reacomodo en el medio) y se saltea; sigue con el otro. La ultima mirada antes
+    de subirse no los repite."""
     caplog.set_level(logging.INFO)
-    h = floor_harness([DOWN, LEFT], floor_kw={"pickable": False}, pickup=dict(FAST_WALK, item_max_s=6.0))
+    near_a, near_b = (FEET[0] - 30, FEET[1] - 18), (FEET[0] + 30, FEET[1] - 18)   # los dos al alcance: sin caminar
+    h = floor_harness([near_a, near_b], floor_kw={"pickable": False}, pickup=FAST_WALK)
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
-    assert caplog.text.count("me rindo con el objeto") == 2 and h.bot.stats.items == 0
+    assert caplog.text.count("salteo el objeto") == 2 and "no desaparecio tras 4 Z" in caplog.text
+    assert caplog.text.count("reacomodo sobre el objeto") == 2 and "me rindo" not in caplog.text
+    assert h.keys("z") == 8 and h.bot.stats.items == 0 and len(h.floor.items) == 2
+    assert "Ultima mirada antes de subirme: no queda nada (salteados: 2)" in caplog.text
     assert h.keys("g") == 2 and not h.bot._dismounted and h.clicks() == 0
-    assert len(h.floor.z_log) >= 6
+
+
+def test_ultima_mirada_antes_de_subirse_recoge_lo_que_quedo(caplog):
+    """Al terminar (sin objetos durante empty_confirm_cycles) mira una captura mas: si aparecio algo, lo recoge y recien
+    despues se sube (una sola ultima mirada)."""
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN])
+    floor, added = h.floor, []
+
+    def script(h_, n):
+        k = h_.bot._pk
+        if not added and k is not None and k.phase == "collect" and k.empty >= int(h_.bot.pk["empty_confirm_cycles"]):
+            added.append(1)
+            floor.items.append(list(map(float, LEFT)))   # aparece recien en la ultima mirada
+        return floor(h_, n)
+    h.script = script
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert added and caplog.text.count("Ultima mirada antes de subirme: quedan 1 objeto(s)") == 1
+    assert caplog.text.count("Ultima mirada antes de subirme") == 1   # no hay una segunda ultima mirada
+    assert not h.floor.items and h.bot.stats.items == 2 and h.keys("g") == 2
 
 
 def test_no_se_sube_mientras_quede_un_objeto_valido():
-    h = floor_harness([DOWN, LEFT], floor_kw={"z_needed": 5})
+    h = floor_harness([DOWN, LEFT], floor_kw={"z_needed": 3})
     start(h)
-    h.run_until(lambda: h.keys("z") >= 6)                 # ya junto el primero y va por el segundo
+    h.run_until(lambda: h.keys("z") >= 4)                 # ya junto el primero y va por el segundo
     assert h.keys("g") == 1 and h.bot.state is State.RECOGER and h.bot._dismounted
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
     assert not h.floor.items and h.keys("g") == 2 and kinds(h)[-1] == "g"
@@ -379,3 +403,21 @@ def test_recoger_no_tiene_ningun_clic_en_el_codigo():
     import bot.bot as mod
     for name in ("_do_recoger", "_pickup_step", "_pickup_walk", "_pickup_follow", "_pickup_look"):
         assert "click_at" not in inspect.getsource(getattr(mod.Bot, name)), name
+
+
+def test_salteado_se_reconoce_por_su_posicion_en_el_mapa(monkeypatch):
+    """Con rumbo de camara, un objeto salteado se reconoce por su posicion en el mapa (no por el punto de pantalla)."""
+    from bot.bot import _Pickup, _Skip
+    h = Harness(lambda h, n: perc())
+    h.bot.tracker.update(perc().coords, h.clock())
+    pos = h.bot.tracker.position
+    monkeypatch.setattr(h.bot, "_heading", lambda: 0.0)
+    p = perc(items=[label(DOWN)])
+    it = p.items[0]
+    k = _Pickup(0.0)
+    k.skipped.append(_Skip(it.click_point, pos, h.bot._item_world(it.click_point, p, pos, 0.0)))
+    assert h.bot._not_skipped(k, p, p.items) == []
+    # salteado con el jugador 20 u mas al oeste: el mismo punto de pantalla ahora es OTRO lugar del mapa
+    old = (pos[0] - 20, pos[1])
+    k.skipped[0] = _Skip(it.click_point, old, h.bot._item_world(it.click_point, p, old, 0.0))
+    assert h.bot._not_skipped(k, p, p.items) == p.items

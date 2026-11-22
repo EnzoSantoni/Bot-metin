@@ -250,8 +250,7 @@ class _Cur:
     start_t: float                                  # desde que se empezo con este objeto (tope item_max_s)
     z: int = 0                                      # Z apretadas sobre el
     z_t: float = -math.inf                          # instante del ultimo Z
-    rep_t: float | None = None                      # desde cuando se espera (llegada o ultimo reacomodo)
-    repos: bool = False                             # reacomodandose: radio de llegada mas chico
+    repo_done: bool = False                         # ya se reacomodo sobre el (una vez, tras pickup.reposition_after_z Z)
     gone: int = 0                                   # capturas seguidas sin verlo
     moved: bool = False                             # el ciclo anterior camino: la etiqueta pudo correrse en pantalla
 
@@ -264,10 +263,18 @@ class _Pickup:
     presses: int = 0
     empty: int = 0
     cur: _Cur | None = None
-    ignored: list = field(default_factory=list)     # puntos de pantalla de objetos abandonados
-    anchor: tuple[int, int] | None = None           # posicion del jugador a la que vale `ignored`
+    skipped: list = field(default_factory=list)     # objetos salteados (_Skip): no se vuelven a recoger
     tracked: list = field(default_factory=list)     # objetos validos vistos: [punto de pantalla, ciclos seguidos sin verlo]
     z_t: float = -math.inf                          # instante del ultimo Z (de cualquier objeto)
+    final: bool = False                             # ya se hizo la ultima mirada antes de subirse
+
+
+@dataclass
+class _Skip:
+    """Objeto salteado (no desaparecio tras pickup.max_z_per_item Z, o a los item_max_s)."""
+    point: tuple[int, int]                          # punto de pantalla al saltearlo
+    pos: tuple[int, int] | None                     # posicion del jugador en ese momento (el punto de pantalla vale cerca)
+    world: Xy | None                                # posicion en el mapa (con el rumbo de la camara); None si no se conocia
 
 
 @dataclass
@@ -2116,12 +2123,20 @@ class Bot(ApproachKeysMixin):
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
         pos = self.tracker.position
-        if k.anchor is not None and pos is not None and math.dist(pos, k.anchor) > float(self.pk["same_spot_u"]):
-            k.ignored, k.anchor = [], None   # el jugador se movio: los puntos de pantalla ya no valen
-        track = float(self.pk["track_px"])
-        pending = [i for i in valid if not any(math.dist(i.click_point, q) <= track for q in k.ignored)]
+        pending = self._not_skipped(k, p, valid)
         k.empty = 0 if (pending or k.cur is not None) else k.empty + 1
         if k.empty >= int(self.pk["empty_confirm_cycles"]):
+            if not k.final:   # antes de subirse: una ultima captura por si quedo algo (sin los salteados)
+                k.final = True
+                left = self._final_look(k)
+                if left is None:
+                    return None   # captcha: ya esta en CAPTCHA
+                if left:
+                    logger.info("Ultima mirada antes de subirme: quedan %d objeto(s) sin saltear: los recojo", len(left))
+                    k.empty = 0
+                    return None
+                logger.info("Ultima mirada antes de subirme: no queda nada%s",
+                            f" (salteados: {len(k.skipped)})" if k.skipped else "")
             return self._end_pickup(back, "no quedan objetos")
         if k.presses >= int(self.pk["max_presses"]):
             return self._end_pickup(back, "tope de pulsaciones de Z")
@@ -2151,6 +2166,51 @@ class Bot(ApproachKeysMixin):
         k.phase, k.empty, k.start_t = "collect", 0, self.clock()   # el tiempo maximo cuenta desde que empieza a recoger
         return None
 
+    def _item_world(self, pt: tuple[int, int], p: Perception, pos: tuple[int, int] | None, h: float | None) -> Xy | None:
+        """Posicion en el mapa de un objeto visto en `pt` (jugador en `pos`, rumbo `h` de la camara); None sin alguno."""
+        if pos is None or h is None:
+            return None
+        return world_pos(pos, h, floor_vec(p.player_xy, pt, p.shape, self.cfg), self.kscale.k)
+
+    def _not_skipped(self, k: _Pickup, p: Perception, items: list) -> list:
+        """`items` sin los objetos salteados: por posicion en el mapa (a <= `pickup.skip_match_u`) si se conoce el rumbo o,
+        si no, por punto de pantalla (a <= `same_px`) mientras el jugador no se movio `same_spot_u` desde que lo salteo."""
+        if not k.skipped or not items:
+            return items
+        pos = self.tracker.position
+        h = self._heading() if pos is not None and any(s.world is not None for s in k.skipped) else None
+        same_px, same_u, match_u = float(self.pk["same_px"]), float(self.pk["same_spot_u"]), float(self.pk["skip_match_u"])
+
+        def hit(s: _Skip, it: Any) -> bool:
+            w = self._item_world(it.click_point, p, pos, h) if s.world is not None else None
+            if w is not None:
+                return math.dist(w, s.world) <= match_u
+            moved = pos is not None and s.pos is not None and math.dist(pos, s.pos) > same_u
+            return not moved and math.dist(it.click_point, s.point) <= same_px
+
+        return [i for i in items if not any(hit(s, i) for s in k.skipped)]
+
+    def _skip_item(self, k: _Pickup, cur: _Cur, p: Perception, pos: tuple[int, int] | None) -> None:
+        """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo)."""
+        h = self._heading() if pos is not None else None
+        k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h)))
+        k.cur = None
+
+    def _final_look(self, k: _Pickup) -> list | None:
+        """Ultima mirada antes de subirse: espera `pickup.final_look_s`, captura de nuevo y devuelve los objetos validos que
+        quedan (sin los salteados). None si aparecio un captcha (ya se entro a CAPTCHA)."""
+        self._sleep(float(self.pk["final_look_s"]))
+        img = self._peek()
+        if img is None:
+            return []
+        if self._captcha_fn(img, self.cfg) is not None:
+            logger.warning("Captcha detectado en la ultima mirada de la recogida: se suelta todo")
+            self.gi.release_all()
+            self._enter(State.CAPTCHA, "panel Bot Verify detectado durante una accion")
+            return None
+        fp = self._perceive(img, self.cfg, parts=PARTS[State.RECOGER])
+        return self._not_skipped(k, fp, self._valid_items(fp))
+
     def _item_point(self, it: Any) -> tuple[float, float]:
         """Punto del objeto en pantalla: centro inferior de su etiqueta mas `pickup.item_below_label_px`."""
         r = it.rect
@@ -2167,16 +2227,14 @@ class Bot(ApproachKeysMixin):
 
     def _pickup_step(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
         """Un ciclo de recogida (sin clics) sobre el objeto actual: Z cada `z_interval_s` mientras su etiqueta siga; si no
-        desaparece, reacomodo a los `reposition_s` y abandono a los `item_max_s`."""
+        desaparece, reacomodo tras `reposition_after_z` Z y se lo saltea tras `max_z_per_item` Z (o a los `item_max_s`)."""
         self._pickup_progress(k, p, t, pending)
         cur = k.cur
         if cur is not None and t - cur.start_t >= float(self.pk["item_max_s"]):
-            logger.info("Recoger: me rindo con el objeto (%d, %d) tras %.0f s", cur.point[0], cur.point[1], t - cur.start_t)
-            k.ignored.append(cur.point)
-            if k.anchor is None:
-                k.anchor = pos
-            track = float(self.pk["track_px"])
-            pending = [i for i in pending if math.dist(i.click_point, cur.point) > track]
+            logger.info("Recoger: me rindo con el objeto (%d, %d) tras %.0f s: lo salteo", cur.point[0], cur.point[1],
+                        t - cur.start_t)
+            self._skip_item(k, cur, p, pos)
+            pending = [i for i in pending if math.dist(i.click_point, cur.point) > float(self.pk["same_px"])]
             k.cur = cur = None
         it = None
         if cur is not None:
@@ -2204,23 +2262,26 @@ class Bot(ApproachKeysMixin):
         cur.point, cur.gone = it.click_point, 0
         pt = self._item_point(it)
         d = math.dist(pt, feet)
-        arrive = float(self.pk["arrive_px"]) * (float(self.pk["reposition_frac"]) if cur.repos else 1.0)
+        arrive = float(self.pk["arrive_px"])
         if d > arrive:
             cur.moved = True
             self._pickup_walk(p, pt, d)
             return
         cur.moved = False
-        if cur.rep_t is None or cur.repos:
-            cur.rep_t, cur.repos = t, False
-        elif t - cur.rep_t >= float(self.pk["reposition_s"]):
-            logger.info("Recoger: reacomodo sobre el objeto (%d, %d)", cur.point[0], cur.point[1])
-            cur.rep_t = t
-            if d > float(self.pk["arrive_px"]) * float(self.pk["reposition_frac"]):
-                cur.repos, cur.moved = True, True
-                self._pickup_walk(p, pt, d)
-                return
         if t - cur.z_t < float(self.pk["z_interval_s"]):
             return   # esperando que el ultimo Z haga efecto
+        if cur.z >= int(self.pk["max_z_per_item"]):   # el ultimo Z ya tuvo su tiempo y el objeto sigue ahi
+            logger.info("Recoger: salteo el objeto (%d, %d): no desaparecio tras %d Z (con reacomodo); sigo con los demas",
+                        cur.point[0], cur.point[1], cur.z)
+            self._skip_item(k, cur, p, pos)
+            return
+        if cur.z >= int(self.pk["reposition_after_z"]) and not cur.repo_done:
+            cur.repo_done = True
+            logger.info("Recoger: reacomodo sobre el objeto (%d, %d) tras %d Z", cur.point[0], cur.point[1], cur.z)
+            if d > float(self.pk["arrive_px"]) * float(self.pk["reposition_frac"]):   # UN tramo hacia su punto exacto
+                cur.moved = True
+                self._pickup_walk(p, pt, d)
+                return
         cur.z += 1
         cur.z_t = k.z_t = t
         k.presses += 1
@@ -2243,7 +2304,8 @@ class Bot(ApproachKeysMixin):
                 alive.append([min(near, key=lambda i: math.dist(i.click_point, q)).click_point, 0])
             elif counting and n + 1 < int(self.pk["gone_cycles"]):
                 alive.append([q, n + 1])   # puede ser un parpadeo: se espera otra captura
-            elif counting and math.dist(q, feet) <= float(self.pk["near_px"])                     and not any(math.dist(q, g) <= float(self.pk["track_px"]) for g in k.ignored):   # abandonado: no se cuenta
+            elif counting and math.dist(q, feet) <= float(self.pk["near_px"]) \
+                    and not any(math.dist(q, s.point) <= float(self.pk["same_px"]) for s in k.skipped):   # salteado: no se cuenta
                 done += 1
         for i in pending:
             if not any(math.dist(i.click_point, q) <= same for q, _ in alive):
