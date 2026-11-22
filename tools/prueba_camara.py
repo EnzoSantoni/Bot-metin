@@ -42,6 +42,9 @@ control.add_stop_callback(backend.release_all)
 control.start()
 cp = CameraPitch(cfg)
 sleep = control.sleep
+_c = cfg["camera_pitch"]
+print(f"Rueda 'lejos' = {int(_c['zoom_out_sign']) * int(_c['zoom_out_clicks']):+d} (camera_pitch.zoom_out_sign = "
+      f"{int(_c['zoom_out_sign'])} en config.json; positivo = hacia adelante)", flush=True)
 
 
 def look():
