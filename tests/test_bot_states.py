@@ -695,3 +695,63 @@ def test_run_bot_plantilla_faltante_falla_claro(capsys, monkeypatch):
     cfg["target_metin_names"] = ["Metin Inexistente"]
     code = run_bot.main(["--observar"], cfg=cfg, window=FakeWindow())
     assert code == 1 and "plantilla" in capsys.readouterr().out.lower()
+
+
+# ---------------------------------------------------------------- bajarse del caballo con la vida del metin baja
+def _low_hp_script(hps, at_recoger):
+    w = {"atk": 0, "done": False}
+
+    def script(h, n):
+        st = h.bot.state
+        if st is State.BUSCAR and not w["done"]:
+            return perc(metins=[metin()])
+        if st is State.ATACAR:
+            w["atk"] += 1
+            if w["atk"] == len(hps) + 1:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
+            return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
+        if st is State.RECOGER:
+            if not w["done"]:
+                at_recoger.append(h.keys("g"))
+            w["done"] = True
+            return perc(items=[item()] if h.keys("z") < 2 else [])
+        return perc()
+    return script
+
+
+def test_vida_del_metin_bajo_10_se_baja_antes_de_romperse(caplog):
+    caplog.set_level(logging.INFO)
+    at_recoger = []
+    h = Harness(_low_hp_script([0.5, 0.2, 0.09, 0.08, 0.05], at_recoger))
+    h.run_until(lambda: State.EXPLORAR in h.states())
+    assert at_recoger == [1], "Ctrl+G atacando (vida < 10%), antes de llegar a RECOGER"
+    assert h.keys("g") == 2 and not h.bot._dismounted   # una bajada (atacando) y una subida (al terminar de recoger)
+    assert "me bajo del caballo ya" in caplog.text and "ya estoy a pie" in caplog.text
+    assert h.bot.stats.metins == 1 and h.bot.stats.items == 1
+
+
+def test_una_sola_lectura_baja_no_baja_del_caballo():
+    at_recoger = []
+    h = Harness(_low_hp_script([0.5, 0.09, 0.3, 0.2], at_recoger), attack={"broken_hp_ratio": 0.25})
+    h.run_until(lambda: at_recoger, limit=400)
+    assert at_recoger == [0]
+
+
+def test_dismount_hp_cero_solo_se_baja_al_recoger():
+    at_recoger = []
+    h = Harness(_low_hp_script([0.5, 0.09, 0.08, 0.05], at_recoger), pickup={"dismount_hp": 0.0})
+    h.run_until(lambda: State.EXPLORAR in h.states())
+    assert at_recoger == [0] and h.keys("g") == 2
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_bajado_por_vida_baja_se_sube_si_ya_no_hay_metin_en_curso(in_progress):
+    from bot.bot import _CurrentMetin
+    h = Harness(lambda h, n: perc())
+    h.bot._set_dismounted(True, "test")
+    h.bot._early_down = True
+    if in_progress:   # el metin sigue en curso (se lo busca): se sigue a pie
+        h.bot._cur = _CurrentMetin((900, 300), None, "metin_de_oscuridad", 0.0, h.clock.t, 0)
+    h.bot.step()
+    assert h.keys("g") == (0 if in_progress else 1)
+    assert h.bot._dismounted is in_progress

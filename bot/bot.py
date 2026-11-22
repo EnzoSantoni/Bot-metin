@@ -144,6 +144,7 @@ class _Attack:
     zero: int = 0                      # ciclos seguidos con vida en 0
     trail: list = field(default_factory=list)   # (t, posicion) de la ventana `attack.blocked_s`
     pending: tuple[str, bool] | None = None     # reclic para el proximo ciclo: (motivo, cuenta como reclic)
+    low_reads: int = 0                          # lecturas seguidas con la vida por debajo de `pickup.dismount_hp`
     start_pos: tuple[int, int] | None = None    # posicion del jugador al empezar el ataque
     ref: tuple[int, int] | None = None          # posicion de referencia para medir si el personaje camina
     move_t: float = -math.inf                   # ultima vez que se alejo `stuck.min_move` de `ref` (camina)
@@ -447,6 +448,7 @@ class Bot(ApproachKeysMixin):
         self._last_click_vec: Xy | None = None
         self._clear = 0
         self._dismounted = False          # UNICA verdad de "estoy a pie" (se cambia solo con `_set_dismounted`)
+        self._early_down = False          # se bajo atacando con la vida del metin baja (`pickup.dismount_hp`), antes de recoger
         self._mount_marker = mount_marker   # archivo que existe mientras se esta a pie (sobrevive a F12 / cortes)
         self.kmode = self.nav["mode"] == "teclado"   # caminar solo con W/A/S/D y girar con Q/E (sin clics en el piso)
         self.kb = self.nav["keyboard"]
@@ -587,6 +589,11 @@ class Bot(ApproachKeysMixin):
             self._update_episode(t)
         if self.state in (State.ATACAR, State.RECOGER, State.ACERCARSE):
             self._no_target_t = t      # atacando o yendo a una piedra: hay objetivo
+        if self._early_down and self._cur is None and self.state not in (State.ATACAR, State.RECOGER):
+            self._early_down = False   # se bajo con la vida baja y el metin ya no esta en curso (no se rompio): se sube
+            logger.info("Me habia bajado con la vida del metin baja y ya no hay metin en curso: me subo al caballo")
+            if not self._remount():
+                return
         before = self.state
         if self._surrounded(p, t):
             return
@@ -688,6 +695,7 @@ class Bot(ApproachKeysMixin):
             self._atk = None
         elif new is State.RECOGER:
             self._close_episode("metin roto")
+            self._early_down = False   # desde aca la bajada/subida es de la recogida (al salir de RECOGER se sube)
             self._start_pickup()
         elif new is State.EXPLORAR:
             self._new_sweep()
@@ -1438,6 +1446,8 @@ class Bot(ApproachKeysMixin):
             self._touch_current(a, p, t)
         if kind == "target_metin":
             self._read_panel(a, panel, t)
+            if not self._early_dismount(a, panel.hp_ratio):
+                return None   # captcha durante la bajada: ya esta en CAPTCHA
         if a.recover_t is not None:   # esperando que el panel vuelva al metin tras el clic derecho
             out = self._recover_check(a, kind, p, t)
             if out is not _NO_RECOVERY:
@@ -1591,6 +1601,20 @@ class Bot(ApproachKeysMixin):
                 if c is not None:
                     c.unstick_n = c.deselects = 0   # avanza: las escaleras de destrabe y de reclics vuelven a empezar
         a.zero = a.zero + 1 if hp is not None and hp <= 0 else 0
+
+    def _early_dismount(self, a: _Attack, hp: float | None) -> bool:
+        """Vida del metin por debajo de `pickup.dismount_hp` en 2 lecturas seguidas: Ctrl+G ya, para estar a pie cuando se
+        rompe (si no se rompe se sigue atacando a pie). Solo con `pickup.dismount`. False si un captcha corto la espera."""
+        lim = float(self.pk["dismount_hp"])
+        if lim <= 0 or not self.pk["dismount"] or self._dismounted or hp is None:
+            return True
+        a.low_reads = a.low_reads + 1 if 0 < hp < lim else 0
+        if a.low_reads < 2:
+            return True
+        logger.info("Vida del metin %.0f%% (menos de %.0f%%): me bajo del caballo ya (a pie cuando se rompa)", hp * 100,
+                    lim * 100)
+        self._early_down = True
+        return self._dismount("vida del metin baja")
 
     def _attack_ended(self, a: _Attack, p: Perception, t: float, panel_present: bool) -> tuple[bool, Transition]:
         """El panel dejo de mostrar el metin (o la vida llego a 0). (True, transicion) si se resolvio; (False, None) para
@@ -2156,7 +2180,9 @@ class Bot(ApproachKeysMixin):
                 self._dbg("recoger", "sin objetos validos")
                 return back, "sin objetos validos"
             return None
-        if self.pk["dismount"]:
+        if self.pk["dismount"] and self._dismounted:
+            logger.info("Objetos en el piso: %d validos -> ya estoy a pie (me baje con la vida baja)", len(valid))
+        elif self.pk["dismount"]:
             logger.info("Objetos en el piso: %d validos -> me bajo del caballo", len(valid))
             self._dbg("recoger", f"{len(valid)} objetos: me bajo")
             if not self._dismount("recoger"):

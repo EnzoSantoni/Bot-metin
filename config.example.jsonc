@@ -307,6 +307,10 @@
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
              "gone_cycles": 2, "reposition_after_z": 2, "reposition_frac": 0.5, "item_max_s": 15.0,
              "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
+             //  dismount_hp: atacando, cuando la vida del metin baja de esta fraccion (2 lecturas seguidas del panel) se baja
+             //  del caballo ya (Ctrl+G), para estar a pie cuando se rompe; si no se rompe sigue atacando a pie. Si el metin deja
+             //  de estar en curso sin romperse, se vuelve a subir. 0 = solo se baja al recoger.
+             "dismount_hp": 0.10,
              //  Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto entre
              //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
              //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos

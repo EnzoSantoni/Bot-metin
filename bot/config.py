@@ -169,6 +169,9 @@ DEFAULTS: dict[str, Any] = {
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
                "gone_cycles": 2, "reposition_after_z": 2, "reposition_frac": 0.5, "item_max_s": 15.0,
                "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
+               # dismount_hp: atacando, con la vida del metin por debajo de esta fraccion (2 lecturas seguidas) se baja del
+               # caballo YA (Ctrl+G), asi esta a pie cuando se rompe; si no se rompe sigue atacando a pie. 0 = solo al recoger.
+               "dismount_hp": 0.10,
                # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
                # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
@@ -1097,13 +1100,15 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
                     "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s", "max_z_per_item",
-                    "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio"),
+                    "skip_match_u", "final_look_s", "dismount_hp", "same_px", "near_px", "progress_window_s", "switch_ratio"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s",
           "max_z_per_item", "skip_match_u",
           "same_px", "near_px", "progress_window_s", "switch_ratio"))
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
+    if cfg["pickup"]["dismount_hp"] >= 1:
+        raise ConfigError("pickup.dismount_hp debe ser una fraccion < 1 (0.10 = 10% de vida; 0 = solo al recoger)")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
                      "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units",
                      "settle_s", "settle_frames", "edge_return_u"),
