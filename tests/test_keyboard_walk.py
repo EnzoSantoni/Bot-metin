@@ -188,12 +188,10 @@ def test_explorar_cerca_del_borde_con_el_tramo_alejandose_vuelve_al_centro(caplo
     assert any("alejandose del poligono" in t.reason for t in env.transitions)
 
 
-def test_barrido_completo_sin_nada_cerca_del_borde_vuelve_adentro():
+def test_barrido_vacio_cerca_del_borde_no_vuelve_al_centro_por_el_borde_va_al_punto_o_centro():
+    """Una vuelta vacia cerca del borde ya no dispara VOLVER: sigue con el tramo (punto del mapa o centro)."""
     env = SimEnv(4, cfg=kcfg(), start=START, speed=SPEED, phi=0.7)
     env.world.pos[:] = (x_at_sd(env, 12.0), 150.0)     # adentro pero a menos de border_margin (25) del borde
     env.bot.tracker.forget_reference()
-    env.run_until(lambda: any(t.new == "VOLVER" for t in env.transitions), max_s=120)
-    tr = next(t for t in env.transitions if t.new == "VOLVER")
-    assert "barrido completo" in tr.reason
-    env.run_until(lambda: env.bot.state is not State.VOLVER, max_s=120)
-    assert env.zone.signed_distance(tuple(env.world.pos)) >= float(env.cfg["explore"]["border_margin"]) - 4
+    env.run_until(lambda: env.bot._ex is not None and env.bot._ex.phase == "walk" and env.bot._ex.steps > 0, max_s=120)
+    assert not any("barrido completo" in t.reason for t in env.transitions)

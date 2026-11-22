@@ -155,7 +155,12 @@ DEFAULTS: dict[str, Any] = {
     "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
+               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0,
+               # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
+               # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
+               # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
+               # este esta a menos de esta fraccion de su distancia (histeresis).
+               "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
     # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
     # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
@@ -192,7 +197,12 @@ DEFAULTS: dict[str, Any] = {
                 # center_laps: vueltas de busqueda seguidas en el centro sin nada antes de permitir un tramo al azar.
                 # ground_scale_u: escala inicial (unidades del juego por unidad de piso), se aprende (ground_scale_ema) acotada a
                 # ground_scale_bounds x el inicial; ground_reach_u: alcance de ataque que se suma a lo recorrido al medirla.
-                "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+                "sweep_deg": 325.0, "sweep_max_factor": 1.5,
+                # Paso de la vuelta: sweep_step_deg grados por giro (campo de vision horizontal estimado ~70 grados con
+                # vision.ground.focal_frac 0.7: 30 grados deja ~57% de superposicion). En cada paso se analiza; un metin con
+                # nombre objetivo a <= sweep_attack_u del personaje (o a <= sweep_cut_floor de piso) se ataca ya, sin terminar
+                # la vuelta; una piedra se confirma con hover (hasta sweep_max_hovers por vuelta) y se guarda en la lista.
+                "sweep_step_deg": 30.0, "sweep_attack_u": 60.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
                 "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
                 "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
                 "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
@@ -445,6 +455,14 @@ DEFAULTS: dict[str, Any] = {
             "search_region": {"anchor": "center-right", "dx": -400, "dy": -180, "w": 400, "h": 374},
             "footer": {"template": "templates/captcha/pie.png", "offset": [24, 146]},
             "keypad": {"template": "templates/captcha/teclado.png", "offset": [9, 49]},
+            # Captcha de la FRASE: cartel dorado arriba al centro "la siguiente frase es: - - - p - - ...". El marco es el mismo
+            # de los anuncios del servidor, asi que ademas de la barra con las manijas (frame) se pide el texto fijo "la siguiente
+            # frase es:" en cualquier lugar del cuerpo del cartel (size = [ancho, alto] del cartel desde la barra); las letras
+            # que faltan completar no importan. search_region = donde buscar la barra.
+            "frase": {"search_region": {"anchor": "top-center", "dx": -500, "dy": 100, "w": 1000, "h": 140},
+                      "frame": {"template": "templates/captcha/frase_marco.png", "min_score": 0.8},
+                      "text": {"template": "templates/captcha/frase_texto.png", "min_score": 0.8},
+                      "size": [548, 66]},
         },
         # Pantalla de muerte (bot/vision/death.py): botones "Volver a Empezar Aqui" y "...en la Ciudad".
         # search = region (desde la esquina sup. izq. de la imagen) donde se buscan las plantillas.
@@ -856,6 +874,15 @@ def _validate_captcha_death(vision: dict) -> None:
         _require_text(a.get("template"), f"vision.captcha.{k}.template")
         _require_numbers(a.get("offset"), f"vision.captcha.{k}.offset", 2)
     _require_numbers(c.get("size"), "vision.captcha.size", 2)
+    fr = _require_dict(c.get("frase"), "vision.captcha.frase")
+    _require_numbers(fr.get("size"), "vision.captcha.frase.size", 2)
+    for k in ("frame", "text"):
+        a = _require_dict(fr.get(k), f"vision.captcha.frase.{k}")
+        _require_text(a.get("template"), f"vision.captcha.frase.{k}.template")
+        if not isinstance(a.get("min_score"), (int, float)) or not 0 < a["min_score"] <= 1:
+            raise ConfigError(f"vision.captcha.frase.{k}.min_score debe estar entre 0 y 1")
+    if _require_dict(fr.get("search_region"), "vision.captcha.frase.search_region").get("anchor") not in ANCHORS:
+        raise ConfigError(f"vision.captcha.frase.search_region.anchor invalido (usa {', '.join(ANCHORS)})")
     sr = _require_dict(c.get("search_region"), "vision.captcha.search_region")
     if sr.get("anchor") not in ANCHORS:
         raise ConfigError(f"vision.captcha.search_region.anchor invalido (usa {', '.join(ANCHORS)})")
@@ -1030,9 +1057,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("attack.clear_offsets_px debe ser una lista de pares [dx, dy]")
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
-                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"),
+                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s",
+                    "same_px", "near_px", "progress_window_s", "switch_ratio"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
-          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"))
+          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s",
+          "same_px", "near_px", "progress_window_s", "switch_ratio"))
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
@@ -1042,7 +1071,7 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     ex = cfg["explore"]
     for k in ("sweep_deg", "sweep_max_factor", "aim_tol_deg", "aim_max_turns", "candidate_keep_s", "candidate_merge_u",
               "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u", "sweep_cut_floor",
-              "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
+              "sweep_step_deg", "sweep_attack_u", "sweep_max_hovers", "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
         v = ex.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"explore.{k} debe ser un numero > 0")

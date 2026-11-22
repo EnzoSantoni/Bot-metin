@@ -432,7 +432,7 @@ def test_trabado_destraba_y_vuelve_al_estado_anterior():
 
 def test_destrabe_agota_intentos_y_va_al_centro():
     h = Harness(lambda h, n: perc(), stuck={"max_attempts": 4})
-    h.run_until(lambda: State.CENTRO in h.states())
+    h.run_until(lambda: State.CENTRO in h.states(), limit=1500)
     why = dict((s_, w) for s_, w in h.seen)[State.CENTRO]
     assert "4 intentos" in why and h.bot.stats.centros == 1
     ep = h.bot._ep
@@ -604,7 +604,8 @@ def test_explorar_barre_la_camara_y_ataca_si_aparece_un_metin():
         sweeps = h.keys("q") + h.keys("e")
         return perc(metins=[metin()] if sweeps >= 2 else [])
 
-    h = Harness(script)
+    h = Harness(script, explore={"sweep_step_deg": 180.0})   # vuelta de 2 pasos, cada uno de una sola pulsacion
+    h.bot.keynav.rate = 18000.0
     h.train_camera()
     h.run_until(lambda: State.ATACAR in h.states())
     assert h.states()[:2] == [State.EXPLORAR, State.ATACAR]
@@ -612,7 +613,8 @@ def test_explorar_barre_la_camara_y_ataca_si_aparece_un_metin():
 
 
 def test_explorar_sin_nada_camina_hacia_un_punto_del_poligono():
-    h = Harness(lambda h, n: perc())
+    h = Harness(lambda h, n: perc(), explore={"sweep_step_deg": 180.0})   # vuelta de 2 pasos
+    h.bot.keynav.rate = 18000.0
     h.run_until(lambda: h.clicks() >= 1)
     assert h.keys("q") + h.keys("e") == 2          # primero el barrido
     assert h.bot._ex.phase == "walk" and h.bot.zone.accepts(h.bot._ex.target)

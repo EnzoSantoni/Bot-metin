@@ -46,20 +46,21 @@ def laps(caplog):
 def test_una_sola_vuelta_elige_el_mas_cercano_y_gira_directo(caplog):
     caplog.set_level(logging.INFO)
     env = env_for(FACING_WEST)
-    near = env.world.add_metin((600.0, 150.0), name=OSC)     # 40 u al este
-    env.world.add_metin((640.0, 170.0), name=OSC)            # 89 u
-    env.world.add_metin((690.0, 130.0), name=NEG)            # 132 u
+    near = env.world.add_metin((650.0, 150.0), name=OSC)     # 90 u al este (mas lejos que explore.sweep_attack_u)
+    env.world.add_metin((680.0, 175.0), name=OSC)            # 125 u
+    env.world.add_metin((700.0, 130.0), name=NEG)            # 145 u
     assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
     assert env.world.clicks_on_metin[0][1] is near
     ms = msgs(caplog)
     lap = [m for m in ms if m.startswith("Vuelta de busqueda: ") and "candidatos (mejor" in m]
-    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (600," in lap[0]
+    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (650," in lap[0]
     assert laps(caplog) == 1   # una vuelta, no mas
-    assert count(caplog, "Giro hacia el candidato en (600, 150) del mapa") == 1
+    assert count(caplog, "Giro hacia el candidato en (650, 150) del mapa") == 1
     assert not any("sin nueva vuelta" in m for m in ms)
-    # la escala del juego se estima bien: el candidato quedo a 40 u +- 15 %
-    first = next(m for m in ms if m.startswith("Candidato: metin_de_oscuridad en (600"))
-    assert "a 40 u" in first or "a 39 u" in first or "a 41 u" in first
+    # la escala del juego se estima bien: el candidato quedo a 90 u +- 15 %
+    first = next(m for m in ms if m.startswith("Candidato: ") and " en (650" in m)
+    d = int(first.split(" a ")[1].split(" u")[0])
+    assert 77 <= d <= 103
 
 
 def test_empate_de_distancia_gana_el_mas_cerca_del_centro(caplog):

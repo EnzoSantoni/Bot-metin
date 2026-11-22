@@ -262,6 +262,8 @@ class _Pickup:
     cur: _Cur | None = None
     ignored: list = field(default_factory=list)     # puntos de pantalla de objetos abandonados
     anchor: tuple[int, int] | None = None           # posicion del jugador a la que vale `ignored`
+    tracked: list = field(default_factory=list)     # objetos validos vistos: [punto de pantalla, ciclos seguidos sin verlo]
+    z_t: float = -math.inf                          # instante del ultimo Z (de cualquier objeto)
 
 
 @dataclass
@@ -278,6 +280,9 @@ class _Explore:
     aim: Candidate | None = None       # candidato de la lista hacia el que se gira (fase "aim")
     aim_turns: int = 0                 # giros hechos para ponerlo al frente
     aim_walks: int = 0                 # tramos caminados hacia el porque no aparecia en pantalla (fase "cwalk")
+    hovered: list = field(default_factory=list)   # posiciones del mapa de piedras ya confirmadas con hover en esta vuelta
+    last_secs: float = 0.0             # segundos de tecla del ultimo paso de la vuelta (para afinar el giro por segundo)
+    hov: tuple | None = None           # hover pendiente de resolver: (punto de pantalla, posicion del mapa)
 
 
 @dataclass
@@ -2080,7 +2085,7 @@ class Bot:
     def _pickup_follow(self, cur: _Cur, pending: list) -> Any | None:
         """Etiqueta del objeto actual en esta captura (la mas cercana a su ultimo punto) o None. Tras caminar la etiqueta
         se corre en pantalla: radio `track_px` + `full_step_px`."""
-        lim = float(self.pk["track_px"]) + (float(self.pk["full_step_px"]) if cur.moved else 0.0)
+        lim = float(self.pk["same_px"]) if not cur.moved else float(self.pk["track_px"]) + float(self.pk["full_step_px"])
         near = [i for i in pending if math.dist(i.click_point, cur.point) <= lim]
         if not near:
             return None
@@ -2089,6 +2094,7 @@ class Bot:
     def _pickup_step(self, k: _Pickup, p: Perception, t: float, pos: tuple[int, int] | None, pending: list) -> None:
         """Un ciclo de recogida (sin clics) sobre el objeto actual: Z cada `z_interval_s` mientras su etiqueta siga; si no
         desaparece, reacomodo a los `reposition_s` y abandono a los `item_max_s`."""
+        self._pickup_progress(k, p, t, pending)
         cur = k.cur
         if cur is not None and t - cur.start_t >= float(self.pk["item_max_s"]):
             logger.info("Recoger: me rindo con el objeto (%d, %d) tras %.0f s", cur.point[0], cur.point[1], t - cur.start_t)
@@ -2108,16 +2114,19 @@ class Bot:
                     cur.gone += 1
                     if cur.gone < int(self.pk["gone_cycles"]):
                         return   # puede ser un parpadeo: espero otra captura
-                    self.stats.items += 1
-                    logger.info("Recoger: objeto (%d, %d) recogido tras %d Z (%.1f s)", cur.point[0], cur.point[1],
-                                cur.z, t - cur.start_t)
-                    k.cur = cur = None
+                    k.cur = cur = None   # (el conteo de recogidos lo hace `_pickup_progress`)
         feet = feet_of(p.player_xy, self.cfg)
-        if cur is None:
-            if not pending:
-                return
-            it = min(pending, key=lambda i: ground_dist(feet, self._item_point(i), p.shape, self.cfg))
-            k.cur = cur = _Cur(it.click_point, t)
+        if pending:   # objeto actual = el mas cercano a los pies (con histeresis: otro lo reemplaza si esta mucho mas cerca)
+            def fd(i: Any) -> float:
+                return ground_dist(feet, self._item_point(i), p.shape, self.cfg)
+            nearest = min(pending, key=fd)
+            if cur is not None and it is not None and nearest is not it                     and fd(nearest) < float(self.pk["switch_ratio"]) * fd(it):
+                k.cur = cur = it = None
+            if cur is None:
+                it = nearest
+                k.cur = cur = _Cur(it.click_point, t)
+        elif cur is None:
+            return
         cur.point, cur.gone = it.click_point, 0
         pt = self._item_point(it)
         d = math.dist(pt, feet)
@@ -2139,10 +2148,37 @@ class Bot:
         if t - cur.z_t < float(self.pk["z_interval_s"]):
             return   # esperando que el ultimo Z haga efecto
         cur.z += 1
-        cur.z_t = t
+        cur.z_t = k.z_t = t
         k.presses += 1
         logger.info("Recoger: objeto (%d, %d): Z (%d) esperando que desaparezca", cur.point[0], cur.point[1], cur.z)
         self.gi.press("pickup")
+
+    def _pickup_progress(self, k: _Pickup, p: Perception, t: float, pending: list) -> None:
+        """Seguimiento de TODOS los objetos validos: cada Z junta el mas cercano al personaje (no necesariamente el actual).
+        Un objeto cerca de los pies que desaparece (`gone_cycles` capturas) con un Z reciente (`progress_window_s`) y sin que
+        el personaje haya caminado es una recogida: cuenta en `stats.items`, y el objeto actual se vuelve a elegir (contador
+        de Z, reloj de reacomodo y de abandono desde cero)."""
+        cur = k.cur
+        counting = (cur is None or not cur.moved) and t - k.z_t <= float(self.pk["progress_window_s"])
+        same, feet = float(self.pk["same_px"]), feet_of(p.player_xy, self.cfg)
+        alive: list = []
+        done = 0
+        for q, n in k.tracked:
+            near = [i for i in pending if math.dist(i.click_point, q) <= same]
+            if near:
+                alive.append([min(near, key=lambda i: math.dist(i.click_point, q)).click_point, 0])
+            elif counting and n + 1 < int(self.pk["gone_cycles"]):
+                alive.append([q, n + 1])   # puede ser un parpadeo: se espera otra captura
+            elif counting and math.dist(q, feet) <= float(self.pk["near_px"])                     and not any(math.dist(q, g) <= float(self.pk["track_px"]) for g in k.ignored):   # abandonado: no se cuenta
+                done += 1
+        for i in pending:
+            if not any(math.dist(i.click_point, q) <= same for q, _ in alive):
+                alive.append([i.click_point, 0])
+        k.tracked = alive
+        if done:
+            self.stats.items += done
+            logger.info("Recoger: %d objeto(s) recogido(s) (desaparecieron tras Z)", done)
+            k.cur = None
 
     def _pickup_walk(self, p: Perception, pt: tuple[float, float], d: float) -> None:
         """Un tramo hacia el objeto en `pt` (a `d` px de los pies): sector de 45 grados de su direccion sobre el piso ->
@@ -2348,15 +2384,11 @@ class Bot:
         if x.phase == "sweep":
             if not self._turn_ready():   # el paso anterior todavia se esta analizando (tiempo y capturas)
                 return None
-            if x.steps < int(self.ex["camera_steps"]):
-                self._search_turn(x.dir, float(self.ex["camera_step_s"]))
+            if x.steps < self._lap_steps():
+                self._search_turn(x.dir, self._step_seconds())
                 x.steps += 1
             else:
-                pos = self.tracker.position
-                if pos is not None and self.zone.signed_distance(pos) < float(self.ex["border_margin"]):
-                    self._vl_margin = float(self.ex["border_margin"])   # esta vuelta termina bien adentro, no solo a explore_margin
-                    return State.VOLVER, "barrido completo sin ver nada util cerca del borde"
-                self._new_leg(x, t)
+                self._new_leg(x, t)   # (VOLVER solo si esta fuera de la zona: lo decide el chequeo de arriba)
             return None
         if x.spot is not None:
             pos = self.tracker.position
@@ -2410,23 +2442,80 @@ class Bot:
         if x.sw_prev is None and self._start_aim(x, t, pos, "Lista de candidatos (sin nueva vuelta)"):
             return None
         if x.sw_prev is not None:
-            x.sw_acc += abs(math.degrees(_wrap(h - x.sw_prev)))
+            turned = abs(math.degrees(_wrap(h - x.sw_prev)))
+            x.sw_acc += turned
+            if x.last_secs > 0 and turned > 1.0:   # el cono mide lo que giro de verdad: se afina el giro por segundo
+                self.keynav.learn_rate(math.radians(turned), x.last_secs)
+            logger.debug("Vuelta: paso %d giro %.0f grados medidos (pedido %.0f)", x.steps, turned,
+                         float(self.ex["sweep_step_deg"]))
         x.sw_prev = h
         ranked, worlds = self._harvest(p, t, h, pos)
+        self._resolve_hover(p, t, x)
         if self._cur is None:
-            cut = float(self.ex["sweep_cut_floor"])
+            cut, near_u = float(self.ex["sweep_cut_floor"]), float(self.ex["sweep_attack_u"])
             for i, ((g, d), w) in enumerate(zip(ranked, worlds)):
-                if g.kind == "etiqueta" and d <= cut:   # pegado al personaje: no hay nada mas cerca que valga la pena buscar
+                if g.kind == "etiqueta" and (d <= cut or math.dist(w, pos) <= near_u):   # con nombre y cerca: directo a atacarlo
                     out = self._take_goal(ranked, i, p, t, "metin muy cercano durante la vuelta")
                     if out is not None:
                         self.cands.remove_near(w, float(self.ex["candidate_merge_u"]))
                         return out
-        cap = math.ceil(int(self.ex["camera_steps"]) * float(self.ex["sweep_max_factor"]))
+        if self._sweep_hover(p, t, x, ranked, worlds):
+            return None
+        cap = math.ceil(self._lap_steps() * float(self.ex["sweep_max_factor"]))
         if x.sw_acc < float(self.ex["sweep_deg"]) and x.steps < cap:
-            self._search_turn(x.dir, float(self.ex["camera_step_s"]))
+            x.last_secs = self._step_seconds()
+            self._search_turn(x.dir, x.last_secs)
             x.steps += 1
             return None
         return self._finish_lap(x, t, pos)
+
+    def _lap_steps(self) -> int:
+        """Pasos de una vuelta completa (360 grados) con `explore.sweep_step_deg` por paso."""
+        return math.ceil(360.0 / float(self.ex["sweep_step_deg"]))
+
+    def _step_seconds(self) -> float:
+        """Segundos de tecla de un paso de la vuelta (con el giro por segundo de `keynav`)."""
+        return math.radians(float(self.ex["sweep_step_deg"])) / self.keynav.rate
+
+    def _sweep_hover(self, p: Perception, t: float, x: _Explore, ranked: list, worlds: list) -> bool:
+        """Frena en la primera piedra sin confirmar de la vista (ni lejana a otra ya confirmada): hover sobre su cuerpo para que
+        el juego muestre el nombre; el proximo ciclo (compuerta de giro) lo resuelve. True si hizo el hover."""
+        if len(x.hovered) >= int(self.ex["sweep_max_hovers"]):
+            return False
+        merge = float(self.ex["candidate_merge_u"])
+        for (g, _), w in zip(ranked, worlds):
+            if g.kind != "piedra" or any(math.dist(w, hw) <= merge for hw in x.hovered):
+                continue
+            pt = g.ref.far.rect.center
+            if not self.gi.hover_at(*pt, p.mask):
+                continue
+            x.hovered.append(w)
+            x.hov = (pt, w)
+            logger.info("Vuelta: freno en una piedra en %s (mapa (%.0f, %.0f)): hover para leer el nombre", pt, w[0], w[1])
+            self._sleep(float(self.apr["hover_wait_s"]))
+            self._turn_t, self._turn_frame = self.clock(), self._frames   # se analiza antes del proximo giro
+            return True
+        return False
+
+    def _resolve_hover(self, p: Perception, t: float, x: _Explore) -> None:
+        """Resultado del hover de la vuelta: nombre de otro tipo -> se saca de la lista y se ignora; objetivo -> ya quedo en la
+        lista como etiqueta (la cosecha la fusiona con la piedra); sin nombre -> queda como piedra sin confirmar."""
+        if x.hov is None:
+            return
+        pt, w = x.hov
+        x.hov = None
+        lim = float(self.apr["hover_label_px"])
+        near = [d for d in p.metins if math.dist(d.click_point, pt) <= lim]
+        if not near:
+            logger.info("Hover de la vuelta en %s: sin nombre, queda como piedra sin confirmar", pt)
+            return
+        d = min(near, key=lambda d: math.dist(d.click_point, pt))
+        if d.is_target:
+            logger.info("Hover de la vuelta en %s: %s (objetivo), guardado en la lista", pt, d.name)
+            return
+        self.cands.remove_near(w, float(self.ex["candidate_merge_u"]))
+        self._ignore_position(self._game_pos_of(pt, p), t, f"otro tipo en el hover ({d.name})", pt)
+        logger.info("Hover de la vuelta en %s: %s (otro tipo), fuera de la lista", pt, d.name)
 
     def _finish_lap(self, x: _Explore, t: float, pos: Xy) -> Transition:
         """Fin de la vuelta: hacia el mejor candidato; sin ninguno, al punto del mapa de metin o al centro."""
@@ -2437,9 +2526,6 @@ class Bot:
             self._new_sweep()
             return None
         logger.info("Vuelta de busqueda: 0 candidatos")
-        if self.zone.signed_distance(pos) < float(self.ex["border_margin"]):
-            self._vl_margin = float(self.ex["border_margin"])   # esta vuelta termina bien adentro, no solo a explore_margin
-            return State.VOLVER, "barrido completo sin ver nada util cerca del borde"
         self._new_leg(x, t, empty_lap=True)
         return None
 
