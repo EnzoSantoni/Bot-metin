@@ -274,10 +274,10 @@ class ApproachKeysMixin:
                 self._zero_streak = 0
         near = floor_d <= float(self.apr["near_floor"]) or a.force_click   # cerca: clic directo, sin alinear la vista
         dx = tgt.base[0] - p.player_xy[0]
-        if a.last_dx is not None:   # un giro de alineacion ya dado: si alejo la piedra del centro, Q/E esta al reves
+        if a.last_dx is not None:   # el sentido de Q/E es fijo: si el giro alejo la piedra, el proximo se mide de nuevo
             if abs(dx) > abs(a.last_dx) + 0.25 * float(self.apr["center_tol_px"]):
-                a.turn_sign = -a.turn_sign
-                logger.info("El giro alejo la piedra del centro (%.0f -> %.0f px): invierto el sentido de Q/E", a.last_dx, dx)
+                logger.info("El giro alejo la piedra del centro (%.0f -> %.0f px): vuelvo a medir el giro (Q/E no cambia de "
+                            "sentido)", a.last_dx, dx)
             a.last_dx = None
         if not near:
             return self._approach_move(p, a, pos, floor_d, dx)
@@ -292,7 +292,7 @@ class ApproachKeysMixin:
         elif a.turns < int(self.apr["align_turns_max"]):
             if not self._turn_ready():
                 return None   # se espera la imagen del giro anterior
-            delta = self._bearing_to(a.last_screen, p) * a.turn_sign
+            delta = self._bearing_to(a.last_screen, p)   # medido en esta captura (el sentido de Q/E no se invierte)
             key, secs = self.keynav.plan_turn(delta)
             logger.info("Acercandome: la piedra esta a %+.0f px del centro (piso %.1f): giro la vista %.0f grados (%s %.2f s)",
                         dx, floor_d, math.degrees(delta), key, secs)

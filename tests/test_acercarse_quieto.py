@@ -326,3 +326,25 @@ def test_bloqueado_girando_en_circulo_sin_bichos_no_aprieta_espacio(caplog):
     bot._unblock(a, "girando en circulo", 6.0, p)
     assert not any(e == ("key_down", env.backend.k_space) for e in env.backend.events)
     assert not any("Bloqueado atacando" in m and "ESPACIO" in m for m in msgs(caplog))
+
+
+# ---------------------------------------------------------------- el sentido de Q/E no se invierte a mitad de corrida
+def test_un_giro_que_aleja_la_piedra_no_invierte_q_e_y_vuelve_a_medir(caplog):
+    """Antes: si un giro de alineacion alejaba la piedra del centro se invertia el sentido de Q/E. Ahora el sentido es fijo:
+    el proximo giro se calcula de nuevo con la piedra de esta captura (hacia donde esta)."""
+    from bot.bot import _Approach
+    from test_bot_states import PLAYER, Harness, metin, perc
+    caplog.set_level(logging.INFO)
+    h = Harness(lambda h, n: perc())
+    h.bot.tracker.update(perc().coords, h.clock())
+    far_pt = (PLAYER[0] + 590, 290)   # lejos (piso > near_floor) y a la derecha del centro
+    p = perc(metins=[metin(click=far_pt)])
+    a = _Approach(h.clock(), None, far_pt, spot=None, point=far_pt, floor_d=7.0, walk=True)
+    a.last_dx, a.rematch = -299.0, True   # el giro anterior la dejo a -299 px; ahora aparece a +590
+    h.bot._apr = a
+    h.bot._acercarse_keys(p, h.clock())
+    ms = msgs(caplog)
+    assert any("vuelvo a medir el giro" in m for m in ms) and not any("invierto" in m for m in ms)
+    turn = next(m for m in ms if m.startswith("Acercandome: la piedra esta a +"))
+    assert float(turn.split("giro la vista ")[1].split(" grados")[0]) > 0   # hacia la derecha, donde esta la piedra
+    assert not hasattr(a, "turn_sign")

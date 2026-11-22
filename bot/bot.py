@@ -327,7 +327,6 @@ class _Approach:
     floor_d: float | None = None       # distancia de piso de la piedra cuando se la eligio
     walk: bool = False                 # acercamiento con teclado (alinear con Q/E, W hasta cerca, frenar, un clic quieto)
     turns: int = 0                     # giros de alineacion seguidos sin centrar la piedra
-    turn_sign: int = 1                 # -1 si el ultimo giro alejo la piedra del centro (sentido de Q/E al reves)
     last_dx: float | None = None       # distancia horizontal de la piedra al centro antes del ultimo giro
     rematch: bool = False              # recien se giro la vista: la piedra puede haber saltado lejos del ultimo punto
     force_click: bool = False          # trabado sin bichos pero cerca (`approach.stuck_click_floor`): clic en vez de seguir
