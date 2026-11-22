@@ -255,10 +255,10 @@ def test_config_nueva():
     assert (a["confirm_wait_s"], a["quick_reclicks"], a["label_click_up_frac"]) == (1.5, 2, 0.37)
     assert "confirm_check_s" not in a and a["min_click_gap_s"] == 1.5 and a["panel_recover"] is True
     ap = DEFAULTS["approach"]
-    assert ap["keys_enabled"] is True and ap["click_floor"] == 2.0 and ap["max_clicks"] == 4
+    assert ap["keys_enabled"] is True and ap["near_floor"] == 4.0 and "click_floor" not in ap and ap["max_clicks"] == 4
     for sec, key, bad in (("stuck", "fast_s", 0), ("attack", "confirm_wait_s", 0), ("attack", "quick_reclicks", -1),
                           ("attack", "min_click_gap_s", -1), ("attack", "panel_recover", "si"),
-                          ("approach", "click_floor", 0), ("approach", "keys_enabled", 1), ("approach", "max_clicks", 0),
+                          ("approach", "near_floor", 0), ("approach", "keys_enabled", 1), ("approach", "max_clicks", 0),
                           ("attack", "label_click_up_frac", 1.0), ("attack", "quick_up_px", "x"), ("attack", "arrive_px", -1)):
         cfg = copy.deepcopy(DEFAULTS)
         cfg[sec][key] = bad

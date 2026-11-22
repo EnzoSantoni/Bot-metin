@@ -399,18 +399,19 @@
                "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                "far_monsters_n": 2, "far_monsters_px": 200,
                "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
-               //  ACERCARSE CON TECLADO (navigation.mode = teclado): a mas de click_floor (distancia de piso) del metin elegido se
+               //  ACERCARSE CON TECLADO (navigation.mode = teclado): a mas de near_floor (distancia de piso) del metin elegido se
                //  alinea la vista con Q/E hasta que la piedra quede a <= center_tol_px del centro horizontal, se camina con W en
-               //  tramos de walk_chunk_s re-detectando la piedra y se FRENA al llegar a click_floor. Quieto (quiet_reads
+               //  tramos de walk_chunk_s re-detectando la piedra y se FRENA al llegar a near_floor. Quieto (quiet_reads
                //  lecturas de coordenadas iguales y settle_s sin teclas) se vuelve a ubicar la piedra en la captura nueva y se hace
                //  UN clic en el centro de su cuerpo. Sin confirmar: otro clic quieto; a los max_clicks se elige otro (la posicion
                //  se ignora retry_ignore_s, no se descarta). align_turns_max giros seguidos sin centrar: se camina igual.
                //  Tramos de W sin avanzar: con bichos ESPACIO; sin bichos se cancela el acercamiento (o clic si ya
                //  esta a <= stuck_click_floor). keys_enabled=false vuelve al clic que camina solo.
                //  near_floor: metin objetivo "cerca" (distancia de piso). Durante la vuelta de busqueda o al girar hacia un
-               //  candidato, uno con nombre a esta distancia o menos se ataca en ese momento, aunque haya otros o falte vuelta.
+               //  candidato, uno con nombre a esta distancia o menos se ataca en ese momento, aunque haya otros o falte vuelta;
+               //  en pantalla se le hace clic directo, sin girar la vista para centrarlo.
                "near_floor": 4.0,
-               "keys_enabled": true, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+               "keys_enabled": true, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
                "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
                "stuck_click_floor": 4.0,
                //  ELECCION: una etiqueta objetivo va antes que una piedra sin etiqueta, salvo que la distancia de piso de la

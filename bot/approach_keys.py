@@ -1,9 +1,10 @@
 """Acercarse a un metin con el teclado, ritmo de clics y recuperacion del panel (mixin de `Bot`).
 
 Regla: nunca se hace clic con el personaje en movimiento ni dos clics izquierdos a menos de `attack.min_click_gap_s`. Un metin
-lejano (distancia de piso > `approach.click_floor`) se alcanza asi: alinear la vista con Q/E hasta que la piedra quede cerca del
-centro horizontal, caminar con W en tramos cortos re-detectando la piedra, frenar al llegar a `click_floor` y, QUIETO, hacer
-UN clic en el centro del cuerpo de la piedra (nunca en el nombre ni en la franja de abajo). Sin confirmar, ATACAR reclickea quieto
+objetivo en pantalla y CERCA (distancia de piso <= `approach.near_floor`) se ataca con un clic directo en su cuerpo, sin girar
+la vista para centrarlo. Uno lejano se alcanza asi: alinear la vista con Q/E hasta que la piedra quede cerca del centro
+horizontal, caminar con W en tramos cortos re-detectando la piedra, frenar al llegar a `near_floor` y, QUIETO, hacer UN clic
+en el centro del cuerpo de la piedra (nunca en el nombre ni en la franja de abajo). Sin confirmar, ATACAR reclickea quieto
 (`Bot._quick_check` / `Bot._reclick`, que respetan el mismo ritmo).
 
 Panel ausente (error del juego: atacando un metin a veces no aparece la barra de vida): `_try_recover` hace UN clic derecho
@@ -165,8 +166,8 @@ class ApproachKeysMixin:
     # ------------------------------------------------------------------ acercarse con teclado
     def _keys_approach(self, floor_d: float) -> bool:
         """El metin a distancia de piso `floor_d` se alcanza con teclado (alinear, W, frenar, clic quieto): modo teclado, con
-        coordenadas y mas lejos que `approach.click_floor`."""
-        return (self.kmode and bool(self.apr["keys_enabled"]) and floor_d > float(self.apr["click_floor"])
+        coordenadas y mas lejos que `approach.near_floor` (mas cerca: clic directo, sin girar la vista)."""
+        return (self.kmode and bool(self.apr["keys_enabled"]) and floor_d > float(self.apr["near_floor"])
                 and self.tracker.position is not None)
 
     def _start_walk(self, g: Any, ranked: list, i: int, p: Any, t: float) -> Any:
@@ -271,7 +272,7 @@ class ApproachKeysMixin:
                 logger.info("Acercandome: W sin avanzar y sin bichos pero a piso %.1f: hago el clic desde aca", floor_d)
                 a.force_click = True
                 self._zero_streak = 0
-        near = floor_d <= float(self.apr["click_floor"]) or a.force_click
+        near = floor_d <= float(self.apr["near_floor"]) or a.force_click   # cerca: clic directo, sin alinear la vista
         dx = tgt.base[0] - p.player_xy[0]
         if a.last_dx is not None:   # un giro de alineacion ya dado: si alejo la piedra del centro, Q/E esta al reves
             if abs(dx) > abs(a.last_dx) + 0.25 * float(self.apr["center_tol_px"]):
@@ -302,8 +303,8 @@ class ApproachKeysMixin:
                 a.last_screen = (p.player_xy[0], a.last_screen[1])
             self._search_turn(key, secs)
             return None
-        click_floor = float(self.apr["click_floor"])
-        chunk = float(self.apr["walk_chunk_s"]) * (0.5 if floor_d < 2 * click_floor else 1.0)
+        near_f = float(self.apr["near_floor"])
+        chunk = float(self.apr["walk_chunk_s"]) * (0.5 if floor_d < near_f + 2.0 else 1.0)   # tramos cortos cerca del freno
         if self._step(pos, "W", chunk, None) == "blocked":
             self._apr = None
             return State.BUSCAR, "no entra ni un tramo de W antes del limite de la zona"

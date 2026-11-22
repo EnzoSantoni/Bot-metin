@@ -94,6 +94,20 @@ def test_acerca_gira_camina_frena_y_hace_un_clic_quieto(caplog):
     assert not any(t.reason.startswith("trabado") for t in env.transitions)
 
 
+def test_metin_cerca_en_pantalla_clic_directo_sin_girar_la_vista(caplog):
+    """Metin objetivo en pantalla a piso ~3 (<= approach.near_floor), de costado: clic directo en su cuerpo, sin Q/E para
+    centrarlo ni ACERCARSE (antes giraba la vista y lo perdia)."""
+    caplog.set_level(logging.INFO)
+    env = kenv()
+    hist, clicks = watch(env)
+    env.world.add_metin((580.0, 115.0), name=OSC)   # ~40 u, a la derecha del centro
+    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=60) == "cond"
+    assert not key_events(env, set(env.backend.k_cam)), "no gira la vista para centrarlo"
+    assert not any("Acercandome:" in m for m in msgs(caplog))
+    assert not any(tr.new == "ACERCARSE" for tr in env.transitions)
+    assert len(clicks) == 1 and not moved_before(hist, clicks[0][0], 0.4)
+
+
 def test_si_el_panel_no_confirma_otro_clic_quieto_despues_de_1_5_s():
     env = kenv()
     hist, clicks = watch(env)

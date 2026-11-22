@@ -238,17 +238,18 @@ DEFAULTS: dict[str, Any] = {
                  "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                  "far_monsters_n": 2, "far_monsters_px": 200,
                  "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
-                 # ACERCARSE con teclado: a mas de click_floor (distancia de piso) se alinea la vista con Q/E hasta que la piedra
+                 # ACERCARSE con teclado: a mas de near_floor (distancia de piso) se alinea la vista con Q/E hasta que la piedra
                  # quede a <= center_tol_px del centro horizontal, se camina con W en tramos de walk_chunk_s (re-detectando la
-                 # piedra) y se FRENA al llegar a click_floor; quieto (quiet_reads lecturas iguales y settle_s sin tecla) un
+                 # piedra) y se FRENA al llegar a near_floor; quieto (quiet_reads lecturas iguales y settle_s sin tecla) un
                  # clic en el cuerpo. Sin confirmar, otro clic quieto y a los max_clicks se elige otro (sin descartar: la
                  # posicion se ignora retry_ignore_s). align_turns_max giros seguidos sin centrar -> se camina igual.
                  # Tramos de W sin avanzar (keynav: stuck): con bichos ESPACIO, si no se cancela el acercamiento (o se hace el clic si
                  # esta a <= stuck_click_floor).
                  # near_floor: metin objetivo "cerca" (distancia de piso): durante la vuelta de busqueda o al girar hacia un
-                 # candidato, uno con nombre a esta distancia o menos se ataca en ese momento (no se termina la vuelta).
+                 # candidato, uno con nombre a esta distancia o menos se ataca en ese momento (no se termina la vuelta), y en
+                 # pantalla se le hace clic directo (sin girar la vista para centrarlo).
                  "near_floor": 4.0,
-                 "keys_enabled": True, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+                 "keys_enabled": True, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
                  "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
                  "stuck_click_floor": 4.0,
                  "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
@@ -559,7 +560,7 @@ OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("appr
                  ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
                  ("attack", "confirm_check_s"),
                  # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
-                 ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"),
+                 ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"), ("approach", "click_floor"),
                  # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
                  ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
                  ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
@@ -1052,11 +1053,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
                       "blind_near_floor", "metin_outside_u",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
-                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s", "click_floor",
+                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s",
                       "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
                       "align_turns_max", "stuck_click_floor"),
          ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
-          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries", "click_floor",
+          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries",
           "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
     if not isinstance(cfg["approach"].get("keys_enabled"), bool):
         raise ConfigError("approach.keys_enabled debe ser true o false")
