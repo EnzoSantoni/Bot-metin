@@ -184,13 +184,13 @@ def test_metin_en_la_franja_se_ataca_y_se_vuelve_adentro():
 
 # ---------------------------------------------------------------- 9. seleccion equivocada
 @pytest.mark.parametrize("n_wrong", [1, 2])
-def test_seleccion_equivocada_escape_y_sigue(n_wrong):
+def test_seleccion_equivocada_clic_directo_sin_escape_y_sigue(n_wrong):
     env = SimEnv(9, phi=2.0)
     m = env.world.add_metin((580, 150), name=OSC)
     env.world.wrong_select = n_wrong
     assert env.run_until(lambda: not m.alive, max_s=300) == "cond"
     esc = sum(1 for e in env.backend.events if e == ("key_down", "esc"))
-    assert esc >= n_wrong
+    assert esc == 0   # nunca Escape: abre el menu de opciones del juego
     assert [k for _, k, _ in env.world.selected_log][:n_wrong] == ["monster"] * n_wrong
 
 

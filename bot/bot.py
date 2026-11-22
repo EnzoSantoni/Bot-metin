@@ -24,6 +24,7 @@ from bot.config import resolve_path
 from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
+from bot.geometry import Rect
 from bot.ground import Goal, feet_of, ground_dist, rank_goals
 from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
@@ -31,6 +32,7 @@ from bot.perception import Perception, perceive
 from bot.spawns import Spot, SpawnMap, spawn_map_from_config
 from bot.tracking import CoordStats, CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
+from bot.vision.click_point import click_candidates, point_is_free, stone_rect_near
 from bot.vision.coords import read_coords
 from bot.vision.far_metin import FarMetin
 from bot.vision.minimap import camera_heading
@@ -160,6 +162,7 @@ class _Attack:
     quick_t: float = 0.0                        # hora del clic desde la que corre `attack.confirm_check_s`
     quick: int = 0                              # reclics rapidos hechos por clic sin panel (`attack.quick_reclicks`)
     floor_d: float | None = None                # distancia de piso del metin al hacer el clic (para aprender la escala del mapa)
+    walking: bool = False                       # el personaje camina hacia el metin (coordenadas cambiando): no se reclickea
 
 
 @dataclass
@@ -178,6 +181,21 @@ class _CurrentMetin:
     rounds: int = 0                    # veces que se agotaron los reclics por deseleccion
     unstick_n: int = 0                 # intentos de destrabe yendo al metin (escalera ESPACIO / costado)
     ladders: int = 0                   # veces que se agoto esa escalera (y se paso a DESTRABAR)
+
+
+@dataclass
+class _Resume:
+    """Metin que se atacaba al entrar a CAPTCHA: al salir se lo retoma directo (ver `Bot._pick_current`)."""
+    floor_d: float | None              # distancia de piso al hacer el clic (el personaje seguia caminando hacia el: solo se acerca)
+    until: float = 0.0                 # 0 = todavia en el captcha; despues, hora hasta la que vale (`attack.after_captcha_keep_s`)
+
+
+@dataclass
+class _MenuClose:
+    """Cierre del menu de opciones del juego en curso."""
+    since: float
+    clicks: int = 0
+    last_t: float = -math.inf
 
 
 @dataclass
@@ -362,6 +380,9 @@ class Bot:
         self._apr: _Approach | None = None
         self._sur: _Surround | None = None        # rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO caminando)
         self._cur_log_t = -math.inf               # ultimo "Busco el metin en curso" (sin spam)
+        self._resume: _Resume | None = None       # metin a retomar tras un captcha
+        self._walk_log_t = -math.inf              # ultimo aviso de "camina hacia el metin: no reclickeo"
+        self._menu: _MenuClose | None = None      # menu de opciones del juego abierto (se lo cierra con clic en Cancelar)
         self._labels_seen = False                 # el ultimo `_pick_goal` vio metin objetivo con etiqueta
         self._walk: _Walk | None = None
         self._pk: _Pickup | None = None
@@ -503,6 +524,11 @@ class Bot:
         if p.captcha is not None and self.state is not State.CAPTCHA:
             self._enter(State.CAPTCHA, "panel Bot Verify detectado")
             return
+        if p.menu is None:
+            self._menu = None
+        elif self.state not in (State.CAPTCHA, State.MUERTO, State.FIN):
+            self._close_menu(p, t)   # el menu de opciones tapa la pantalla: no se hace nada mas hasta cerrarlo
+            return
         if self._vl_acc and self.state not in (State.VOLVER, State.CENTRO, State.DESTRABAR):
             pos = self.tracker.position
             if pos is not None and self._inside_with_margin(pos):
@@ -517,6 +543,46 @@ class Bot:
         out = getattr(self, "_do_" + self.state.name.lower())(p, t)
         if out is not None and self.state is before:   # si el handler ya cambio de estado (captcha en una tecla) no se pisa
             self._enter(*out)
+
+    def _save_resume(self) -> None:
+        """Entra a CAPTCHA: si habia un ataque en marcha o un metin en curso, lo deja como metin en curso con su ultimo punto de
+        pantalla y su posicion en el mapa (la camara no se mueve durante el captcha), para retomarlo al salir."""
+        a = self._atk
+        if a is not None:
+            c = a.cm
+            if c is not None:
+                c.screen, c.rot = a.click, self.camera.rotations
+                if a.gp is not None:
+                    c.gp = a.gp
+                self._cur = c   # un ataque sin confirmar tambien se retoma
+            self._resume = _Resume(a.floor_d)
+        elif self._cur is not None:
+            self._resume = _Resume(None)
+        else:
+            self._resume = None
+
+    def _close_menu(self, p: Perception, t: float) -> None:
+        """Menu de opciones del juego abierto (nadie lo abre desde el bot: ya no se aprieta Escape): clic en su boton
+        "Cancelar" cada `game_menu.close_retry_s`; tras `game_menu.close_clicks` clics sin cerrarlo, la tecla
+        `controls.close_menu` (Escape: con el menu abierto SI lo cierra)."""
+        gm = self.cfg["vision"]["game_menu"]
+        m = self._menu
+        if m is None:
+            m = self._menu = _MenuClose(t)
+            logger.warning("Menu de opciones del juego abierto: lo cierro con un clic en Cancelar")
+            self._dbg("menu", "menu de opciones abierto")
+        if t - m.last_t < float(gm["close_retry_s"]):
+            return
+        m.last_t = t
+        if m.clicks >= int(gm["close_clicks"]):
+            logger.warning("El menu sigue abierto tras %d clics en Cancelar: uso la tecla de cierre del menu", m.clicks)
+            try:
+                self.gi.press("close_menu")
+            except KeyError:
+                logger.warning("No hay controls.close_menu en la configuracion: no se puede cerrar el menu con teclado")
+            return
+        m.clicks += 1
+        self.gi.click_at(*p.menu.cancel_point, p.mask)
 
     def _account(self, t: float) -> None:
         d = self.stats.time_by_state
@@ -540,8 +606,14 @@ class Bot:
         if old in (State.VOLVER, State.CENTRO) and self._vl_since is not None:
             self._vl_acc += self.clock() - self._vl_since
             self._vl_since = None
+        if new is State.CAPTCHA:
+            self._save_resume()
         if old is State.CAPTCHA and self._cur is not None:
             self._cur.last_seen_t = self.clock()   # el tiempo del captcha no cuenta para soltar el metin en curso
+            if self._resume is not None:
+                self._resume.until = self.clock() + float(self.atk["after_captcha_keep_s"])
+                logger.info("Salgo del captcha: retomo el metin que atacaba (%.0f s sin soltarlo)",
+                            float(self.atk["after_captcha_keep_s"]))
         if old is State.ATACAR and self._scan is not None:   # no se sale de ATACAR con la camara girada
             if new in (State.CAPTCHA, State.MUERTO, State.FIN):
                 self._scan = None
@@ -611,7 +683,7 @@ class Bot:
             p = self.last_perception
             lines = [f"[{kind}] pos={pos} {zone}", camline, f"destino={dest} clic={self._planned}",
                      f"etiquetas={len(p.metins)} lejanas={len(p.far_metins)} monstruos={len(p.monsters)} "
-                     f"(cerca {p.monsters_near})"]
+                     f"(cerca {p.monsters_near}, encima {p.monsters_on_me})"]
             self.debug.record(self._img, p, self.state.name, reason, lines, self._planned,
                               f"{kind} pos={pos} {zone} | {camline} | destino={dest} clic={self._planned}", kind=kind)
         except Exception:  # noqa: BLE001
@@ -862,9 +934,8 @@ class Bot:
         self.discarded.extend(s for s in spots if s is not None)
 
     def _discard(self, a: _Attack, reason: str, p: Perception, t: float) -> Transition:
-        self._add_discard(a, t)
-        self.gi.press("deselect")
-        self._atk = self._cur = None
+        self._add_discard(a, t)   # sin Escape: abre el menu de opciones; la seleccion cambia con el proximo clic en un metin
+        self._atk = self._cur = self._resume = None
         self._dbg("descarte", f"metin descartado ({reason})")
         return State.BUSCAR, f"metin descartado ({reason})"
 
@@ -958,7 +1029,7 @@ class Bot:
         g = ranked[i][0]
         if g.kind == "etiqueta":
             c: _Cand = g.ref
-            if not self._click_attack(self._aim(c.det, p), c.gp, p, t, ranked[i][1]):
+            if not self._click_attack(self._clear_point(self._aim(c.det, p), p), c.gp, p, t, ranked[i][1]):
                 return None
             self._log_choice(ranked, i)
             self._no_target_t = t
@@ -996,8 +1067,11 @@ class Bot:
         vio (`attack.keep_with_others_s` si hay otro metin objetivo con etiqueta a la vista), lo suelta (y sigue la eleccion
         normal: `_cur` queda None)."""
         c = self._cur
+        r = self._resume
+        if r is not None and r.until and t >= r.until:
+            r = self._resume = None
         found: list[tuple[float, tuple[int, int], Xy | None]] = []
-        for g, _ in ranked:
+        for g, fd in ranked:
             if g.kind == "etiqueta":
                 cand: _Cand = g.ref
                 screen, gp, point = cand.det.click_point, cand.gp, self._aim(cand.det, p)
@@ -1005,6 +1079,8 @@ class Bot:
                 fc: _FarCand = g.ref
                 screen, gp, point = fc.far.center, fc.gp, fc.far.rect.center
             d = self._current_dist(screen, gp)
+            if d is None and r is not None and r.until and g.kind == "etiqueta" and self._resumed_here(r, fd):
+                d = 10_000.0 + fd   # tras un captcha: el mismo metin al que se iba caminando (ya mas cerca), ultima opcion
             if d is not None:
                 found.append((d, point, gp))
         for _, point, gp in sorted(found, key=lambda e: e[0]):
@@ -1016,6 +1092,8 @@ class Bot:
             return State.ATACAR, attack_why + " (en curso)"
         lost = t - c.last_seen_t
         others = any(g.kind == "etiqueta" for g, _ in ranked)   # otro metin objetivo con etiqueta a la vista
+        if r is not None:
+            others = False   # `attack.after_captcha_keep_s` tras el captcha no se lo suelta por "hay otro a la vista"
         keep = float(self.atk["keep_with_others_s"] if others else self.atk["target_keep_s"])
         if lost >= keep:
             logger.info("Abandono el metin en curso: no lo encuentro hace %.0f s%s", lost,
@@ -1025,6 +1103,11 @@ class Bot:
             self._cur_log_t = t
             logger.info("Busco el metin en curso (%.0f s de %.0f)", lost, keep)
         return None
+
+    def _resumed_here(self, r: _Resume, floor_d: float) -> bool:
+        """Despues de un captcha, una etiqueta objetivo a distancia de piso `floor_d` es el metin que se atacaba si el personaje
+        seguia caminando hacia el (el clic lo hace ir solo) y ahora esta tan cerca o mas que al hacer el clic."""
+        return r.floor_d is not None and floor_d <= r.floor_d * 1.1 + 0.2
 
     def _current_for(self, point: tuple[int, int], gp: Xy | None, p: Perception, t: float) -> _CurrentMetin:
         """Contadores del metin al que se hace clic: si es el que ya estaba en curso se lo conserva (con sus contadores); si no,
@@ -1056,7 +1139,40 @@ class Bot:
         return (any(math.dist(d.click_point, pt) <= radius for d in p.metins)
                 or any(min(math.dist(f.center, pt), math.dist(f.rect.center, pt)) <= radius for f in p.far_metins))
 
-    def _clear_point(self, point: tuple[int, int], p: Perception) -> tuple[int, int]:
+    def _stone_rect(self, point: tuple[int, int], p: Perception) -> Rect | None:
+        """Cuerpo de la piedra de `point`: el rect de la piedra lejana que esta ahi o, si no, el bloque de color de piedra
+        medido en la captura (`click_point.stone_search`) que contiene al punto."""
+        lim = float(self.apr["label_match_px"])
+        under = [f for f in p.far_metins if min(math.dist(f.center, point), math.dist(f.rect.center, point)) <= lim]
+        if under:
+            return min(under, key=lambda f: math.dist(f.rect.center, point)).rect
+        if self._img is None:
+            return None
+        r = stone_rect_near(self._img, point, self.cfg)
+        if r is None or not (r.x - 12 <= point[0] < r.right + 12 and r.y - 12 <= point[1] < r.bottom + 12):
+            return None
+        return r
+
+    def _clear_point(self, point: tuple[int, int], p: Perception, attempt: int = 0) -> tuple[int, int]:
+        """Punto de clic sobre la parte VISIBLE de la piedra de `point`: dentro de su cuerpo, fuera de la columna bajo cada
+        etiqueta de monstruo (la silueta), de la etiqueta propia y de zonas sin color de piedra (tronco, nieve)
+        (bot/vision/click_point.py). Con `attempt` > 0 (el panel se perdio enseguida con vida alta) el candidato siguiente
+        distinto de `point`. Sin piedra medible o sin candidato libre, el criterio anterior (distancia a las etiquetas)."""
+        rect = self._stone_rect(point, p) if self._img is not None else None
+        if rect is not None:
+            if attempt == 0 and point_is_free(self._img, point, p.monsters, p.own_label, self.cfg):
+                return point
+            cands = click_candidates(self._img, rect, p.monsters, p.own_label, self.cfg)
+            pts = [c.point for c in cands if attempt == 0 or math.dist(c.point, point) > 6]
+            if pts:
+                best = pts[0] if attempt == 0 else pts[(attempt - 1) % len(pts)]
+                if p.mask.allows(*best):
+                    logger.info("Punto de clic %s sin parte libre de la piedra: uso %s (intento %d, %d bichos encima)",
+                                point, best, attempt, p.monsters_on_me)
+                    return best
+        return self._clear_by_labels(point, p)
+
+    def _clear_by_labels(self, point: tuple[int, int], p: Perception) -> tuple[int, int]:
         """Punto de clic sobre el cuerpo de la piedra sin nombres de monstruos encima. Si `point` ya queda a mas de
         `attack.monster_clear_px` de toda etiqueta de monstruo, se usa tal cual; si no, el mas alejado de las etiquetas
         entre varios candidatos (centro y partes de la piedra lejana de abajo, y `point` con `attack.clear_offsets_px`)."""
@@ -1132,7 +1248,7 @@ class Bot:
 
     def _try_attack(self, cands: list[_Cand], p: Perception, t: float) -> bool:
         """Clic en el primer candidato cuyo clic se pueda mandar."""
-        return any(self._click_attack(self._aim(c.det, p), c.gp, p, t) for c in cands)
+        return any(self._click_attack(self._clear_point(self._aim(c.det, p), p), c.gp, p, t) for c in cands)
 
     # ------------------------------------------------------------------ ACERCARSE
     def _hover_label(self, p: Perception, a: _Approach) -> MetinDetection | None:
@@ -1213,7 +1329,7 @@ class Bot:
         if pos is not None:
             win = float(self.atk["blocked_s"])
             a.trail = [e for e in a.trail if t - e[0] <= win] + [(t, pos)]
-        self._update_walk(a, pos, t)
+        a.walking = self._update_walk(a, pos, t)
         panel = p.panel
         kind = panel.kind if panel is not None and panel.present else None
         if self._scan is not None and self._scan_guard(a, kind, t):
@@ -1233,17 +1349,19 @@ class Bot:
             what = panel.name or kind
             if self._count_wrong(a) >= int(self.atk["max_wrong_selections"]):
                 return self._discard(a, f"seleccion equivocada repetida ({what})", p, t)
-            if kind == "other" and p.monsters_near >= int(self.atk["wrong_monsters_min"]):
-                logger.info("Seleccion equivocada con %d monstruos cerca: ESPACIO, Escape y reclic en el metin",
-                            p.monsters_near)
-                self._dbg("equivocada", "monstruo seleccionado: ESPACIO + Escape")
-                if not self._hold_space():   # captcha: ya esta en CAPTCHA, sin mas teclas
-                    return None
-                self.tracker.forget_reference()
-                self.gi.press("deselect")
+            crowd = p.monsters_near >= int(self.atk["wrong_monsters_min"]) or p.monsters_on_me > 0
+            if kind == "other" and (crowd or not a.stone):
+                # Sin Escape (abre el menu de opciones): para dejar al monstruo se hace clic directo en el metin (punto despejado),
+                # con ESPACIO antes si hay bichos cerca o encima.
+                logger.info("Seleccion equivocada con %d monstruos cerca (%d encima): %sclic directo en el metin (sin Escape)", p.monsters_near,
+                            p.monsters_on_me, "ESPACIO y " if crowd else "")
+                self._dbg("equivocada", "monstruo seleccionado: " + ("ESPACIO + " if crowd else "") + "clic en el metin")
+                if crowd:
+                    if not self._hold_space():   # captcha: ya esta en CAPTCHA, sin mas teclas
+                        return None
+                    self.tracker.forget_reference()
                 a.pending = ("monstruo seleccionado", False)
                 return None
-            self.gi.press("deselect")
             self._atk = None
             if a.stone:   # el clic fue sobre una piedra sin etiqueta y era un monstruo: esa posicion no es un metin
                 self._ignore_position(a.gp, t, f"el clic selecciono otra cosa ({what})", a.click,
@@ -1264,7 +1382,6 @@ class Bot:
             if handled:
                 return out
         if self._zone_status() is ZoneStatus.OUTSIDE:
-            self.gi.press("deselect")
             self._atk = None
             if a.gp is None or not self.zone.accepts(a.gp):   # su posicion queda afuera (o no se sabe): no volver a caer
                 self._add_discard(a, t)
@@ -1291,7 +1408,7 @@ class Bot:
                     return self._unblock(a, "girando en circulo", stalled, p)
                 if stalled >= float(self.atk["reclick_stall_s"]):
                     return self._reclick(a, "la vida no baja", p, t)
-        elif t - max(a.last_click_t, a.progress_t) >= float(self.atk["confirm_timeout_s"]):
+        elif not a.walking and t - max(a.last_click_t, a.progress_t) >= float(self.atk["confirm_timeout_s"]):
             if a.reclicks >= 1 and self.tracker.is_stuck(t):   # ya se reintento una vez y no avanza
                 self._atk = None
                 return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
@@ -1368,6 +1485,11 @@ class Bot:
         si no es una deseleccion (reclic en el mismo metin)."""
         hp = a.last_hp
         low = hp is not None and hp <= float(self.atk["broken_hp_ratio"])
+        if not low and a.walking and a.confirmed:   # camina hacia el metin: se espera a que llegue (el reclic iria a un punto viejo)
+            if t - self._walk_log_t >= 5.0:
+                self._walk_log_t = t
+                logger.info("Panel perdido con vida %.0f%% pero el personaje camina hacia el metin: no reclickeo, espero", (hp or 0) * 100)
+            return True, None
         if not low:
             return True, self._deselected(a, p, t, hp)
         if self._stone_visible(a.click, p, float(self.atk["broken_gone_px"])):
@@ -1396,7 +1518,7 @@ class Bot:
         """Roto de verdad: cuenta, guarda la posicion en el mapa de metin y va a RECOGER."""
         self.stats.metins += 1
         logger.info("Metin roto (vida %.0f%%, %.0f s de ataque)", (hp or 0.0) * 100, elapsed)
-        self._atk = self._cur = None
+        self._atk = self._cur = self._resume = None
         pos = self.tracker.position
         if pos is not None:   # los candidatos alrededor del metin roto ya no existen
             n = self.cands.remove_near(pos, float(self.ex["candidate_broken_u"]))
@@ -1420,13 +1542,21 @@ class Bot:
                     return self._discard(a, "deseleccionado muchas veces", p, t)
                 logger.info("Panel perdido %d veces seguidas: dejo de reclickear y vuelvo a BUSCAR con el metin en curso",
                             int(self.atk["max_deselect_reclicks"]))
-                self.gi.press("deselect")
                 self._atk = None
                 return State.BUSCAR, "reclics por deseleccion agotados"
         if announce:
             logger.info("Panel perdido con vida %s: deseleccion, reclic en el mismo metin",
                         "?" if hp is None else f"{hp * 100:.0f}%")
         a.missing = a.gone = 0
+        if p.monsters_on_me > 0:   # bichos encima del personaje (nombres rojos pegados al amarillo): ESPACIO antes del reclic
+            logger.info("Bichos encima (%d etiquetas pegadas a mi nombre): ESPACIO antes del reclic", p.monsters_on_me)
+            self._dbg("bloqueado", f"deseleccion con {p.monsters_on_me} bichos encima: ESPACIO + reclic")
+            if not self._hold_space(float(self.atk["on_me_space_s"])):
+                return None
+            self.tracker.forget_reference()
+            a.last_click_t = a.last_drop_t = self.clock()
+            a.pending = ("deseleccion", False)   # el reclic sale en el ciclo siguiente, con captura fresca
+            return None
         return self._reclick(a, "deseleccion", p, t, count=False)
 
     def _update_walk(self, a: _Attack, pos: tuple[int, int] | None, t: float) -> bool:
@@ -1471,7 +1601,7 @@ class Bot:
             self._atk = None
             return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
         a.trail = []
-        if p.monsters_near >= int(self.stuck["monsters_min"]):
+        if p.monsters_near >= int(self.stuck["monsters_min"]) or p.monsters_on_me > 0:
             logger.info("Trabado yendo al metin (quieto %.1f s, vida sin bajar, monstruos cerca: %d), intento %d/%d: "
                         "ESPACIO y reclic en el mismo metin", quiet, p.monsters_near, n, mx)
             self._dbg("bloqueado", "trabado yendo al metin: ESPACIO + reclic")
@@ -1538,8 +1668,14 @@ class Bot:
             if not a.confirmed:
                 self._atk = None
                 return State.BUSCAR, "se perdio el metin de vista"   # sin ignorarlo: solo se perdio de vista
-            point = a.click
-        point = self._clear_point(point, p)   # sin nombres de monstruos encima
+            if p.panel is not None and p.panel.present and p.panel.kind == "target_metin" and not a.walking:
+                point = a.click   # el panel sigue mostrando el metin y el personaje esta quieto: su ultimo punto sigue valiendo
+            else:
+                logger.info("Sin reclic (%s): no veo la piedra en esta captura y no clickeo un punto viejo", why)
+                self._atk = None
+                return State.BUSCAR, "no veo la piedra para reclickear (el metin sigue en curso)"
+        swap = int(self.atk["lost_swap_after"])   # tras `lost_swap_after` panel perdidos seguidos con vida alta: otro punto de la piedra
+        point = self._clear_point(point, p, a.cm.deselects // swap if a.cm is not None else 0)
         logger.info("Reclic en %s (%s%s)", point, why, f", intento {a.reclicks}" if count else "")
         self.gi.click_at(*point, p.mask)   # sin mark_moving: el reclic no reinicia la ventana de trabado
         self._planned = a.click = point
@@ -1556,7 +1692,10 @@ class Bot:
         stones = [f for f in p.far_metins if f.allowed and math.dist(f.rect.center, a.click) <= lim]
         if stones:
             return min(stones, key=lambda f: math.dist(f.rect.center, a.click)).rect.center
-        return self._aim(cands[0].det, p) if cands else None
+        if cands:
+            return self._aim(cands[0].det, p)
+        only = [f for f in p.far_metins if f.allowed]   # la camara giro caminando: la unica piedra a la vista es la que se atacaba
+        return only[0].rect.center if len(only) == 1 else None
 
     # ------------------------------------------------------------------ angulo vertical de la camara
     def _pitch_capture(self) -> Any:
@@ -2936,7 +3075,7 @@ class Bot:
         if quiet < float(self.stuck["fast_s"]):
             return False
         n = p.monsters_near
-        crowd = n >= int(self.stuck["monsters_min"])
+        crowd = n >= int(self.stuck["monsters_min"]) or p.monsters_on_me > 0
         if sr.n >= int(self.stuck["surrounded_max"]):
             self._sur = None
             logger.info("Trabado caminando (%d monstruos cerca) tras %d reacciones sin avanzar: DESTRABAR", n, sr.n)

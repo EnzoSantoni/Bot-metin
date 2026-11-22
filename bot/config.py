@@ -40,7 +40,10 @@ DEFAULTS: dict[str, Any] = {
     "controls": {
         "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
         "camera_left": "q", "camera_right": "e",
-        "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d", "deselect": "esc",
+        "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
+        # deselect: SIN USO (el bot ya no aprieta Escape: abre el menu de opciones si no hay nada seleccionado). close_menu:
+        # solo si el menu de opciones esta abierto y el clic en su boton Cancelar no lo cerro tras close_clicks intentos.
+        "deselect": "esc", "close_menu": "esc",
     },
     # Seguridad (bot/control.py): panico, pausa, esquina de pantalla, cuenta regresiva, corte forzado.
     "safety": {"panic_key": "f12", "pause_key": "f11", "corner_px": 5, "corner_poll_ms": 50,
@@ -128,7 +131,16 @@ DEFAULTS: dict[str, Any] = {
                # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
                # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
                "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
-               "scan_hp_margin_s": 2.0},
+               "scan_hp_margin_s": 2.0,
+               # Bichos encima (nombres rojos pegados al amarillo del personaje, vision.monsters.on_me_px): ESPACIO antes de
+               # reclickear (deseleccion, seleccion equivocada, trabado). on_me_space_s = duracion de ESPACIO en esos casos.
+               "on_me_space_s": 1.0,
+               # Tras un captcha el metin que se atacaba se retoma directo (su punto de pantalla y su posicion en el mapa):
+               # durante after_captcha_keep_s no se lo suelta por "hay otro objetivo a la vista" (keep_with_others_s).
+               "after_captcha_keep_s": 20.0,
+               # Dos clics seguidos al mismo metin con el panel perdido enseguida (vida alta) -> el siguiente punto candidato
+               # de la piedra (otro lado) en vez de repetir el mismo: lost_swap_after = perdidas antes de cambiar de punto.
+               "lost_swap_after": 2},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
     # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
     # su etiqueta desaparezca (gone_cycles capturas sin verla). A los reposition_s sigue ahi: reacomodo (llegada a
@@ -325,7 +337,29 @@ DEFAULTS: dict[str, Any] = {
             "max_gap_px": 10, "word_gap_px": 8,
             "max_zone_overlap": 0.5,
             "near_radius_px": 120,
+            "on_me_px": 30,   # etiqueta de monstruo solapada o a <= on_me_px de la del personaje = bicho encima
+            "on_me_body_px": 90,   # o con la etiqueta a <= on_me_body_px del personaje (montado: la propia queda ~50 px mas arriba)
         },
+        # Etiqueta del propio personaje ("Lv NN" verde + nombre en amarillo plano): sirve para saber si hay bichos encima.
+        # search = [dx0, dy0, dx1, dy1] respecto del punto del personaje (montado, la etiqueta queda ~130 px arriba).
+        "own_label": {"name_bgr": [76, 215, 255], "search": [-170, -230, 170, -20]},
+        # Menu de opciones del juego (lo abre Escape sin nada seleccionado): se lo reconoce por el boton "Cancelar" (plantilla
+        # recortada de una captura real; score 1.0 en las 5 con menu y < 0.45 en las 73 sin menu). search = fracciones
+        # [x0, y0, x1, y1] de la imagen. Se lo cierra con un clic en ese boton.
+        "game_menu": {"enabled": True, "template": "templates/ui/menu_cancelar.png", "min_score": 0.8,
+                      "search": [0.3, 0.45, 0.7, 0.85],
+                      # Cierre: clic en Cancelar y, si sigue abierto, reintenta cada close_retry_s; tras close_clicks clics
+                      # fallidos usa la tecla controls.close_menu (Escape, que ahi SI lo cierra).
+                      "close_retry_s": 1.0, "close_clicks": 3},
+        # Punto de clic sobre la parte VISIBLE de la piedra (bot/vision/click_point.py): candidatos dentro del rect del cuerpo
+        # (fracciones [fx, fy] del rect), descartados si caen en la columna bajo una etiqueta de monstruo (la silueta mide
+        # body_h_k * distancia al horizonte, hasta body_h_mult veces, ancho body_w_frac de ese alto + col_margin_px) o sobre la
+        # etiqueta del personaje; se puntua por pixeles de color de piedra en un parche de patch_r px (min_stone_frac minimo).
+        "click_point": {"grid": [[0.5, 0.5], [0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5], [0.3, 0.3], [0.7, 0.3],
+                                 [0.3, 0.7], [0.7, 0.7]],
+                        "body_h_k": 0.33, "body_h_min_px": 40, "body_h_mult": 1.3, "body_w_frac": 0.3, "col_margin_px": 8,
+                        "patch_r": 4, "min_stone_frac": 0.25, "stone_s_min": 60, "stone_search": [60, 60, 25],
+                        "own_margin_px": 6},
         # Objetos en el piso (bot/vision/items.py): recuadro con borde negro exacto de 1 px, fondo oscuro
         # translucido y texto blanco sin antialiasing. Con dueno, una linea amarilla (0,255,255) encima del nombre.
         "items": {
@@ -518,6 +552,7 @@ def _validate_vision(vision: dict) -> None:
     _validate_captcha_death(vision)
     _validate_items(vision)
     _validate_far_monsters(vision)
+    _validate_ataque_vision(vision)
 
 
 FAR_MODES = ("color", "estructura", "ambos")
@@ -600,7 +635,41 @@ def _validate_far_monsters(vision: dict) -> None:
         _require_numbers(mo.get(k), f"vision.monsters.{k}", n)
     nums(mo, "monsters", ("color_tol", "min_red_pixels", "min_green_pixels", "min_green_w", "max_green_w",
                           "min_green_h", "max_green_h", "probe_w", "max_label_w", "max_gap_px", "word_gap_px",
-                          "max_zone_overlap", "near_radius_px"), ("min_red_pixels",))
+                          "max_zone_overlap", "near_radius_px", "on_me_px", "on_me_body_px"), ("min_red_pixels",))
+
+
+def _validate_ataque_vision(vision: dict) -> None:
+    """vision.own_label, vision.game_menu y vision.click_point."""
+    ol = _require_dict(vision.get("own_label"), "vision.own_label")
+    _require_numbers(ol.get("name_bgr"), "vision.own_label.name_bgr", 3)
+    _require_numbers(ol.get("search"), "vision.own_label.search", 4)
+    if ol["search"][0] >= ol["search"][2] or ol["search"][1] >= ol["search"][3]:
+        raise ConfigError("vision.own_label.search debe ser [dx0, dy0, dx1, dy1] con dx0 < dx1 y dy0 < dy1")
+    gm = _require_dict(vision.get("game_menu"), "vision.game_menu")
+    if not isinstance(gm.get("enabled"), bool):
+        raise ConfigError("vision.game_menu.enabled debe ser true o false")
+    _require_text(gm.get("template"), "vision.game_menu.template")
+    _require_numbers(gm.get("search"), "vision.game_menu.search", 4)
+    if not (0 <= gm["search"][0] < gm["search"][2] <= 1 and 0 <= gm["search"][1] < gm["search"][3] <= 1):
+        raise ConfigError("vision.game_menu.search son fracciones [x0, y0, x1, y1] de la imagen (0 <= x0 < x1 <= 1)")
+    for k in ("min_score", "close_retry_s", "close_clicks"):
+        v = gm.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"vision.game_menu.{k} debe ser un numero > 0")
+    cp = _require_dict(vision.get("click_point"), "vision.click_point")
+    grid = cp.get("grid")
+    if not isinstance(grid, list) or not grid:
+        raise ConfigError("vision.click_point.grid debe ser una lista no vacia de [fx, fy]")
+    for g in grid:
+        _require_numbers(g, "vision.click_point.grid[]", 2)
+        if not all(0 <= v <= 1 for v in g):
+            raise ConfigError("vision.click_point.grid: fx y fy van entre 0 y 1")
+    _require_numbers(cp.get("stone_search"), "vision.click_point.stone_search", 3)
+    for k in ("body_h_k", "body_h_min_px", "body_h_mult", "body_w_frac", "col_margin_px", "patch_r", "min_stone_frac",
+              "stone_s_min", "own_margin_px"):
+        v = cp.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"vision.click_point.{k} debe ser un numero >= 0")
 
 
 def _validate_items(vision: dict) -> None:
@@ -898,12 +967,13 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
                     "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
-                    "confirm_check_s", "quick_reclicks", "quick_up_px"),
+                    "confirm_check_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
+                    "lost_swap_after"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
           "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s", "confirm_check_s"))
+          "next_keep_s", "keep_with_others_s", "confirm_check_s", "lost_swap_after"))
     a = cfg["attack"]
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")

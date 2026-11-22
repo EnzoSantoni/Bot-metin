@@ -137,7 +137,7 @@ def test_regla_b_confirmado_bloqueado_usa_espacio_y_reclic(caplog):
     assert len(env.world.clicks_on_metin) == 1
 
 
-def test_regla_b_monstruo_seleccionado_espacio_escape_y_reclic(caplog):
+def test_regla_b_monstruo_seleccionado_espacio_clic_directo_sin_escape(caplog):
     caplog.set_level(logging.INFO)
     env = SimEnv(2, start=(560, 150))
     m = env.world.add_metin((600, 150))
@@ -147,7 +147,7 @@ def test_regla_b_monstruo_seleccionado_espacio_escape_y_reclic(caplog):
     kinds = [k for _, k, _ in env.world.selected_log]
     assert kinds[0] == "monster" and kinds[-1] == "metin"
     assert any("Seleccion equivocada con" in x for x in messages(caplog))
-    assert sum(1 for e in env.backend.events if e == ("key_down", "esc")) >= 1
+    assert not any(e == ("key_down", "esc") for e in env.backend.events)
 
 
 def test_regla_b_monstruo_seleccionado_sigue_contando_para_el_descarte():
@@ -155,7 +155,7 @@ def test_regla_b_monstruo_seleccionado_sigue_contando_para_el_descarte():
         present=True, kind="other", name=None), n_near=3, metins=[metin()]) if h.bot.state is State.ATACAR
         else perc(metins=[metin()]), attack={"max_wrong_selections": 2})
     h.run_until(lambda: any("seleccion equivocada repetida" in w for _, w in h.seen), limit=200)
-    assert h.keys("space") >= 1 and h.keys("esc") >= 1 and len(h.bot.discarded) >= 1
+    assert h.keys("space") >= 1 and h.keys("esc") == 0 and len(h.bot.discarded) >= 1
 
 
 def test_bloqueo_se_detecta_quieto_o_en_circulo_pero_no_caminando_recto():

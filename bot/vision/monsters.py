@@ -62,13 +62,18 @@ def find_monsters(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = None
     Cada bloque verde cuenta una vez; el rojo se mira por pixeles a la derecha del verde (las etiquetas
     apiladas de monstruos pegados se tapan entre si y sus nombres rojos se funden).
     """
+    m = cfg["vision"]["monsters"]
+    return [MonsterLabel(r, r.center) for r in _find_labels(img_bgr, m, m["red_bgr"], mask)]
+
+
+def _find_labels(img_bgr: np.ndarray, m: dict, name_bgr: list[int], mask: ScreenMask | None = None) -> list[Rect]:
+    """Rectangulos de "Lv XX" verde + nombre de color plano `name_bgr` pegado a su derecha (ordenados por y, x)."""
     h, w = img_bgr.shape[:2]
     if h == 0 or w == 0:
         return []
-    m = cfg["vision"]["monsters"]
-    red = _color_mask(img_bgr, m["red_bgr"], m["color_tol"]) > 0
+    red = _color_mask(img_bgr, name_bgr, m["color_tol"]) > 0
     green = _groups(_color_mask(img_bgr, m["green_bgr"], m["color_tol"]), m["green_kernel"], m["min_green_pixels"])
-    out: list[MonsterLabel] = []
+    out: list[Rect] = []
     for g in green:
         if not (m["min_green_w"] <= g.w <= m["max_green_w"] and m["min_green_h"] <= g.h <= m["max_green_h"]):
             continue
@@ -85,8 +90,43 @@ def find_monsters(img_bgr: np.ndarray, cfg: dict, mask: ScreenMask | None = None
         rect = Rect(g.x, g.y, end - g.x, g.h)
         if mask is not None and mask.overlap_fraction(rect) > m["max_zone_overlap"]:
             continue
-        out.append(MonsterLabel(rect, rect.center))
-    out.sort(key=lambda lb: (lb.rect.y, lb.rect.x))
+        out.append(rect)
+    out.sort(key=lambda r: (r.y, r.x))
+    return out
+
+
+def find_own_label(img_bgr: np.ndarray, cfg: dict, player_xy: tuple[int, int]) -> Rect | None:
+    """Etiqueta del propio personaje: "Lv NN" verde + nombre en AMARILLO (`vision.own_label.name_bgr`), en la zona
+    `vision.own_label.search` = [dx0, dy0, dx1, dy1] respecto de `player_xy` (montado queda ~130 px arriba). La mas cercana al
+    personaje en horizontal; None si no se ve (tapada o fuera de pantalla)."""
+    o = cfg["vision"]["own_label"]
+    h, w = img_bgr.shape[:2]
+    dx0, dy0, dx1, dy1 = o["search"]
+    x0, y0 = max(0, player_xy[0] + dx0), max(0, player_xy[1] + dy0)
+    x1, y1 = min(w, player_xy[0] + dx1), min(h, player_xy[1] + dy1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    found = _find_labels(img_bgr[y0:y1, x0:x1], cfg["vision"]["monsters"], o["name_bgr"])
+    rects = [Rect(r.x + x0, r.y + y0, r.w, r.h) for r in found]
+    return min(rects, key=lambda r: abs(r.center[0] - player_xy[0]), default=None)
+
+
+def monsters_on_me(monsters: list[MonsterLabel], own: Rect | None, cfg: dict,
+                   player_xy: tuple[int, int] | None = None) -> list[MonsterLabel]:
+    """Etiquetas de monstruo de bichos encima del personaje: (1) solapadas o a <= `vision.monsters.on_me_px` de la etiqueta
+    propia (distancia entre rectangulos) o (2) con el centro a <= `on_me_body_px` del personaje (`player_xy`): montado, la
+    etiqueta propia queda ~50 px mas arriba que la de un bicho pegado a la montura (capturas de las 21:31)."""
+    m = cfg["vision"]["monsters"]
+    lim, body = float(m["on_me_px"]), float(m["on_me_body_px"])
+    out = []
+    for mo in monsters:
+        r = mo.rect
+        if player_xy is not None and math.dist(mo.center, player_xy) <= body:
+            out.append(mo)
+        elif own is not None:
+            gap = math.hypot(max(r.x - own.right, own.x - r.right, 0), max(r.y - own.bottom, own.y - r.bottom, 0))
+            if gap <= lim:
+                out.append(mo)
     return out
 
 
