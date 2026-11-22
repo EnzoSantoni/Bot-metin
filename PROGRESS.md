@@ -2,6 +2,65 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## PARA ENZO (2026-11-22): Fase 6i, más metin por hora. `main` `c166291`, 1560 tests
+**Qué hice**, en orden (commit y push de cada uno):
+0. **Merge pendiente cerrado** (`6210496`):
+   - La tanda del ataque: sin Escape, bichos encima por los nombres, punto de clic visible, retomar tras captcha.
+   - La regla de la zona: un metin con posición conocida solo vale hasta 15 u afuera del borde; sin posición, solo si está cerca y vos adentro. La lista de candidatos ya no guarda puntos afuera.
+   - El mundo 19 del simulador pasa sin aflojar el test.
+1. **Diagnóstico de las corridas de las 22:31 y 23:08:** la tabla está en la sección siguiente.
+7. **Ángulo vertical** (`6e6d96b`):
+   - Reinicio desde el tope: zoom al tope lejos, arrastre hacia arriba hasta el tope horizontal, y después baja una cantidad fija (`camera_pitch.from_limit_px`, estimada en 60 hasta que la calibres).
+   - Se hace al arrancar, después de cada metin y cuando la cámara mira el piso.
+   - Calibración: `calibrate.py camara-tope`. Tus capturas cam_01 a cam_11 sirvieron.
+6. **Vuelta** (`6130685`):
+   - Pasos de 30° con pausa.
+   - Frena y ataca un metin con nombre cercano dentro de la zona; hace hover y anota los lejanos.
+   - Una vuelta vacía ya no manda a VOLVER: va al punto del mapa o al centro.
+   - **D:** lo visible se detectaba bien. El problema era la cámara mirando el piso.
+- **E, recoger** (mismo commit): cada Z junta el más cercano; contador de Z por objeto y sin saltos a vecinos.
+8. **Captcha de la frase dorada** (mismo commit): marco + texto fijo "la siguiente frase es:", sin falsos con los anuncios del servidor. Alarma y espera.
+2 a 5. **Acercarse y atacar** (`c166291`):
+   - Alinea la vista, avanza con W, frena, y quieto hace UN clic al centro de la piedra. Nunca en movimiento ni con menos de 1,5 s entre clics.
+   - No descarta metin con nombre por una selección equivocada.
+   - Sin panel pegado al metin: un clic derecho (soltar) sobre un bicho para recuperarlo.
+   - Barra espaciadora solo con bichos reales.
+
+**Qué quedó a medias o sin verificar:**
+- Nada probado en el juego.
+- **A medir:**
+  - `camera_pitch.from_limit_px` (calibrarlo);
+  - el signo de la rueda (`zoom_out_sign` -1: si acerca, poné 1);
+  - `approach.click_floor` (2.0) y `center_tol_px` (140);
+  - el flujo del clic derecho para recuperar el panel.
+- **Señal de la animación de ataque:** no la implementé. Sin secuencias reales etiquetadas no se puede comprobar que sea confiable.
+- **`config.json` de esta carpeta:** tiene `attack.confirm_check_s: 0.5`, que ahora es obsoleta y da un WARNING. Borrala cuando quieras.
+- **Metin inalcanzable con nombre:** se reintenta cada ~30 s, no se descarta 10 min.
+
+**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto **1E**. Primero `calibrate.py camara-tope` y después una corrida de 20 minutos. Espero 6 a 8 metin; el objetivo es 8 a 10.
+
+### Diagnóstico de las corridas de las 22:31 y 23:08 (2026-11-21)
+| Tiempo en | 22:31 (16 min, 4 metin) | 23:08 (20 min, 2 metin) |
+|---|---|---|
+| ATACAR | 488 s (51%) | 265 s (22%) |
+| EXPLORAR (vueltas y tramos) | 306 s (32%) | 631 s (53%) |
+| VOLVER | 82 s (9%) | 224 s (19%) |
+| RECOGER | 39 s (4%) | 14 s (1%) |
+| Resto (BUSCAR, DESTRABAR, CENTRO, CAPTCHA, ACERCARSE) | 45 s (5%) | 65 s (5%) |
+
+**Las 3 causas principales:**
+1. **La cámara mira al piso durante las vueltas.** Por eso EXPLORAR + VOLVER se comen el 41% (22:31) y el 72% (23:08) del tiempo.
+   - Vueltas con 0 candidatos: 19 de 21 (22:31) y 37 de 37 (23:08).
+   - Cuadros de barrido sin horizonte (mirando el piso): 9 de 13 y 15 de 19. Ejemplos: `debug\run_20261121_230828\0048_explorar_fase_sweep_raw.png` (piso visto desde arriba) y `0016` (cámara dentro de un árbol).
+   - Después de cada vuelta vacía cerca del borde, "barrido completo sin ver nada util cerca del borde" lo manda a VOLVER: 21 veces a las 22:31 y 13 a las 23:08.
+2. **Acercamiento y clic.** Hace clics con el personaje en movimiento y el punto salta.
+   - 22:31: 15 "Panel perdido con vida 100%", 14 "Trabado yendo al metin", 23 reclics y 7 "Seleccion equivocada". Los ataques duraron 122 s y 205 s en vez de ~85 s.
+   - 23:08: 9 metin descartados, 3 de ellos reales por "seleccion equivocada repetida", y uno de los ataques se estiró a 632 s (desde el primer panel confirmado hasta la rotura).
+3. **Barra espaciadora al aire.** A las 23:08 hubo 41 "Rodeado de… ESPACIO", varios sin bichos reales.
+
+**Objetivo de 8 a 10 metin en 20 min:** ~85 s de ataque + ~10 s de recogida + ≤ 30 s para encontrar y llegar = ~2 min por metin.
+**Orden de trabajo según esto:** 7 (ángulo vertical) → 6 (vuelta) → 2, 3 y 4 (acercamiento y ataque) → 5 (espacio) → 8 (captcha de frase).
+
 ## Acercarse quieto y un clic, atacar sin panel y espacio solo con bichos (corridas de las 22:31 y 23:08, 2026-11-21)
 - **Ritmo de clics** (`bot/approach_keys.py`, mixin de `Bot`): ningún clic izquierdo de ataque con el personaje en movimiento (`approach.quiet_reads` lecturas de coordenadas iguales y `approach.settle_s` sin teclas) ni a menos de `attack.min_click_gap_s` (1.5) del anterior. Pasa por `_click_gate()` en `_click_attack`, `_quick_check`, `_reclick`, `_deselected` y el reclic pendiente; si no se puede, el clic espera (no cuenta como reclic).
 - **ACERCARSE con teclado** (`approach.keys_enabled`, solo modo teclado, metin a más de `approach.click_floor` (2.0, distancia de piso; pegado ~0.8) y con coordenadas): gira con Q/E hasta que la piedra quede a `approach.center_tol_px` del centro (si el giro la aleja invierte el sentido), W en tramos de `walk_chunk_s` re-detectando, frena a `click_floor` y, quieto, UN clic en el cuerpo (`_acercarse_keys`). Sin confirmar, ATACAR reclickea quieto a los `attack.confirm_wait_s` (1.5); a los `approach.max_clicks` (4) el metin se aparta `approach.retry_ignore_s` (30 s), no se descartan 10 min. Piedra sin nombre cerca: hover de siempre.
@@ -20,7 +79,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 
 - **Corrida de las 21:24 (B y F):** (B) si el personaje camina hacia el metin (coordenadas cambiando) no se reclickea aunque el panel se pierda (`_Attack.walking`); antes de cada reclic se redetecta la piedra en la captura actual y, si no se ve, no se clickea un punto viejo (vuelve a BUSCAR con el metin en curso). Causa de los 6 reclics a (428, 181): la camara giro mientras caminaba y la piedra paso de (277, 183) a (1452, 321). (F) montado, un bicho pegado a la montura tiene su nombre ~46-58 px debajo del nombre propio (mas que `on_me_px`): se suma `vision.monsters.on_me_body_px` (90, nombre a <= 90 px del personaje). **Sin resolver:** a las 21:30:10 y 21:32:35 aparece arriba al centro un cartel de captcha DISTINTO ("la siguiente frase es: - - - p - - d - -", marco dorado de ~517x63 en y=145) que `find_captcha` no detecta; coincide con los "Panel perdido con vida 100%". Capturas en `tests/data/ataque_frase_captcha_2132.png` y `ataque_punto_viejo_2129.png` (cartel vacio).
 
-## PARA ENZO AL VOLVER (resumen del 2026-11-20, tarde): Fase 6g, más eficiente
+## Resumen del 2026-11-20, tarde: Fase 6g (anterior)
 **Qué hice** (los 5 puntos de la prueba de las 12:10; commit y push de cada uno; `main` con 1392 tests):
 1. **Clic al centro de la piedra** (`3b125e2`):
    - Antes el clic caía 6 a 22 px debajo de la piedra, en el piso. Lo medí en 10 pares reales de capturas de las 12:10.
