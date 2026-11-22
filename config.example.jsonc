@@ -174,7 +174,15 @@
             // surrounded_space_s (montado empuja); sin monstruos: un paso al costado (attack.sidestep_s, A/D/W+A/W+D alternando).
             // Sigue en el mismo estado. Tras surrounded_max reacciones seguidas sin avanzar, el DESTRABAR de siempre.
             // Reemplaza a surrounded_s y a attack.walk_stuck_s (obsoletas: si estan en config.json se ignoran con un WARNING).
-            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
+            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+            // Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
+            // (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino, no se sale de la zona y no se
+            // probo en ese lugar), se camina con W detour_s y se mira si avanza. Un rumbo que no avanza se recuerda (blocked_keep
+            // lugares, a blocked_radius_u y +-blocked_tol_deg) y no se repite. Los tramos de W sin avanzar (CENTRO, VOLVER) usan la
+            // misma secuencia y comparten el presupuesto surrounded_max. Sin rumbo conocido: tras probe_blind pruebas de W sin
+            // medir se gira a ciegas blind_turn_deg grados y se prueba de nuevo (nunca se empuja W contra la pared con rumbo "?").
+            "detour_angles_deg": [90.0, -90.0, 135.0, -135.0, 180.0], "detour_s": 2.5, "blocked_keep": 12,
+            "blocked_radius_u": 15.0, "blocked_tol_deg": 40.0, "probe_blind": 2, "blind_turn_deg": 120.0},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -292,7 +300,7 @@
               "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
               "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
               "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
-              "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+              "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
               "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
   //  UNA VUELTA (con el rumbo de la camara leido del cono del minimapa, vision.minimap): el barrido gira en pasos hasta sweep_deg
   //  grados acumulados (tope: camera_steps * sweep_max_factor pasos) y arma la LISTA de candidatos con su posicion en el MAPA
@@ -303,7 +311,9 @@
   //  aparece camina candidate_walk_u hacia el (candidate_walk_tries veces) y vuelve a mirar. No hay otra vuelta mientras la lista
   //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Una
   //  etiqueta objetivo a menos de sweep_cut_floor de piso (muy pegada) corta la vuelta y se ataca. Vuelta sin nada: va al
-  //  punto listo del mapa de metin o, si no hay, al centro (si esta a mas de center_return_u) y vuelve a mirar desde ahi.
+  //  punto listo del mapa de metin (hora desconocida = lista) o, si no hay, al centro (si esta a mas de center_return_u); se camina
+  //  hasta llegar (arrive_u / navigation.arrive_dist) y recien ahi se busca. Ya en el centro y sin nada: otra vuelta alli, hasta
+  //  center_laps seguidas; despues, un tramo al azar. Sin cono legible se usa el rumbo estimado por el movimiento.
   //  ground_scale_u (ESTIMADO de events.log/bot.log del 2026-11-20: 10-20 u por unidad de piso, mediana ~13) se afina solo
   //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
   //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
@@ -413,17 +423,23 @@
     // girar la camara; Q/E solo sirven para mirar (barridos, MIRAR). El clic izquierdo queda para atacar un metin.
     // "clic" = caminar con clics en el piso (modo anterior, con la camara aprendida).
     "mode": "teclado",
-    // Modo teclado (bot/keynav.py). El bot aprende hacia donde camina W en el juego (cam_h) midiendo cada tramo y
-    // elige la combinacion de teclas cuyo desvio (W 0, W+D +45, D +90, S+D +135, S 180, S+A -135, A -90, W+A -45) queda mas
-    // cerca del rumbo al destino; si A/D caminan al reves lo detecta (2 muestras seguidas) y lo corrige solo.
+    // Modo teclado (bot/keynav.py). cam_h = hacia donde camina W en el juego: sale del cono del minimapa (mismo marco que las
+    // coordenadas) y, si no se lee, del desplazamiento medido en cada tramo. Con lateral=false (por defecto) el bot camina SOLO
+    // con W y alinea la vista con Q/E (align_deg); con lateral=true elige entre 8 combinaciones (W 0, W+D +45, D +90, S+D +135,
+    // S 180, S+A -135, A -90, W+A -45). En las capturas reales A/D giran la vista (~36 grados/s), por eso lateral es false.
     // chunk_s: tramo de caminata entre chequeos; probe_s: W de prueba para medir cam_h cuando no se conoce; align_deg y
     // max_turn_deg: solo para giros de la vista; turn_deg_per_s: velocidad inicial de giro de Q/E (= 360 /
-    // (explore.camera_steps * explore.camera_step_s)), se aprende (Q/E al reves se concluye con 2 giros seguidos);
+    // (explore.camera_steps * explore.camera_step_s)), se aprende;
     // walk_speed: velocidad inicial de caminata en unidades/s, tambien se aprende; min_step_s: tramo minimo;
     // edge_measure_u: desplazamiento minimo para medir cam_h cuando el personaje ya paso la guardia de zona (ahi no hay
-    // lugar para tramos largos); view_right_key: tecla (camera_left o camera_right) que gira la VISTA a la derecha.
+    // lugar para tramos largos).
+    // SENTIDOS FIJOS: view_right_key = tecla (camera_left o camera_right) que gira la VISTA a la derecha; ad_side = "normal"
+    //  (D va a la derecha de W) o "reverso". Con "auto" (por defecto) se determinan UNA vez con senses_votes muestras
+    //  coherentes (sin fijar se asume camera_right y "normal"), se guardan en senses_file (se reusan en la proxima corrida) y
+    //  quedan fijos: la evidencia contraria solo avisa, nunca invierte. Ponerlos a mano los fija desde el arranque.
     "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
-                 "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"}
+                 "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "auto",
+                 "ad_side": "auto", "lateral": false, "senses_votes": 3, "senses_file": "logs/sentidos.json"}
   },
 
   "vision": {
@@ -436,11 +452,13 @@
     //  debug/run_20261120_121005: el minimapa tiene el norte fijo, el personaje esta en (ancho + center_dx, center_dy) y el cono
     //  mide ~40 grados (~20 a pie). Se muestrea cada step_deg entre r_min y r_max px (sin pixeles rojos ni V < min_val, min_samples
     //  validos por rayo); cono = arco con exceso de V sobre la mediana > max(min_excess, rel_frac x percentil 95) y ancho
-    //  width_deg [min, max]. El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el mismo marco de las coordenadas.
-    //  heading_offset_deg: correccion inicial; el bot la aprende (EMA offset_ema) contra el rumbo medido de W (keynav).
+    //  width_deg [min, max]; si no lee hay un segundo pase relajado (umbrales x relax_factor, ancho relax_width_deg).
+    //  El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el MISMO marco de las coordenadas (sin espejo; medido en
+    //  debug/run_20261121_205635). heading_offset_deg = 0; el bot lo afina solo con tramos de W (EMA offset_ema, tope +-offset_max_deg).
     "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
                 "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
-                "heading_offset_deg": 0.0, "offset_ema": 0.3},
+                "relax_factor": 0.5, "relax_width_deg": [8.0, 100.0],
+                "heading_offset_deg": 0.0, "offset_ema": 0.15, "offset_max_deg": 20.0},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).

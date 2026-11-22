@@ -3,6 +3,8 @@
 Cada punto es la posicion del personaje (coordenadas del juego) al romper un metin, con la hora (epoch, segundos) de
 la ultima rotura y de la ultima visita. `next_target` elige el punto elegible mas cercano: ya reaparecio y no se
 visito hace poco; elegir siempre el mas cercano arma solo el recorrido. Con `path=None` no lee ni escribe nada.
+Hora 0 (`last_broken` / `last_visit` en 0) = DESCONOCIDA (punto cargado sin hora): cuenta como "ya reaparecio" / "no visitado
+hace poco" (elegible) y el log dice "?" en vez de una edad absurda.
 """
 from __future__ import annotations
 
@@ -31,12 +33,18 @@ class Spot:
     x: float
     y: float
     n: int = 1                 # veces que se rompio un metin aca
-    last_broken: float = 0.0   # epoch s
-    last_visit: float = 0.0    # epoch s
+    last_broken: float = 0.0   # epoch s (0 = desconocida)
+    last_visit: float = 0.0    # epoch s (0 = desconocida)
 
     @property
     def xy(self) -> Xy:
         return (self.x, self.y)
+
+    def ages(self, now: float) -> str:
+        """Texto 'roto hace X min, visto hace Y min' con '?' (hora desconocida) cuando falta la hora."""
+        def one(ts: float) -> str:
+            return "? (hora desconocida)" if ts <= 0 else f"{max(0.0, now - ts) / 60:.1f} min"
+        return f"roto hace {one(self.last_broken)}, visto hace {one(self.last_visit)}"
 
 
 def migrate_legacy_map(path: Path) -> bool:
@@ -137,8 +145,14 @@ class SpawnMap:
         spot.last_visit = self.now()
         self.save()
 
+    def _wait(self, s: Spot, now: float) -> float:
+        """Segundos hasta que `s` quede elegible (0 = ya; una hora desconocida no hace esperar)."""
+        w_broken = s.last_broken + self.respawn_s - now if s.last_broken > 0 else 0.0
+        w_visit = s.last_visit + self.revisit_s - now if s.last_visit > 0 else 0.0
+        return max(w_broken, w_visit, 0.0)
+
     def _eligible(self, s: Spot, now: float) -> bool:
-        return now - s.last_broken >= self.respawn_s and now - s.last_visit >= self.revisit_s
+        return self._wait(s, now) <= 0.0
 
     def next_target(self, pos: Xy, accepts: Callable[[Xy], bool]) -> Spot | None:
         """El punto mas cercano a `pos` dentro de la zona (`accepts`) que ya reaparecio y no se visito hace poco."""
@@ -149,6 +163,5 @@ class SpawnMap:
     def seconds_until_ready(self, accepts: Callable[[Xy], bool]) -> float | None:
         """Segundos hasta que el primer punto de la zona quede elegible (None si no hay puntos)."""
         now = self.now()
-        waits = [max(s.last_broken + self.respawn_s - now, s.last_visit + self.revisit_s - now, 0.0)
-                 for s in self.spots if accepts(s.xy)]
+        waits = [self._wait(s, now) for s in self.spots if accepts(s.xy)]
         return min(waits) if waits else None

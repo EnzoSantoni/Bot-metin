@@ -25,7 +25,7 @@ from bot.control import BotControl, PanicStop
 from bot.input.game_input import GameInput
 from bot.debug_draw import DebugRecorder
 from bot.ground import Goal, feet_of, ground_dist, rank_goals
-from bot.keynav import COMBO_ACTIONS, KeyboardNav, combo_for_screen_angle, combo_toward_ground, screen_angle
+from bot.keynav import COMBO_ACTIONS, KeyboardNav, SensesStore, combo_for_screen_angle, combo_toward_ground, screen_angle
 from bot.navigation import CameraModel, Navigator, _wrap
 from bot.perception import Perception, perceive
 from bot.spawns import Spot, SpawnMap, spawn_map_from_config
@@ -181,6 +181,14 @@ class _CurrentMetin:
 
 
 @dataclass
+class _Detour:
+    """Desvio tras una traba (pared, acantilado) en modo teclado: se camina con W hacia `heading` (la vista ya esta girada)."""
+    heading: float
+    origin: tuple[int, int]
+    t0: float
+
+
+@dataclass
 class _Surround:
     """Seguimiento de "rodeado de monstruos sin avanzar" mientras se camina."""
     ref: tuple[int, int]               # posicion de referencia
@@ -210,6 +218,7 @@ class _KeyLeg:
     before: tuple[int, int]
     seconds: float                     # segundos que la tecla estuvo sostenida
     end_t: float
+    cone: float | None = None          # rumbo del cono (rad, marco del juego) al empezar el tramo (None = no se leia o era viejo)
 
 
 @dataclass
@@ -244,14 +253,14 @@ class _Explore:
     steps: int = 0
     target: Xy | None = None
     walk_start: float = 0.0
-    spot: Spot | None = None           # punto del mapa de metin al que va este tramo (None = tramo al azar)
+    spot: Spot | None = None           # punto del mapa de metin al que va este tramo (None = el centro o un tramo al azar)
+    center: bool = False               # el tramo va al centro de la zona (se camina hasta llegar, como a un punto del mapa)
     pitch_checked: bool = False        # el angulo vertical ya se reviso al final de este barrido
     sw_prev: float | None = None       # rumbo de la camara (rad) en el paso anterior de la vuelta (None = vuelta sin empezar)
     sw_acc: float = 0.0                # grados girados en esta vuelta (medidos con el rumbo de la camara)
     aim: Candidate | None = None       # candidato de la lista hacia el que se gira (fase "aim")
     aim_turns: int = 0                 # giros hechos para ponerlo al frente
     aim_walks: int = 0                 # tramos caminados hacia el porque no aparecia en pantalla (fase "cwalk")
-    aim_last: tuple[float, float, float] | None = None   # (rumbo antes, giro pedido en rad, segundos) del ultimo giro hacia el
 
 
 @dataclass
@@ -327,7 +336,8 @@ class Bot:
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
                  coords_fn: Callable[[Any, dict], Any] = read_coords,
                  mount_marker: Path | None = None, spawn_map: SpawnMap | None = None,
-                 heading_fn: Callable[[Any, dict], float | None] = camera_heading) -> None:
+                 heading_fn: Callable[[Any, dict], float | None] = camera_heading,
+                 senses: SensesStore | None = None) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
         self._perceive, self.clock = perceive_fn, clock
         self._captcha_fn, self._coords_fn = captcha_fn, coords_fn   # lecturas rapidas entre tramos de una tecla sostenida
@@ -361,6 +371,9 @@ class Bot:
         self._cur: _CurrentMetin | None = None    # metin en curso (sobrevive a BUSCAR/EXPLORAR/DESTRABAR)
         self._apr: _Approach | None = None
         self._sur: _Surround | None = None        # rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO caminando)
+        self._detour: _Detour | None = None       # desvio en curso tras una traba sin monstruos (teclado)
+        self._blocked: list[tuple[tuple[int, int], float]] = []   # (lugar, rumbo de W) que no avanzo: no se repiten ahi
+        self._probe_blind = 0                     # pruebas de W seguidas sin lograr medir el rumbo
         self._cur_log_t = -math.inf               # ultimo "Busco el metin en curso" (sin spam)
         self._labels_seen = False                 # el ultimo `_pick_goal` vio metin objetivo con etiqueta
         self._walk: _Walk | None = None
@@ -391,7 +404,11 @@ class Bot:
         self.kmode = self.nav["mode"] == "teclado"   # caminar solo con W/A/S/D y girar con Q/E (sin clics en el piso)
         self.kb = self.nav["keyboard"]
         self.keynav = KeyboardNav(cfg)
+        self._senses = senses or SensesStore(None)   # sentidos de Q/E y A/D de la corrida anterior (si se guardaron)
+        self.keynav.load_senses(self._senses.load())
         self._leg: _KeyLeg | None = None
+        self._rot_frame = -1               # valor de `_frames` en el ultimo giro de camara (el cono de una captura anterior no vale)
+        self._align_tries = 0              # giros seguidos para alinear la vista con el rumbo de la caminata
         self._target_slugs = target_slugs(cfg)
         self._frames = 0                   # percepciones completas hechas (para la compuerta de giros de busqueda)
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
@@ -404,8 +421,11 @@ class Bot:
         self._next: _Next | None = None    # proximo metin encontrado mientras se atacaba (solo sin rumbo de camara legible)
         ex = cfg["explore"]
         self._heading_fn = heading_fn      # rumbo de la camara (grados) desde el cono del minimapa
-        self._hoff = math.radians(float(cfg["vision"]["minimap"]["heading_offset_deg"]))   # cono -> marco del juego
+        mm = cfg["vision"]["minimap"]
+        self._hoff0 = math.radians(float(mm["heading_offset_deg"]))   # cono -> marco del juego (0: mismo marco, sin espejo)
+        self._hoff = self._hoff0           # lo anterior, afinado con tramos de W (acotado a +-offset_max_deg)
         self._heading_warn_t = -math.inf
+        self._center_laps = 0              # vueltas seguidas hechas en el centro sin punto del mapa ni candidatos
         self.cands = CandidateMap(float(ex["candidate_keep_s"]), float(ex["candidate_merge_u"]),
                                   float(ex["candidate_tie_u"]), float(cfg["approach"]["unlabeled_closer_ratio"]))
         self.kscale = ScaleEstimator(float(ex["ground_scale_u"]), float(ex["ground_scale_ema"]),
@@ -535,6 +555,8 @@ class Bot:
             return
         logger.info("%s -> %s: %s", old.name, new.name, reason)
         self.state = new
+        if new is State.ATACAR:
+            self._center_laps = 0   # se encontro un metin: la cuenta de vueltas vacias en el centro empieza de nuevo
         if old is State.VOLVER and new is not State.DESTRABAR:
             self._vl_margin = 0.0
         if old in (State.VOLVER, State.CENTRO) and self._vl_since is not None:
@@ -1964,25 +1986,49 @@ class Bot:
         self._hold_chunked(lambda s: self.gi.hold_keys(COMBO_ACTIONS[combo], s), secs)
 
     # ------------------------------------------------------------------ candidatos en el mapa
-    def _heading(self) -> float | None:
-        """Rumbo de la camara (rad, marco del juego) del cono del minimapa en la ultima captura; None si no se lee. Con el rumbo
-        de W medido por `keynav` (sin giros desde entonces) afina la correccion cono -> juego (EMA)."""
-        if self._img is None:
+    def _cone_reading(self) -> float | None:
+        """Rumbo (rad, marco del juego) del cono en la ultima captura, solo si es posterior al ultimo giro de camara (si no, la
+        imagen muestra la vista de antes); None si no se lee."""
+        if self._img is None or self._frames <= self._rot_frame:
             return None
         deg = self._heading_fn(self._img, self.cfg)
-        if deg is None:
-            if self.clock() - self._heading_warn_t >= 30.0:
-                self._heading_warn_t = self.clock()
-                logger.warning("No se lee el cono de la camara en el minimapa: sin rumbo no hay lista de candidatos")
-            return None
-        raw = math.radians(deg)
+        return None if deg is None else _wrap(math.radians(deg) + self._hoff)
+
+    def _save_senses(self) -> None:
+        """Guarda los sentidos de Q/E y A/D si se acaban de determinar (quedan fijos y se reusan en la proxima corrida)."""
+        if self.keynav.senses_dirty:
+            self.keynav.senses_dirty = False
+            self._senses.save(self.keynav.senses())
+
+    def _heading(self) -> float | None:
+        """Rumbo de la camara (rad, marco del juego): el cono del minimapa (mismo marco que las coordenadas; la lectura reemplaza el
+        cam_h de `keynav` y verifica el giro pendiente). Sin cono (o con una captura anterior al ultimo giro): el cam_h de `keynav`
+        (movimiento medido por las coordenadas y giros estimados), None si tampoco se conoce."""
         kn = self.keynav
-        if kn.heading is not None and kn.measured:
-            sample = _wrap(kn.heading - raw)
-            dev = _wrap(sample - self._hoff)
-            if abs(dev) <= math.radians(60.0):
-                self._hoff = _wrap(self._hoff + float(self.cfg["vision"]["minimap"]["offset_ema"]) * dev)
-        return _wrap(raw + self._hoff)
+        h = self._cone_reading()
+        if h is None:
+            if self._img is not None and self._frames > self._rot_frame and self.clock() - self._heading_warn_t >= 30.0:
+                self._heading_warn_t = self.clock()
+                logger.warning("No se lee el cono de la camara en el minimapa: %s",
+                               "uso el rumbo estimado por el movimiento" if kn.heading is not None else "sin rumbo")
+            return kn.heading
+        kn.sync_cone(h)   # tambien en modo clic: el giro hacia candidatos usa el sentido de Q/E de keynav
+        self._save_senses()
+        return h
+
+    def _learn_offset(self, leg: _KeyLeg, delta: Xy) -> None:
+        """Afina el desfase cono -> marco del juego con un tramo de W (o S) largo y sin giros: el desplazamiento tiene que ir hacia
+        donde mira el cono (o al reves con S). Muestras a mas de 40 grados (empujones, monstruos) se ignoran; el ajuste queda acotado."""
+        if leg.cone is None or leg.combo not in ("W", "S") or math.hypot(*delta) < 2.0 * float(self.nav["min_segment_game"]):
+            return
+        ref = leg.cone + (math.pi if leg.combo == "S" else 0.0)
+        dev = _wrap(math.atan2(delta[1], delta[0]) - ref)
+        if abs(dev) > math.radians(40.0):
+            return
+        mm = self.cfg["vision"]["minimap"]
+        top = math.radians(float(mm["offset_max_deg"]))
+        new = self._hoff + float(mm["offset_ema"]) * dev
+        self._hoff = self._hoff0 + max(-top, min(top, _wrap(new - self._hoff0)))
 
     def _list_ready(self, t: float) -> bool:
         """Hay un candidato vigente y dentro de la zona, y se puede girar hacia el (rumbo y posicion legibles)."""
@@ -2058,26 +2104,34 @@ class Bot:
             if wait is not None:
                 logger.info("Mapa de metin: ningun punto listo (proximo en %.0f s): exploro", wait)
             return False
-        now = self.spawns.now()
-        logger.info("Mapa de metin: voy al punto (%.0f, %.0f) a %.0f u (roto hace %.1f min, visto hace %.1f min)",
-                    spot.x, spot.y, math.dist(pos, spot.xy), (now - spot.last_broken) / 60, (now - spot.last_visit) / 60)
+        logger.info("Mapa de metin: voy al punto (%.0f, %.0f) a %.0f u (%s)", spot.x, spot.y, math.dist(pos, spot.xy),
+                    spot.ages(self.spawns.now()))
         x.spot, x.target, x.phase, x.walk_start = spot, spot.xy, "walk", t
         self._dest = x.target
         return True
 
     def _new_leg(self, x: _Explore, t: float, empty_lap: bool = False) -> None:
-        """Elige el proximo tramo recto: destino a `explore.border_margin` del borde y rumbo distinto de los recientes. Tras una
-        vuelta sin nada (`empty_lap`): el punto listo del mapa de metin o, si no hay, el centro de la zona (si esta lejos)."""
-        x.spot = None
+        """Elige el proximo tramo cuando no hay metin a la vista. Siempre hay adonde ir: el punto listo del mapa de metin mas cercano
+        (la hora desconocida cuenta como lista) o, si no hay, el centro de la zona (si esta a mas de `explore.center_return_u`);
+        se camina hasta llegar y recien ahi se busca. Ya en el centro y sin punto listo: otra vuelta de busqueda alli, y tras
+        `explore.center_laps` vueltas seguidas sin nada, un tramo al azar (el ultimo recurso)."""
+        x.spot, x.center = None, False
         if self._spawn_leg(x, t):
             return
         pos = self.tracker.position
-        if empty_lap and pos is not None:
+        if pos is not None:
             c = self.navigator.return_target(pos)
-            if math.dist(pos, c) > float(self.ex["center_return_u"]):
-                x.target, x.phase, x.walk_start = c, "walk", t
+            d = math.dist(pos, c)
+            if d > float(self.ex["center_return_u"]):
+                x.target, x.phase, x.walk_start, x.center = c, "walk", t, True
                 self._dest = c
-                logger.info("Vuelta sin candidatos y sin punto del mapa listo: voy al centro (%.0f, %.0f) y busco desde ahi", *c)
+                logger.info("Sin punto del mapa listo: voy al centro (%.0f, %.0f) a %.0f u y busco desde ahi", c[0], c[1], d)
+                return
+            if self._center_laps < int(self.ex["center_laps"]):
+                self._center_laps += 1
+                logger.info("Sin punto del mapa listo y en el centro (a %.0f u): busco de nuevo desde aqui (vuelta %d de %d)", d,
+                            self._center_laps, int(self.ex["center_laps"]))
+                self._new_sweep()
                 return
         if pos is None:
             x.target = self.navigator.exploration_target()
@@ -2088,9 +2142,10 @@ class Bot:
             self._legs.append(heading)
             self._visited = (self._visited + [pos, x.target])[-int(self.ex["visited_keep"]):]
             self._legs = self._legs[-max(1, int(self.ex["recent_legs"])):]
+        self._center_laps = 0
         x.phase, x.walk_start = "walk", t
         self._dest = x.target
-        logger.info("Tramo de exploracion hacia (%.0f, %.0f)", *x.target)
+        logger.info("Tramo de exploracion al azar hacia (%.0f, %.0f) (nada que buscar en el centro)", *x.target)
 
     def _do_explorar(self, p: Perception, t: float) -> Transition:
         x = self._ex
@@ -2145,7 +2200,8 @@ class Bot:
                    else self._walk_toward(p, t, x.target))
             limit = float(self.sp["max_walk_s"])
         else:
-            res, limit = self._walk_toward(p, t, x.target), float(self.ex["leg_s"])
+            res = self._walk_toward(p, t, x.target)
+            limit = float(self.sp["max_walk_s"]) if x.center else float(self.ex["leg_s"])
         if res == "arrived":
             self._close_episode("llego al destino")
         if res == "stuck":
@@ -2229,22 +2285,6 @@ class Bot:
         self._new_leg(x, t, empty_lap=True)
         return None
 
-    def _check_turn(self, x: _Explore, h: float) -> None:
-        """Compara el rumbo medido en el minimapa antes y despues de un giro hacia un candidato: si la camara se fue para el lado
-        contrario Q/E estan al reves de lo supuesto (se corrige); si giro en el sentido pedido afina la velocidad de giro."""
-        h0, err, secs = x.aim_last
-        x.aim_last = None
-        moved = _wrap(h - h0)
-        if abs(moved) < math.radians(10.0):
-            return
-        if moved * err < 0:
-            logger.warning("Q/E giran al reves de lo supuesto (pedi %.0f grados, la camara se movio %.0f): corrijo",
-                           math.degrees(err), math.degrees(moved))
-            self.keynav.flip_keys()
-            return
-        if abs(moved) >= math.radians(30.0) and secs > 0 and abs(err) <= self.keynav.max_turn:
-            self.keynav.learn_rate(abs(moved), secs)
-
     def _aim_look(self, p: Perception, t: float, x: _Explore, h: float, pos: Xy) -> Transition:
         """Gira directo hacia `x.aim` (verificando el rumbo con el minimapa), espera la compuerta y va al candidato de pantalla mas
         cercano a la posicion esperada; si no aparece, camina un tramo hacia el y vuelve a mirar."""
@@ -2253,8 +2293,6 @@ class Bot:
             if not self._start_aim(x, t, pos, "Lista de candidatos"):
                 self._new_sweep()
             return None
-        if x.aim_last is not None and self._turn_ready():
-            self._check_turn(x, h)
         dist = math.dist(c.xy, pos)
         bearing = math.atan2(c.xy[1] - pos[1], c.xy[0] - pos[0])
         err = _wrap(bearing - h)
@@ -2266,7 +2304,6 @@ class Bot:
             if x.aim_turns == 0:
                 logger.info("Giro hacia el candidato en (%.0f, %.0f) del mapa: rumbo %.0f (la camara mira a %.0f, giro %.0f)",
                             c.xy[0], c.xy[1], math.degrees(bearing) % 360, math.degrees(h) % 360, math.degrees(err))
-            x.aim_last = (h, err, secs)
             self._search_turn(key, secs)
             x.aim_turns += 1
             return None
@@ -2494,9 +2531,15 @@ class Bot:
         sd, sd0 = self.zone.signed_distance(pos), self.zone.signed_distance(leg.before)
         if leg.seconds > 0:
             edge = min(sd, sd0) < limit   # pasado de la guardia: no hay lugar para tramos largos, se mide con poco
-            ev = kn.observe(delta, leg.seconds, float(self.kb["edge_measure_u"]) if edge else None, leg.combo)
+            # con el cono a la vista el rumbo sale de el: el desplazamiento solo afina la velocidad (y afina el desfase del cono)
+            cone = self._cone_reading() is not None and leg.cone is not None
+            ev = kn.observe(delta, leg.seconds, float(self.kb["edge_measure_u"]) if edge else None, leg.combo,
+                            update_heading=not cone)
+            if cone:
+                self._learn_offset(leg, delta)
             if ev == "externo":
                 self.camera.on_camera_rotated()
+            self._save_senses()
         need = min(float(self.stuck["min_move"]), 0.4 * kn.speed * leg.seconds)
         self._zero_streak = 0 if math.hypot(*delta) >= need else self._zero_streak + 1
         if self._zero_streak >= self._stuck_segments:
@@ -2513,6 +2556,7 @@ class Bot:
         limit = self.navigator.guard_limit()
         best, done = [self.zone.signed_distance(pos)], [0.0]
         desc = self.keynav.describe(bearing=bearing)
+        cone_before = self._cone_reading()
 
         def hold(s: float) -> bool:
             ok = self.gi.hold_keys(COMBO_ACTIONS[combo], s)
@@ -2530,7 +2574,7 @@ class Bot:
 
         res = self._hold_chunked(hold, seconds, float(self.stuck["forward_chunk_s"]), guard)
         if done[0] > 0:
-            self._leg = _KeyLeg(combo, pos, done[0], self.clock())
+            self._leg = _KeyLeg(combo, pos, done[0], self.clock(), cone_before)
             if done[0] > self.tracker.max_dt:   # un tramo largo: la proxima lectura puede estar mas lejos de lo que el filtro permite
                 self.tracker.forget_reference()
             logger.info("Tramo: %s %.2f s | %s", combo, done[0], desc)
@@ -2563,28 +2607,79 @@ class Bot:
         self._run_leg(combo, s, pos, bearing)
         return "moving"
 
+    def _align_view(self, bearing: float) -> bool:
+        """La vista no apunta hacia `bearing` (mas que `align_deg`): la gira con Q/E hacia el (cono, o giros estimados). True si
+        el ciclo se usa en eso (giro dado o esperando la imagen del giro anterior); False si ya se dieron `aim_max_turns` giros
+        seguidos sin lograrlo (se camina igual: los tramos de W siguientes corrigen)."""
+        kn = self.keynav
+        if kn.heading is None or self._align_tries >= int(self.ex["aim_max_turns"]):
+            return False
+        if not self._turn_ready():
+            return True
+        delta = _wrap(bearing - kn.heading)
+        key, secs = kn.plan_turn(delta)
+        logger.info("Giro la vista %.0f grados (%s %.2f s) hacia el rumbo %.0f (la camara mira a %.0f)", math.degrees(delta), key,
+                    secs, math.degrees(bearing) % 360, math.degrees(kn.heading) % 360)
+        self._align_tries += 1
+        self._search_turn(key, secs)
+        return True
+
     def _walk_keys(self, p: Perception, t: float, target: Xy) -> str:
-        """`_walk_toward` con teclado, SIN girar la camara y sin mirar la imagen: a lo sumo UNA accion por ciclo (W/A/S/D
-        unos segundos); la lectura de coordenadas corre entre tramos. Elige la combinacion de las 8 cuyo cam_h + desvio
-        queda mas cerca del rumbo al destino; con cam_h desconocido (o estimado y A/D sin verificar) hace un tramo de
-        prueba con W. Mismo contrato de retorno que el modo clic ('done' no se usa: el tramo siguiente arranca en el
-        mismo ciclo en que se evalua el anterior)."""
+        """`_walk_toward` con teclado: a lo sumo UNA accion por ciclo (W unos segundos, o un giro de la vista con Q/E); la lectura
+        de coordenadas corre entre tramos. El rumbo de W (cam_h) sale del cono del minimapa (`_heading`) o, sin cono, del
+        movimiento medido. Con `keyboard.lateral` elige la combinacion de las 8 cuyo cam_h + desvio queda mas cerca del rumbo al
+        destino; si no (por defecto: A/D giran la vista en este juego) camina con W y primero alinea la vista con Q/E. Con cam_h
+        desconocido (o estimado y A/D sin verificar) hace un tramo de prueba con W. Mismo contrato de retorno que el modo clic
+        ('done' no se usa: el tramo siguiente arranca en el mismo ciclo en que se evalua el anterior)."""
         pos = self.tracker.position
         if pos is None:
             return "nocoords"
         leg, self._leg = self._leg, None
         if leg is not None and t - leg.end_t <= LEG_MAX_AGE_S and self.tracker.last_outcome == CoordTracker.OK:   # lectura buena de este ciclo
             res = self._after_leg(leg, pos)
+            if res == "stuck" and self._try_detour(p, t, pos):
+                res = None   # una sola secuencia: primero los desvios (girar la vista y probar otra direccion), despues DESTRABAR
             if res is not None:
                 return res
         if self.navigator.arrived(pos, target):
             return "arrived"
         kn = self.keynav
+        self._heading()   # el cono (si se lee) fija cam_h antes de planear
         bearing = math.atan2(target[1] - pos[1], target[0] - pos[0])
+        dt = self._detour
+        if dt is not None:   # desvio tras una traba: W recto hacia la direccion nueva hasta que pase `detour_s`
+            if self.clock() - dt.t0 >= float(self.stuck["detour_s"]):   # corre el tiempo entero: rodea, no solo se despega
+                self._detour = None
+            else:
+                if not self._turn_ready():
+                    return "moving"
+                if self._step(pos, "W", float(self.kb["chunk_s"]), bearing) == "moving":
+                    return "moving"
+                self._detour = None   # ni el minimo entra antes de la guardia de zona: se sigue con el plan normal
         plan = kn.plan_walk(bearing)
         combo = "W" if plan is None else plan[0]
+        if plan is not None and not kn.lateral:
+            if abs(plan[1]) <= kn.align:
+                self._align_tries = 0
+            elif kn.measured and self._align_view(bearing):   # un giro estimado y sin confirmar no se corrige con otro: primero se mide
+                return "moving"
+        if kn.heading is not None:
+            self._probe_blind = 0
         if kn.needs_probe(combo):
+            if kn.heading is None and self._probe_blind >= int(self.stuck["probe_blind"]):
+                # las pruebas de W no midieron nada (pared, acantilado): no se sigue empujando, se gira a ciegas y se prueba de nuevo
+                if not self._turn_ready():
+                    return "moving"
+                self._probe_blind = 0
+                secs = math.radians(float(self.stuck["blind_turn_deg"])) / kn.rate
+                logger.info("Sin rumbo y W no avanza: giro la vista %.0f grados a ciegas y pruebo de nuevo",
+                            float(self.stuck["blind_turn_deg"]))
+                self._search_turn(self.rng.choice(("left", "right")), secs)
+                return "moving"
+            if kn.heading is None:
+                self._probe_blind += 1
             return self._step(pos, "W", float(self.kb["probe_s"]), bearing)
+        self._align_tries = 0
         return self._step(pos, combo, min(float(self.kb["chunk_s"]), math.dist(pos, target) / kn.speed), bearing)
 
     def _unstuck_keys_back(self, ep: StuckEpisode) -> str:
@@ -2950,6 +3045,8 @@ class Bot:
             self._dbg("bloqueado", f"rodeado de {n} monstruos sin avanzar: ESPACIO")
             self.stats.surrounded += 1
             done = self._hold_space(float(self.stuck["surrounded_space_s"]))
+        elif self.kmode:
+            done = self._start_detour(pos, quiet)
         else:
             name, actions = SIDESTEPS[(sr.n - 1) % len(SIDESTEPS)]
             logger.info("Trabado caminando (quieto %.1f s, sin monstruos): paso al costado (%s) y sigo", quiet, name)
@@ -2962,6 +3059,68 @@ class Bot:
             self._zero_streak = 0           # una sola reaccion por episodio: el contador de tramos quietos empieza de cero
             sr.ref, sr.since = pos, self.clock()
         return True
+
+    def _try_detour(self, p: Perception, t: float, pos: Xy) -> bool:
+        """Varios tramos de W sin avanzar y sin monstruos alrededor (pared, acantilado): arranca un desvio (`_start_detour`), comparte
+        el presupuesto `stuck.surrounded_max` con el trabado rapido. False si hay monstruos (los maneja ESPACIO / DESTRABAR) o ya se
+        agoto el presupuesto (sigue DESTRABAR)."""
+        if p.monsters_near >= int(self.stuck["monsters_min"]):
+            return False
+        sr = self._sur if self._sur is not None else _Surround(pos, t)
+        self._sur = sr
+        if sr.origin is not None and math.dist(pos, sr.origin) >= float(self.stuck["resolve_dist"]):
+            sr.n, sr.origin = 0, None   # se alejo del lugar de la traba: presupuesto nuevo
+        if sr.n >= int(self.stuck["surrounded_max"]):
+            return False
+        if sr.n == 0:
+            sr.origin = pos
+        sr.n += 1
+        self._walk = self._leg = None
+        self._zero_streak = 0
+        ok = self._start_detour(pos, float(self.stuck["fast_s"]))
+        self.tracker.forget_reference()
+        sr.ref, sr.since = pos, self.clock()
+        return ok or True
+
+    def _blocked_here(self, pos: Xy) -> list[float]:
+        """Rumbos de W que ya no avanzaron cerca de `pos` (a `stuck.blocked_radius_u`)."""
+        r = float(self.stuck["blocked_radius_u"])
+        return [h for (bp, h) in self._blocked if math.dist(bp, pos) <= r]
+
+    def _start_detour(self, pos: Xy, quiet: float) -> bool:
+        """Trabado sin monstruos (pared, acantilado, arbol) en modo teclado: recuerda el rumbo de W que no avanzo en este lugar, gira
+        la vista 90 a 180 grados hacia otra direccion (la que mas se acerca al destino entre las no probadas aca) y deja un desvio
+        de W (`_Detour`) que `_walk_keys` camina `stuck.detour_s`. False si un captcha corto el giro."""
+        kn = self.keynav
+        if kn.heading is not None:
+            self._blocked = (self._blocked + [(pos, kn.heading)])[-int(self.stuck["blocked_keep"]):]
+        if kn.heading is None:   # sin rumbo: la prueba de W se encarga (gira a ciegas)
+            logger.info("Trabado caminando (quieto %.1f s, sin monstruos) y sin rumbo conocido: pruebo otra direccion", quiet)
+            self._probe_blind = max(self._probe_blind, int(self.stuck["probe_blind"]))
+            return True
+        tol = math.radians(float(self.stuck["blocked_tol_deg"]))
+        bad = self._blocked_here(pos)
+        cands = [_wrap(kn.heading + math.radians(a)) for a in self.stuck["detour_angles_deg"]]
+        free = [c for c in cands if all(abs(_wrap(c - b)) > tol for b in bad)] or cands
+        reach, limit, sd0 = kn.speed * float(self.stuck["detour_s"]) * 0.6, self.navigator.guard_limit(), self.zone.signed_distance(pos)
+        safe = [c for c in free if self.zone.signed_distance((pos[0] + math.cos(c) * reach, pos[1] + math.sin(c) * reach))
+                >= min(limit, sd0)]   # el desvio no saca de la zona
+        free = safe or free
+        dest = self._dest
+        if dest is not None:
+            want = math.atan2(dest[1] - pos[1], dest[0] - pos[0])
+            pick = min(free, key=lambda c: abs(_wrap(c - want)))
+        else:
+            pick = self.rng.choice(free)
+        delta = _wrap(pick - kn.heading)
+        key, secs = kn.plan_turn(delta)
+        logger.info("Trabado caminando (quieto %.1f s, sin monstruos): el rumbo %.0f no avanza (%d descartados aca); giro la vista "
+                    "%.0f grados (%s) y camino hacia %.0f", quiet, math.degrees(kn.heading) % 360, len(bad) + 1,
+                    math.degrees(delta), key, math.degrees(pick) % 360)
+        self.stats.sidesteps += 1
+        ok = self._search_turn(key, secs)
+        self._detour = _Detour(pick, pos, self.clock()) if ok else None
+        return ok
 
     def _hold_space(self, seconds: float | None = None) -> bool:
         """ESPACIO `seconds` (por defecto `stuck.space_s`) en tramos. False si un captcha lo interrumpio (ya esta en CAPTCHA)."""
@@ -2981,6 +3140,7 @@ class Bot:
             return ok
         res = self._hold_chunked(hold, seconds)
         self.keynav.on_turned(direction, done[0])
+        self._rot_frame = self._frames
         self.camera.on_camera_rotated()
         return res != "captcha"
 
@@ -2995,6 +3155,8 @@ class Bot:
         El llamador chequea `_turn_ready` antes. False si un captcha lo interrumpio."""
         ok = self._rotate_camera(direction, seconds)
         self._turn_t, self._turn_frame = self.clock(), self._frames
+        if self._sur is not None:
+            self._sur.since = self.clock()   # el tiempo girando no cuenta como "quieto sin avanzar"
         return ok
 
     def _peek_pos(self) -> tuple[int, int] | None:

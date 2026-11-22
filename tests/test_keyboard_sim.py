@@ -23,7 +23,7 @@ def fast(monkeypatch):
 
 def kcfg(**kb):
     cfg = make_cfg(navigation={"mode": "teclado"})
-    cfg["navigation"]["keyboard"] = dict(cfg["navigation"]["keyboard"], **kb)
+    cfg["navigation"]["keyboard"] = dict(cfg["navigation"]["keyboard"], **{"lateral": True, **kb})   # modelo de 8 combinaciones
     return cfg
 
 
@@ -200,8 +200,8 @@ def test_acercarse_a_una_piedra_no_gira_la_vista_ni_invierte_las_teclas():
     env = kenv(1, start=(520.0, 160.0))
     env.world.add_metin((640.0, 150.0), name=OSC)
     flips = []
-    orig = env.bot.keynav.flip_keys
-    env.bot.keynav.flip_keys = lambda: (flips.append(env.world.t), orig())[1]
+    orig = env.bot.keynav._fix_q
+    env.bot.keynav._fix_q = lambda key: (flips.append(env.world.t), orig(key))[1]
     env.run_until(lambda: env.world.broken, max_s=600)
     assert env.world.broken and not flips and env.bot.keynav.view_right_key == "camera_right"
     assert any(t.new == "ACERCARSE" for t in env.transitions)

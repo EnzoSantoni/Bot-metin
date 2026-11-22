@@ -83,7 +83,14 @@ DEFAULTS: dict[str, Any] = {
               # sostenida, clic de ataque) y las coordenadas se mueven < min_move durante fast_s -> con >= monsters_min monstruos
               # cerca ESPACIO surrounded_space_s, si no un paso al costado (attack.sidestep_s); y sigue en el mismo estado.
               # surrounded_max reacciones seguidas sin avanzar -> DESTRABAR. (Reemplaza a surrounded_s y attack.walk_stuck_s.)
-              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
+              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+              # Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
+              # (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino y no se probo en este lugar), se
+              # camina con W detour_s y se mira si avanza; un rumbo que no avanza se recuerda (blocked_keep, a blocked_radius_u del
+              # lugar y +-blocked_tol_deg) y no se repite. Sin rumbo conocido, tras probe_blind pruebas de W sin medir se gira a ciegas
+              # blind_turn_deg grados y se prueba de nuevo.
+              "detour_angles_deg": [90.0, -90.0, 135.0, -135.0, 180.0], "detour_s": 2.5, "blocked_keep": 12,
+              "blocked_radius_u": 15.0, "blocked_tol_deg": 40.0, "probe_blind": 2, "blind_turn_deg": 120.0},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -167,13 +174,14 @@ DEFAULTS: dict[str, Any] = {
                 # candidate_keep_s: vigencia; candidate_merge_u: fusion de los que caen cerca; candidate_tie_u: empate de distancia
                 # (gana el mas cerca del centro); candidate_max_u: mas lejos no se guarda; candidate_broken_u: radio que se borra
                 # alrededor de un metin roto; sweep_cut_floor: etiqueta objetivo a menos de esta distancia de piso corta la vuelta;
-                # center_return_u: vuelta sin nada y sin punto del mapa listo -> centro si esta a mas de esto.
+                # center_return_u: sin metin y sin punto del mapa listo -> centro si esta a mas de esto (se camina hasta llegar);
+                # center_laps: vueltas de busqueda seguidas en el centro sin nada antes de permitir un tramo al azar.
                 # ground_scale_u: escala inicial (unidades del juego por unidad de piso), se aprende (ground_scale_ema) acotada a
                 # ground_scale_bounds x el inicial; ground_reach_u: alcance de ataque que se suma a lo recorrido al medirla.
                 "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
                 "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
                 "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
-                "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+                "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
                 "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
     # ACERCARSE (piedra lejana sin etiqueta): max_seconds de la caminata; ignore_minutes / ignore_radius: posicion que
     # resulto ser de otro tipo; lost_cycles: ciclos sin ver la piedra para abandonar; label_match_px: una etiqueta a
@@ -230,9 +238,14 @@ DEFAULTS: dict[str, Any] = {
         # giro de Q/E (= 360 / (explore.camera_steps * explore.camera_step_s)), se aprende; max_turn_deg = giro maximo
         # por orden; walk_speed = velocidad inicial de caminata (u/s), se aprende; min_step_s = tramo de W minimo;
         # edge_measure_u = desplazamiento minimo para medir el rumbo cuando el personaje esta pasado de la guardia de zona;
-        # view_right_key = tecla (camera_left / camera_right) que gira la VISTA a la derecha (se aprende si esta al reves).
+        # view_right_key = tecla (camera_left / camera_right) que gira la VISTA a la derecha; ad_side = "normal" (D camina a la
+        # derecha de W) o "reverso"; con "auto" se determinan UNA vez (senses_votes muestras coherentes; sin fijar se asume
+        # camera_right y "normal"), se guardan en senses_file y quedan FIJOS el resto de la corrida (la evidencia contraria
+        # solo avisa). lateral = caminar tambien con A/D: en este juego A/D giran la vista, asi que por defecto es false (se camina
+        # con W y la vista se alinea con Q/E).
         "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
-                     "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"},
+                     "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "auto",
+                     "ad_side": "auto", "lateral": False, "senses_votes": 3, "senses_file": "logs/sentidos.json"},
     },
     "vision": {
         # Plano del piso (bot/ground.py) para comparar distancias con perspectiva: horizonte a horizon_frac del alto,
@@ -242,10 +255,14 @@ DEFAULTS: dict[str, Any] = {
         # Rumbo de la camara desde el cono del minimapa (bot/vision/minimap.py): centro del minimapa (el personaje) a
         # (ancho + center_dx, center_dy); rayos cada step_deg entre r_min y r_max px; se ignoran pixeles rojos y de V < min_val;
         # un rayo necesita min_samples validos; el cono = arco de rayos con exceso de V sobre la mediana > max(min_excess,
-        # rel_frac x percentil 95) y de ancho width_deg [min, max]. heading_offset_deg: se suma al rumbo medido (se aprende).
+        # rel_frac x percentil 95) y de ancho width_deg [min, max]; si no lee, segundo pase relajado (umbrales x relax_factor y
+        # ancho relax_width_deg). El cono esta en el MISMO marco que las coordenadas (0 = este, y hacia abajo; sin espejo, medido en
+        # debug/run_20261121_205635): heading_offset_deg = 0 se suma al rumbo medido y el bot solo lo afina con tramos de W
+        # (EMA offset_ema, tope +-offset_max_deg).
         "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
                     "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
-                    "heading_offset_deg": 0.0, "offset_ema": 0.3},
+                    "relax_factor": 0.5, "relax_width_deg": [8.0, 100.0],
+                    "heading_offset_deg": 0.0, "offset_ema": 0.15, "offset_max_deg": 20.0},
         # Zonas de interfaz ignoradas. dx/dy: esquina superior izquierda respecto del punto de
         # anclaje (medido sobre ./samples). Los rectangulos se recortan al tamano de la imagen.
         "exclusion_zones": [
@@ -580,11 +597,14 @@ def _validate_far_monsters(vision: dict) -> None:
     _validate_far_structure(fm)
     mm = _require_dict(vision.get("minimap"), "vision.minimap")
     for k in ("center_dx", "center_dy", "r_min", "r_max", "step_deg", "min_val", "min_samples", "min_excess", "rel_frac",
-              "heading_offset_deg", "offset_ema"):
+              "heading_offset_deg", "offset_ema", "relax_factor", "offset_max_deg"):
         v = mm.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool):
             raise ConfigError(f"vision.minimap.{k} debe ser un numero")
     _require_numbers(mm.get("width_deg"), "vision.minimap.width_deg", 2)
+    _require_numbers(mm.get("relax_width_deg"), "vision.minimap.relax_width_deg", 2)
+    if not 0 < mm["relax_factor"] <= 1 or mm["offset_max_deg"] < 0 or not 0 < mm["relax_width_deg"][0] <= mm["relax_width_deg"][1] <= 180:
+        raise ConfigError("vision.minimap: 0 < relax_factor <= 1, offset_max_deg >= 0, relax_width_deg = [min, max] con 0 < min <= max <= 180")
     if (mm["r_min"] <= 0 or mm["r_min"] >= mm["r_max"] or mm["step_deg"] <= 0 or mm["min_samples"] < 1
             or not 0 < mm["width_deg"][0] <= mm["width_deg"][1] <= 180 or not 0 < mm["offset_ema"] <= 1):
         raise ConfigError("vision.minimap: 0 < r_min < r_max, step_deg > 0, min_samples >= 1, width_deg = [min, max] "
@@ -883,6 +903,13 @@ def _validate_tracking_navigation(cfg: dict) -> None:
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
           "forward_chunk_s", "back_s", "look_walk_s", "fast_s", "surrounded_space_s", "surrounded_max"))
+    st = cfg["stuck"]
+    for k in ("detour_s", "blocked_keep", "blocked_radius_u", "blocked_tol_deg", "probe_blind", "blind_turn_deg"):
+        if not isinstance(st.get(k), (int, float)) or isinstance(st.get(k), bool) or st[k] <= 0:
+            raise ConfigError(f"stuck.{k} debe ser un numero > 0")
+    da = st.get("detour_angles_deg")
+    if not isinstance(da, list) or not da or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in da):
+        raise ConfigError("stuck.detour_angles_deg debe ser una lista de numeros (grados)")
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
@@ -935,6 +962,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
             raise ConfigError(f"explore.{k} debe ser un numero > 0")
     if ex["sweep_deg"] > 360 or ex["ground_scale_ema"] > 1:
         raise ConfigError("explore.sweep_deg debe ser <= 360 y explore.ground_scale_ema <= 1")
+    if not isinstance(ex.get("center_laps"), int) or isinstance(ex.get("center_laps"), bool) or ex["center_laps"] < 0:
+        raise ConfigError("explore.center_laps debe ser un entero >= 0 (0 = tramos al azar apenas no hay punto ni candidatos)")
     if not isinstance(ex.get("candidate_walk_tries"), int) or ex["candidate_walk_tries"] < 0:
         raise ConfigError("explore.candidate_walk_tries debe ser un entero >= 0")
     _require_numbers(ex.get("ground_scale_bounds"), "explore.ground_scale_bounds", 2)
@@ -958,8 +987,16 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         v = kb.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"navigation.keyboard.{k} debe ser un numero > 0")
-    if kb.get("view_right_key") not in ("camera_left", "camera_right"):
-        raise ConfigError("navigation.keyboard.view_right_key debe ser \"camera_left\" o \"camera_right\"")
+    if kb.get("view_right_key") not in ("auto", "camera_left", "camera_right"):
+        raise ConfigError("navigation.keyboard.view_right_key debe ser \"auto\", \"camera_left\" o \"camera_right\"")
+    if kb.get("ad_side") not in ("auto", "normal", "reverso"):
+        raise ConfigError("navigation.keyboard.ad_side debe ser \"auto\", \"normal\" o \"reverso\"")
+    if not isinstance(kb.get("lateral"), bool):
+        raise ConfigError("navigation.keyboard.lateral debe ser true o false")
+    v = kb.get("senses_votes")
+    if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+        raise ConfigError("navigation.keyboard.senses_votes debe ser un entero >= 1")
+    _require_text(kb.get("senses_file"), "navigation.keyboard.senses_file")
     _require_numbers(n.get("click_radius_px"), "navigation.click_radius_px", 2)
     cr = n["click_radius_px"]
     if cr[0] <= 0 or cr[0] > cr[1]:

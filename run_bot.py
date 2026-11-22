@@ -179,6 +179,9 @@ def main(argv: list[str] | None = None, *, cfg: dict | None = None, window: Any 
     kwargs = dict(bot_kwargs or {})
     if not args.observar:   # marca de "a pie": la proxima corrida se sube si esta se corto a pie (F12)
         kwargs.setdefault("mount_marker", resolve_path(cfg["log"]["dir"]) / "a_pie.flag")
+    if not args.observar:   # sentidos de Q/E y A/D: se determinan una vez y se reusan en la proxima corrida
+        from bot.keynav import SensesStore
+        kwargs.setdefault("senses", SensesStore(resolve_path(cfg["navigation"]["keyboard"]["senses_file"])))
     if args.observar and cfg["spawns"]["enabled"] and "spawn_map" not in kwargs:   # observar lee el mapa pero NO lo escribe
         kwargs["spawn_map"] = spawn_map_from_config(cfg["spawns"], read_only=True)
     bot = Bot(cfg, window, gi, control, alarm, **kwargs)

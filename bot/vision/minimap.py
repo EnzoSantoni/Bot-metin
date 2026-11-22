@@ -3,12 +3,14 @@
 El minimapa tiene el norte fijo y muestra, centrado en el personaje, un abanico (cono) mas claro hacia donde mira la
 camara. Se miden, en rayos alrededor del centro, los V (brillo HSV) medios entre `r_min` y `r_max` px; el abanico es el
 arco mas largo con exceso de brillo sobre la mediana. El rumbo es el centro de ese arco, en grados con el marco de la
-imagen: atan2(dy, dx) con y hacia abajo (0 = este, 90 = sur), el mismo de las coordenadas del juego.
+imagen: atan2(dy, dx) con y hacia abajo (0 = este, 90 = sur).
+
+Marco (medido con debug/run_20261121_205635, ver PROGRESS.md): ese marco es EL MISMO de las coordenadas del juego, sin
+espejo ni giro (`vision.minimap.heading_offset_deg` = 0): W camina hacia el rumbo del cono. Un pase estricto
+(`min_excess`, `rel_frac`, `width_deg`) y, si no lee, uno relajado (`relax_*`: cono tenue o parcialmente tapado).
 Config: `vision.minimap`.
 """
 from __future__ import annotations
-
-import math
 
 import cv2
 import numpy as np
@@ -22,8 +24,8 @@ def _rays(cfg: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return angs, rads, np.outer(np.cos(angs), rads)
 
 
-def camera_heading(img: np.ndarray, cfg: dict) -> float | None:
-    """Rumbo de la camara en grados [0, 360) (0 = este, 90 = sur) o None si no se ve un abanico creible."""
+def _ray_excess(img: np.ndarray, cfg: dict) -> np.ndarray | None:
+    """Exceso de brillo de cada rayo sobre la mediana (0 donde no hay muestras validas); None si no se puede medir."""
     m = cfg["vision"]["minimap"]
     h, w = img.shape[:2]
     cx, cy = w + float(m["center_dx"]), float(m["center_dy"])
@@ -45,8 +47,13 @@ def camera_heading(img: np.ndarray, cfg: dict) -> float | None:
     mean = np.where(cnt >= int(m["min_samples"]), (val[ys, xs] * ok).sum(axis=1) / np.maximum(cnt, 1), np.nan)
     if np.isnan(mean).all():
         return None
-    exc = np.nan_to_num(mean - np.nanmedian(mean))
-    thr = max(float(m["min_excess"]), float(m["rel_frac"]) * float(np.percentile(exc, 95)))
+    return np.nan_to_num(mean - np.nanmedian(mean))
+
+
+def _longest_arc(exc: np.ndarray, min_excess: float, rel_frac: float, step: float,
+                 width: tuple[float, float]) -> float | None:
+    """Centro (grados) del arco mas largo con exceso > max(min_excess, rel_frac x percentil 95) y ancho en `width`."""
+    thr = max(min_excess, rel_frac * float(np.percentile(exc, 95)))
     mask = exc > thr
     n = len(mask)
     if not mask.any() or mask.all():
@@ -59,8 +66,22 @@ def camera_heading(img: np.ndarray, cfg: dict) -> float | None:
                 ln += 1
             if ln > best_l:
                 best_s, best_l = s, ln
-    step = float(m["step_deg"])
-    lo, hi = m["width_deg"]
-    if not lo <= best_l * step <= hi:
+    if not width[0] <= best_l * step <= width[1]:
         return None
     return ((best_s + best_l / 2.0 - 0.5) * step) % 360.0
+
+
+def camera_heading(img: np.ndarray, cfg: dict) -> float | None:
+    """Rumbo de la camara en grados [0, 360) (0 = este, 90 = sur) o None si no se ve un abanico creible."""
+    m = cfg["vision"]["minimap"]
+    exc = _ray_excess(img, cfg)
+    if exc is None:
+        return None
+    step = float(m["step_deg"])
+    lo, hi = m["width_deg"]
+    h = _longest_arc(exc, float(m["min_excess"]), float(m["rel_frac"]), step, (float(lo), float(hi)))
+    if h is not None:
+        return h
+    rlo, rhi = m["relax_width_deg"]
+    return _longest_arc(exc, float(m["min_excess"]) * float(m["relax_factor"]), float(m["rel_frac"]) * float(m["relax_factor"]),
+                        step, (float(rlo), float(rhi)))

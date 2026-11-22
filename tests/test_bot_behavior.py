@@ -260,6 +260,7 @@ def test_centro_llega_al_centro_y_despues_barre_y_explora():
 # ---------------------------------------------------------------- E: exploracion en tramos y barridos
 def test_regla_e_destinos_bien_adentro_y_rumbos_distintos():
     env = SimEnv(6, start=(520.0, 150.0))
+    env.cfg["explore"]["center_laps"] = 0   # esta regla es de los tramos al azar (el ultimo recurso, tras las vueltas en el centro)
     targets, headings = [], []
     orig = env.bot.navigator.leg_target
 
@@ -319,6 +320,7 @@ def test_acercarse_piedra_lejana_aparece_la_etiqueta_y_ataca():
 def test_acercarse_si_es_avaricia_ignora_esa_posicion(caplog):
     caplog.set_level(logging.INFO)
     env = SimEnv(1, start=(480, 150))
+    env.cfg["explore"]["center_laps"] = 0   # la busqueda recorre la zona (tramos al azar) para encontrar la piedra
     ava = env.world.add_metin((580, 150), name=AVA)
     env.run_until(max_s=200)
     assert all(m is not ava for _, m in env.world.clicks_on_metin)

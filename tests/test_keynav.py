@@ -10,8 +10,9 @@ from sim_bot_env import make_cfg
 
 
 def nav(**kb):
+    """KeyboardNav con A/D laterales (el modelo de 8 combinaciones); `lateral=False` = solo W (el valor por defecto de la config)."""
     cfg = make_cfg(navigation={"mode": "teclado"})
-    cfg["navigation"]["keyboard"] = dict(cfg["navigation"]["keyboard"], **kb)
+    cfg["navigation"]["keyboard"] = dict(cfg["navigation"]["keyboard"], **{"lateral": True, **kb})
     return KeyboardNav(cfg)
 
 
@@ -84,18 +85,92 @@ def test_barrido_largo_invalida_el_rumbo():
     assert walk(k, 77) == "medido" and k.rate == k.rate0 and k.view_right_key == "camera_right"
 
 
-def test_inversion_de_q_e_exige_dos_giros_consistentes(caplog):
+def test_inversion_inicial_de_q_e_exige_tres_giros_consistentes_y_queda_fija(caplog):
     k = nav()
+    assert not k.locked_q
     walk(k, 0)
     k.on_turned("right", 1.0)         # se suponen +60 grados
     assert walk(k, -60) == "dudoso"   # una sola muestra al reves NO alcanza
-    assert k.view_right_key == "camera_right"
     k.on_turned("right", 1.0)         # otra vez +60 supuestos desde el cam_h medido (-60)
-    with caplog.at_level(logging.WARNING):
-        assert walk(k, -120) == "invertido"   # la segunda vez tambien giro hacia la izquierda
-    assert k.view_right_key == "camera_left"
-    assert any("Q/E giran al reves" in r.message for r in caplog.records)
+    assert walk(k, -120) == "dudoso" and k.view_right_key == "camera_right"   # dos tampoco
+    k.on_turned("right", 1.0)
+    with caplog.at_level(logging.INFO):
+        assert walk(k, -180) == "invertido"   # la tercera vez tambien giro hacia la izquierda
+    assert k.view_right_key == "camera_left" and k.locked_q and k.senses() == {"view_right_key": "camera_left"}
+    assert any("Sentido de Q/E determinado" in r.message for r in caplog.records)
     assert k.plan_turn(math.radians(60))[0] == "left"      # ya con el sentido corregido
+
+
+def test_sentido_de_q_e_fijo_no_se_invierte_con_evidencia_contraria(caplog):
+    k = nav(view_right_key="camera_right")      # fijado por config
+    assert k.locked_q
+    walk(k, 0)
+    heading = 0.0
+    with caplog.at_level(logging.WARNING):
+        for i in range(6):
+            k.on_turned("right", 1.0)           # +60 supuestos, pero la camara va hacia la izquierda
+            heading -= 60
+            assert walk(k, heading) == "dudoso"
+    assert k.view_right_key == "camera_right" and k.senses() == {"view_right_key": "camera_right"}
+    assert sum("Q/E" in r.message and "fijado" in r.message for r in caplog.records) == 1    # un solo aviso
+
+
+def test_q_e_se_fija_con_tres_giros_coherentes():
+    k = nav()
+    for i in range(3):
+        walk(k, 0)
+        k.on_turned("right", 1.0)
+        assert walk(k, 60) in ("aprendido", "medido")
+    assert k.locked_q and k.view_right_key == "camera_right" and k.senses_dirty
+    for i in range(3):                           # ya fijo: tres giros al reves no lo cambian
+        walk(k, 0)
+        k.on_turned("right", 1.0)
+        walk(k, -60)
+    assert k.view_right_key == "camera_right"
+
+
+def test_giro_al_reves_ambiguo_o_chico_no_vota():
+    k = nav()
+    walk(k, 0)
+    k.on_turned("right", 1.5)                    # +90 pedidos; la muestra cae a -170: no encaja ni con +90 ni con -90
+    assert walk(k, -170) == "medido" and k._turn_votes == 0
+    k = nav()
+    walk(k, 0)
+    k.on_turned("right", 0.5)                    # +30 pedidos, -15 medidos: muy poco para votar
+    assert walk(k, -15) == "medido" and k._turn_votes == 0
+
+
+def test_sync_cone_verifica_el_giro_pendiente_y_fija_cam_h():
+    k = nav()
+    k.sync_cone(math.radians(10))
+    assert k.measured and math.degrees(k.heading) == pytest.approx(10)
+    k.on_turned("right", 1.0)                    # +60 pedidos
+    assert k.sync_cone(math.radians(70)) == "aprendido" and math.degrees(k.heading) == pytest.approx(70)
+    assert k.pending is None
+
+
+def test_sentidos_se_cargan_de_un_archivo_y_se_guardan(tmp_path):
+    from bot.keynav import SensesStore
+    store = SensesStore(tmp_path / "sub" / "sentidos.json")
+    assert store.load() == {}
+    k = nav()
+    k.load_senses({"view_right_key": "camera_left", "ad_side": "reverso"})
+    assert k.view_right_key == "camera_left" and k.side == -1 and k.locked_q and k.locked_ad
+    store.save(k.senses())
+    assert store.load() == {"view_right_key": "camera_left", "ad_side": "reverso"}
+    k2 = nav(view_right_key="camera_right")      # lo fijado por config manda sobre el archivo
+    k2.load_senses(store.load())
+    assert k2.view_right_key == "camera_right" and k2.side == -1
+    (tmp_path / "malo.json").write_text("{no json", encoding="utf-8")
+    assert SensesStore(tmp_path / "malo.json").load() == {} and SensesStore(None).load() == {}
+    SensesStore(None).save({"x": 1})             # sin ruta no escribe nada
+
+
+def test_sin_lateral_plan_walk_solo_usa_w():
+    k = nav(lateral=False)
+    walk(k, 141)
+    combo, err = k.plan_walk(math.radians(141 + 90))
+    assert combo == "W" and math.degrees(err) == pytest.approx(-90)
 
 
 def test_un_giro_al_reves_aislado_no_invierte_q_e():
@@ -156,13 +231,15 @@ def test_tramo_sin_avance_no_toca_la_velocidad():
     assert k.speed == v and k.heading is None
 
 
-def test_muestra_lejana_se_descarta_y_dos_seguidas_reemplazan(caplog):
+def test_muestra_lejana_se_descarta_y_tres_seguidas_reemplazan(caplog):
     k = nav()
     walk(k, 0)
     with caplog.at_level(logging.WARNING):
         assert walk(k, 90) == "externo"      # una muestra a mas de 60 grados de cam_h medido se descarta
+        assert walk(k, 90) == "externo"      # dos seguidas tampoco alcanzan (evidencia fuerte: tres)
         assert math.degrees(k.heading) == pytest.approx(0)
-        assert walk(k, 90) == "externo"      # dos seguidas: la camara si cambio
+        assert not any("girada por fuera" in r.message for r in caplog.records)
+        assert walk(k, 90) == "externo"      # tres seguidas y coherentes entre si: la camara si cambio
     assert any("girada por fuera" in r.message for r in caplog.records)
     assert math.degrees(k.heading) == pytest.approx(90)
     assert walk(k, 100) == "medido"          # una variacion chica no es "externo"
@@ -182,11 +259,13 @@ def test_giro_pendiente_con_error_de_medicion_chico_no_invierte():
     assert walk(k, 28) == "aprendido" and k.view_right_key == "camera_right"
 
 
-def test_flip_keys_olvida_el_rumbo():
+def test_muestras_lejanas_incoherentes_entre_si_no_declaran_giro_por_fuera(caplog):
     k = nav()
-    walk(k, 10)
-    k.flip_keys()
-    assert k.view_right_key == "camera_left" and k.heading is None
+    walk(k, 0)
+    with caplog.at_level(logging.WARNING):
+        for deg in (90, -100, 160, 100, -90, 170):   # lejos de cam_h pero cada una para un lado: ruido (empujones)
+            assert walk(k, deg) == "externo"
+    assert math.degrees(k.heading) == pytest.approx(0) and not caplog.records
 
 
 def test_describe():
@@ -235,18 +314,23 @@ def test_probe_si_cam_h_estimado_y_combinacion_lateral_sin_verificar():
     assert not k.needs_probe("W+D")            # medido otra vez
 
 
-def test_a_d_al_reves_se_corrige_con_dos_muestras_seguidas(caplog):
+def test_a_d_al_reves_se_determina_con_tres_muestras_seguidas_y_queda_fijo(caplog):
     k = nav()
     walk(k, 0)                                 # cam_h = 0
     # mundo con A/D espejadas: W+D camina en realidad a -45 (en vez de +45)
     assert walk(k, -45, combo="W+D") == "externo" and k.side == 1      # una sola muestra no alcanza
-    with caplog.at_level(logging.WARNING):
+    assert walk(k, -45, combo="W+D") == "externo" and k.side == 1      # dos tampoco
+    with caplog.at_level(logging.INFO):
         assert walk(k, -45, combo="W+D") == "invertido"
-    assert k.side == -1 and any("A/D caminan al reves" in r.message for r in caplog.records)
+    assert k.side == -1 and k.locked_ad and any("Sentido de A/D determinado" in r.message for r in caplog.records)
+    assert k.senses() == {"ad_side": "reverso"}
     assert math.degrees(k.heading) == pytest.approx(0)
     assert math.degrees(k.offset("D")) == pytest.approx(-90) and math.degrees(k.offset("S")) == pytest.approx(180)
     assert "A/D al reves" in k.describe()
     assert k.plan_walk(math.radians(45))[0] == "W+A"     # ahora W+A es hacia la derecha
+    for _ in range(5):                         # fijo: evidencia contraria (A/D normales) no lo vuelve a invertir
+        walk(k, 45, combo="W+D")
+    assert k.side == -1
 
 
 def test_a_d_normales_no_se_invierten_con_ruido():

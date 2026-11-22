@@ -80,8 +80,8 @@ def test_con_a_d_al_reves_lo_corrige_en_pocos_tramos(caplog, phi, rel):
     dist = env.track_zone()
     assert walk_to(env, target) == "cond"
     msgs = [r.message for r in caplog.records]
-    flip = next(i for i, m in enumerate(msgs) if "A/D caminan al reves de lo supuesto, corrijo" in m)
-    assert sum(1 for m in msgs[:flip] if m.startswith("Tramo: ")) <= 3
+    flip = next(i for i, m in enumerate(msgs) if "Sentido de A/D determinado: al reves" in m)
+    assert sum(1 for m in msgs[:flip] if m.startswith("Tramo: ")) <= 5     # 1 de prueba + 3 muestras al reves
     assert env.bot.keynav.side == -1
     assert math.dist(tuple(env.world.pos), target) <= float(env.cfg["center"]["arrive_dist"]) + ARRIVE_EXTRA
     assert max(dist) <= tol(env) and clicks_left(env) == 0
@@ -93,7 +93,7 @@ def test_a_d_normales_nunca_dicen_que_estan_al_reves(caplog):
         env = SimEnv(seed, cfg=kcfg(), phi=phi, start=START, speed=SPEED, coords_noise=0.02)
         walk_to(env, (START[0] + 25, START[1] - 25))
         env.bot._enter(State.EXPLORAR, "fin")
-    assert "A/D caminan al reves" not in caplog.text
+    assert "A/D determinado: al reves" not in caplog.text
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3, 4])
@@ -116,12 +116,12 @@ def test_giros_de_camara_ruidosos_igual_llega_y_no_abandona_la_zona(seed):
 
 
 def test_nunca_concluye_q_e_al_reves_con_una_sola_muestra():
-    """Una muestra de giro contraria a lo ordenado (por ruido) no invierte Q/E: hacen falta dos seguidas."""
+    """Una muestra de giro contraria a lo ordenado (por ruido) no invierte Q/E: hacen falta `senses_votes` seguidas."""
     env = SimEnv(2, cfg=kcfg(), start=START, speed=SPEED, turn_noise=(0.3, 1.5))
     kn = env.bot.keynav
     flips = []
-    orig = kn.flip_keys
-    kn.flip_keys = lambda: (flips.append(1), orig())[1]
+    orig = kn._fix_q
+    kn._fix_q = lambda key: (flips.append(1), orig(key))[1]
     seen = []
     obs = kn.observe
     kn.observe = lambda *a, **k: (seen.append(obs(*a, **k)), seen[-1])[1]

@@ -261,7 +261,9 @@ def test_robustez_mundos_aleatorios(seed):
 def test_robustez_mundos_aleatorios_con_teclado(seed):
     """Mismos mundos al azar (camaras giradas, espejadas, inclinadas) con la caminata por coordenadas: VOLVER vuelve al tope
     de 25 s (a ciegas por clic tardaba 40-46 s en 2 de 20 mundos)."""
-    env = random_world(seed, make_cfg(navigation={"mode": "teclado"}))
+    cfg = make_cfg(navigation={"mode": "teclado"})
+    cfg["navigation"]["keyboard"]["lateral"] = True   # estos mundos no tienen cono y sus A/D desplazan de costado: modelo de 8 combinaciones
+    env = random_world(seed, cfg)
     dist = env.track_zone()
     assert env.run_until(max_s=300) == "limite"
     assert max(dist) <= tol(env)
