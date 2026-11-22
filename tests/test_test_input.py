@@ -48,7 +48,7 @@ def test_all_steps():
     code, be, _ = run(["--simular"])
     assert code == 0
     kd = [e for e in be.events if e[0] in ("key_down", "scroll", "mouse_down")]
-    assert kd == [("key_down", "q"), ("key_down", "e"), ("scroll", -3), ("scroll", 3),
+    assert kd == [("key_down", "q"), ("key_down", "e"), ("scroll", 3), ("scroll", -3),
                   ("key_down", "z"), ("key_down", "ctrl"), ("key_down", "g"),
                   ("key_down", "ctrl"), ("key_down", "g"), ("key_down", "w"),
                   ("mouse_down", "left"), ("key_down", "esc")]
@@ -66,7 +66,7 @@ def test_solo_camara():
     code, be, _ = run(["--simular", "--solo", "camara"])
     assert code == 0
     assert keys(be) == ["q", "e"]
-    assert [e for e in be.events if e[0] == "scroll"] == [("scroll", -3), ("scroll", 3)]
+    assert [e for e in be.events if e[0] == "scroll"] == [("scroll", 3), ("scroll", -3)]   # primero aleja (zoom_out_sign 1: adelante)
 
 
 def test_solo_mouse():

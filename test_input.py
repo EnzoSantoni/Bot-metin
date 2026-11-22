@@ -94,15 +94,17 @@ def _capture_with_mask(gi: GameInput) -> tuple[Any, Any] | None:
 
 
 def _step_zoom(gi: GameInput) -> None:
-    _announce(2, "Zoom: rueda -3 y +3", "la camara se aleja y se acerca")
+    out = int(gi.cfg["camera_pitch"]["zoom_out_sign"])   # sentido de la rueda que ALEJA (config)
+    _announce(2, f"Zoom: rueda {out * ZOOM_CLICKS:+d} y {-out * ZOOM_CLICKS:+d} (camera_pitch.zoom_out_sign = {out})",
+              "la camara primero se ALEJA y despues se acerca")
     shot = _capture_with_mask(gi)
     if shot is None:
         return
-    gi.zoom(-ZOOM_CLICKS, shot[1])
+    gi.zoom(out * ZOOM_CLICKS, shot[1])
     gi.control.sleep(STEP_WAIT_S)
     shot = _capture_with_mask(gi)
     if shot is not None:
-        gi.zoom(ZOOM_CLICKS, shot[1])
+        gi.zoom(-out * ZOOM_CLICKS, shot[1])
 
 
 def _step_pickup(gi: GameInput) -> None:
