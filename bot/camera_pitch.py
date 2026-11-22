@@ -143,44 +143,59 @@ class CameraPitch:
         return split_px(px, int(self.c["max_drag_px"])) if px >= mn else [px + mn, -mn]
 
     def move_down(self, cur: tuple[Any, Any], perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None],
-                  px: int) -> tuple[Any, Any] | None:
-        """Baja la camara `px` px (neto) con `plan_down`. Devuelve la percepcion final o None si se corto."""
+                  px: int, limit: str | None = None) -> tuple[Any, Any] | None:
+        """Aleja la camara `px` px (neto) del tope `limit` hacia el angulo normal: desde el tope horizontal se arrastra hacia
+        ABAJO; desde el tope "arriba", hacia ARRIBA. Devuelve la percepcion final o None si se corto."""
+        sgn = 1 if (limit or self.c["limit"]) == "horizontal" else -1
         for dy in self.plan_down(px):
-            cur = self._drag(cur, perceive, gi, dy)
+            cur = self._drag(cur, perceive, gi, sgn * dy)
             if cur is None:
                 return None
             sleep(float(self.c["drag_pause_s"]))
         return cur
 
     def to_top(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str,
-               down_px: int = 0) -> tuple[Any, Any] | None:
-        """Zoom lejos y camara al tope horizontal; despues baja `down_px`. Devuelve la ultima percepcion o None si se corto."""
+               down_px: int = 0, limit: str | None = None,
+               on_phase: Callable[[str, tuple[Any, Any]], None] | None = None) -> tuple[Any, Any] | None:
+        """Reinicio en 3 pasos: (1) arrastre con el clic derecho hasta el tope `limit` ("horizontal" = hacia ARRIBA;
+        "arriba" = hacia ABAJO, camara desde arriba). Ojo: seguir arrastrando contra el tope horizontal ACERCA la camara al
+        personaje (comprobado por Enzo); por eso (2) DESPUES la rueda hasta el tope "lejos" (`zoom_out_sign`) recupera la
+        distancia normal; (3) recien ahi se aleja `down_px` del tope hacia el angulo normal. `on_phase(nombre, (img, p))`
+        recibe la captura despues de "tope" y de "rueda" (calibracion). Devuelve la ultima percepcion o None si se corto."""
         c = self.c
+        lim = limit or c["limit"]
         self.last_reset_t, self.floor_streak = t, 0
-        ups = [-d for d in split_px(int(c["to_limit_px"]), int(c["max_drag_px"]))]
-        logger.info("Camara: reinicio desde el tope (zoom lejos, arriba %d px, abajo %d px) [%s]", int(c["to_limit_px"]), down_px, why)
+        sgn = -1 if lim == "horizontal" else 1   # dy < 0 = arrastre hacia arriba
+        drags = [sgn * d for d in split_px(int(c["to_limit_px"]), int(c["max_drag_px"]))]
+        clicks = int(c["zoom_out_clicks"])
+        wheel = int(c["zoom_out_sign"]) * clicks
+        logger.info("Camara: reinicio desde el tope %s (arrastre %s %d px, despues rueda %+d para alejar "
+                    "[zoom_out_sign = %d], despues %d px hacia el angulo normal) [%s]", lim,
+                    "hacia arriba" if sgn < 0 else "hacia abajo", int(c["to_limit_px"]), wheel, int(c["zoom_out_sign"]),
+                    down_px, why)
         cur = perceive()
         if cur is None:
             return None
-        clicks = int(c["zoom_out_clicks"])
-        if clicks > 0:
-            wheel = int(c["zoom_out_sign"]) * clicks
-            logger.info("Camara: rueda %+d (camera_pitch.zoom_out_sign = %d; + = hacia adelante) para alejar",
-                        wheel, int(c["zoom_out_sign"]))
-            if not gi.zoom(wheel, cur[1].mask):
-                logger.warning("Camara: no se pudo girar la rueda (zoom lejos); sigo con los arrastres")
-            cur = perceive()   # el zoom movio todo en pantalla: se vuelven a ubicar monstruos y etiquetas
-            if cur is None:
-                return None
-        for dy in ups:
+        for dy in drags:
             cur = self._drag(cur, perceive, gi, dy)
             if cur is None:
                 return None
             sleep(float(c["drag_pause_s"]))
-        return self.move_down(cur, perceive, gi, sleep, down_px)
+        if on_phase is not None:
+            on_phase("tope", cur)
+        if clicks > 0:
+            if not gi.zoom(wheel, cur[1].mask):
+                logger.warning("Camara: no se pudo girar la rueda (zoom lejos); sigo")
+            sleep(float(c["drag_pause_s"]))
+            cur = perceive()   # el zoom movio todo en pantalla: se vuelven a ubicar monstruos y etiquetas
+            if cur is None:
+                return None
+        if on_phase is not None:
+            on_phase("rueda", cur)
+        return self.move_down(cur, perceive, gi, sleep, down_px, lim)
 
     def reset(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str) -> bool:
-        """Reinicio desde el tope (zoom lejos, arriba `to_limit_px`, abajo `from_limit_px`). `perceive()` captura y devuelve
+        """Reinicio desde el tope (`to_top`: arrastre al tope `limit`, rueda lejos, `from_limit_px` hacia el angulo normal). `perceive()` captura y devuelve
         (img, Perception) o None (ventana minimizada, captcha: se corta). True si llego hasta el final."""
         if self.to_top(perceive, gi, sleep, t, why, int(self.c["from_limit_px"])) is None:
             return False

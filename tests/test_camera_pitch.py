@@ -227,9 +227,13 @@ def test_reset_secuencia_rueda_arriba_y_abajo():
     cp = CameraPitch(c)
     sleeps = []
     assert cp.reset(one(), g, sleeps.append, 100.0, "prueba") is True
-    assert be.events[0][0] == "move_to" and be.events[1] == ("scroll", 20)   # primero la rueda (zoom lejos, sentido 1)
     d = drags_of(be)
     ups, downs = [dy for _, dy in d if dy < 0], [dy for _, dy in d if dy > 0]
+    # orden: arrastres hacia arriba hasta el tope, DESPUES la rueda (el arrastre de mas acerca la camara), al final hacia abajo
+    kinds = [("scroll" if e[0] == "scroll" else "up" if e == ("mouse_up", "right") else None) for e in be.events]
+    kinds = [k for k in kinds if k]
+    assert kinds == ["up"] * len(ups) + ["scroll"] + ["up"] * len(downs)
+    assert [e for e in be.events if e[0] == "scroll"] == [("scroll", 20)]
     assert sum(ups) == -700 and all(dy <= -20 and abs(dy) <= 200 for dy in ups)
     assert downs == [60]
     assert [dy < 0 for _, dy in d] == [True] * len(ups) + [False]   # primero todo hacia arriba, al final hacia abajo
@@ -242,8 +246,8 @@ def test_reset_log(caplog):
     caplog.set_level(logging.INFO)
     g, _, _, _ = make()
     CameraPitch(fast_cfg()).reset(one(), g, lambda s: None, 0.0, "arranque")
-    assert any("Camara: reinicio desde el tope (zoom lejos, arriba 700 px, abajo 60 px)" in r.getMessage()
-               for r in caplog.records)
+    assert any("Camara: reinicio desde el tope horizontal (arrastre hacia arriba 700 px, despues rueda +20 para alejar"
+               in r.getMessage() and "despues 60 px hacia el angulo normal" in r.getMessage() for r in caplog.records)
 
 
 def test_reset_abajo_menor_al_minimo_baja_mas_y_sube_neto_igual():
@@ -436,12 +440,12 @@ def test_periodico_solo_al_empezar_una_vuelta_y_tras_every_s():
 
 # ------------------------------------------------------------------ calibrate.py camara-tope
 class SimGameWindow(ScriptedWindow):
-    """Ventana cuya captura sale de la camara simulada: los px netos de arrastre (con tope en 0, el tope horizontal) bajan el
-    horizonte de 0.4 a razon de 0.0012 por px."""
+    """Ventana cuya captura sale de la camara simulada: los px netos de arrastre (con tope en 0, el tope horizontal, y en
+    `max_pos`, el tope "desde arriba") bajan el horizonte de 0.4 a razon de 0.0012 por px."""
 
-    def __init__(self, be, top_frac=0.4, per_px=0.0012):
+    def __init__(self, be, top_frac=0.4, per_px=0.0012, max_pos=650.0):
         super().__init__([np.zeros((10, 10, 3), np.uint8)])
-        self.be, self.top_frac, self.per_px = be, top_frac, per_px
+        self.be, self.top_frac, self.per_px, self.max_pos = be, top_frac, per_px, max_pos
 
     def pos(self):
         pos, start, last, down = 0.0, None, None, False
@@ -453,7 +457,7 @@ class SimGameWindow(ScriptedWindow):
             elif e[0] == "mouse_down":
                 down = True
             elif e[0] == "mouse_up":
-                pos = max(0.0, pos + last - start)
+                pos = min(self.max_pos, max(0.0, pos + last - start))
                 down = False
         return pos
 
@@ -482,6 +486,7 @@ def tope_session(tmp_cfg, tmp_path, monkeypatch, answers=("s",), yes=False, ref_
     cv2.imwrite(str(ref), synth(ref_frac))
     s.ref = str(ref)
     monkeypatch.setattr(cal, "perceive", lambda img, c, parts=None: perc())
+    monkeypatch.setattr(cal, "character_whole", lambda img, p, c: True)
     return s
 
 
@@ -495,7 +500,7 @@ def test_propone_el_paso_cuyo_horizonte_se_parece_a_la_referencia():
 def test_camara_tope_pasos_capturas_propuesta_y_guardado_con_bak(tmp_cfg, tmp_path, monkeypatch):
     original = tmp_cfg.read_text(encoding="utf-8")
     s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "", "s"])   # empiezo, Enter = el propuesto, guardar
-    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 0
+    assert cal.cmd_camara_tope(s, referencia=[s.ref], tope="horizontal") == 0
     files = sorted((tmp_path / "debug" / "calibrate_camara_tope").glob("paso_*.png"))
     assert [f.name for f in files][:3] == ["paso_00_000px.png", "paso_01_015px.png", "paso_02_030px.png"]
     assert files[-1].name == "paso_20_300px.png" and len(files) == 21
@@ -505,7 +510,10 @@ def test_camara_tope_pasos_capturas_propuesta_y_guardado_con_bak(tmp_cfg, tmp_pa
     assert tmp_cfg.with_name("config.json.bak").read_text(encoding="utf-8") == original
     assert s.ticks == [1] and any("propuesto: 255 px" in line for line in s.out)
     ev = s.be.events
-    assert [e for e in ev if e[0] == "scroll"][0] == ("scroll", 20)   # primero la rueda
+    first_scroll = next(i for i, e in enumerate(ev) if e[0] == "scroll")
+    assert ev[first_scroll] == ("scroll", 20) and ("mouse_down", "right") in ev[:first_scroll]   # rueda DESPUES del arrastre
+    assert sorted(f.name for f in (tmp_path / "debug" / "calibrate_camara_tope").glob("fase_*.png")) == [
+        "fase_horizontal_1_tope.png", "fase_horizontal_2_rueda.png"]
     assert ("mouse_down", "left") not in ev and s.be.pressed == ([], [])
     assert ev.count(("mouse_down", "right")) == ev.count(("mouse_up", "right")) > 20
     assert all(abs(dy) >= 20 for _, dy in drags_of(s.be))              # siempre moviendo el mouse
@@ -514,11 +522,11 @@ def test_camara_tope_pasos_capturas_propuesta_y_guardado_con_bak(tmp_cfg, tmp_pa
 
 def test_camara_tope_eleccion_manual_y_valor_invalido(tmp_cfg, tmp_path, monkeypatch):
     s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "120", "s"])
-    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 0
+    assert cal.cmd_camara_tope(s, referencia=[s.ref], tope="horizontal") == 0
     assert raw(tmp_cfg)["camera_pitch"]["from_limit_px"] == 120
     original = tmp_cfg.read_text(encoding="utf-8")
     s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "77", "s"])   # 77 no es uno de los pasos
-    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 1
+    assert cal.cmd_camara_tope(s, referencia=[s.ref], tope="horizontal") == 1
     assert tmp_cfg.read_text(encoding="utf-8") == original
 
 
@@ -536,7 +544,7 @@ def test_camara_tope_sin_referencia_medible_no_manda_nada(tmp_cfg, tmp_path, mon
 
 def test_camara_tope_con_si_no_pregunta(tmp_cfg, tmp_path, monkeypatch):
     s = tope_session(tmp_cfg, tmp_path, monkeypatch, yes=True)
-    assert cal.cmd_camara_tope(s, step_px=30, referencia=[s.ref]) == 0
+    assert cal.cmd_camara_tope(s, step_px=30, referencia=[s.ref], tope="horizontal") == 0
     assert raw(tmp_cfg)["camera_pitch"]["from_limit_px"] == 240 and not s.out[-1].startswith("Cuantos")
 
 
@@ -609,3 +617,38 @@ def test_send_wheel_positivo_es_hacia_adelante(monkeypatch):
     sent.clear()
     pd.send_wheel(-2)
     assert sent == [-pd.WHEEL_DELTA] * 2
+
+
+# ---------------------------------------------------------------- tope a usar (el arrastre de mas acerca la camara)
+def test_choose_limit():
+    assert cal.choose_limit({"horizontal": True, "arriba": True}) == "horizontal"
+    assert cal.choose_limit({"horizontal": False, "arriba": True}) == "arriba"
+    assert cal.choose_limit({"horizontal": False, "arriba": False}) is None
+
+
+def test_camara_tope_prueba_los_dos_topes_y_usa_el_que_deja_ver_al_personaje(tmp_cfg, tmp_path, monkeypatch):
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, yes=True)
+    seen = iter([False, False, True, True])   # horizontal: tope, rueda; arriba: tope, rueda
+    monkeypatch.setattr(cal, "character_whole", lambda img, p, c: next(seen, True))
+    assert cal.cmd_camara_tope(s, step_px=60, referencia=[s.ref]) == 0
+    assert raw(tmp_cfg)["camera_pitch"]["limit"] == "arriba"
+    assert sorted(f.name for f in (tmp_path / "debug" / "calibrate_camara_tope").glob("fase_*.png")) == [
+        "fase_arriba_1_tope.png", "fase_arriba_2_rueda.png", "fase_horizontal_1_tope.png", "fase_horizontal_2_rueda.png"]
+    assert any("tope horizontal: despues del arrastre el personaje NO se ve entero; despues de la rueda NO se ve" in l
+               for l in s.out)
+
+
+def test_camara_tope_sin_ningun_tope_util_no_guarda(tmp_cfg, tmp_path, monkeypatch):
+    original = tmp_cfg.read_text(encoding="utf-8")
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, yes=True)
+    monkeypatch.setattr(cal, "character_whole", lambda img, p, c: False)
+    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 1
+    assert tmp_cfg.read_text(encoding="utf-8") == original
+
+
+def test_reset_desde_el_tope_arriba_arrastra_hacia_abajo_y_vuelve_hacia_arriba():
+    g, be, _, _ = make()
+    CameraPitch(fast_cfg(limit="arriba")).reset(one(), g, lambda s: None, 0.0, "x")
+    d = [dy for _, dy in drags_of(be)]
+    assert sum(dy for dy in d if dy > 0) == 700 and d[-1] == -60   # al tope "arriba" hacia abajo; despues 60 px hacia arriba
+    assert [e for e in be.events if e[0] == "scroll"] == [("scroll", 20)]

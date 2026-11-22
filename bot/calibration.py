@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 
 from bot.camera_pitch import CameraPitch
+from bot.vision.monsters import find_own_label
 from bot.perception import perceive
 from bot.config import DEFAULTS, ConfigError, _merge, resolve_path, save_config, validate_config, validate_farm_zone
 from bot.debug_draw import annotate, draw_panel_coords
@@ -649,10 +650,30 @@ def propose_step(rows: list[tuple[int, float | None]], ref: float) -> int | None
     return min(ok)[1] if ok else None
 
 
-def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str] | None = None) -> int:
-    """ACTIVO (manda input real al juego): lleva la camara al tope (zoom lejos y arriba), baja de a `step_px` hasta
-    `camera_pitch.calib_max_px` sacando una captura por paso (debug/calibrate_camara_tope/paso_NN_YYYpx.png), propone el paso
-    cuyo horizonte (en terreno plano) mas se parece al de las capturas de referencia y guarda camera_pitch.from_limit_px."""
+LIMITS = ("horizontal", "arriba")
+
+
+def character_whole(img: Any, p: Any, cfg: dict) -> bool:
+    """El personaje se ve entero (la camara no quedo pegada a el): se encuentra su etiqueta ("Lv NN" + nombre amarillo)
+    sobre el personaje, como en samples/cam_02_plano_tope_horizontal.png. Con la camara pegada solo se ve el pecho."""
+    return find_own_label(img, cfg, p.player_xy) is not None
+
+
+def choose_limit(results: dict) -> str | None:
+    """De {tope: personaje entero despues de la rueda} elige el tope a usar. Si los dos sirven, "horizontal": desde ahi las
+    capturas de cada paso tienen horizonte medible para proponer el angulo (desde "arriba" los primeros pasos son todo piso)."""
+    ok = [lim for lim in LIMITS if results.get(lim)]
+    return ok[0] if ok else None
+
+
+def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str] | None = None,
+                    tope: str | None = None) -> int:
+    """ACTIVO (manda input real al juego). (1) Prueba los topes ("horizontal" y "arriba", o solo `tope`): arrastre hasta el
+    tope, DESPUES la rueda hasta el tope "lejos" (el arrastre de mas contra el tope horizontal acerca la camara), y verifica con
+    una captura que se ve al personaje entero; guarda las capturas de cada fase (fase_<tope>_1_tope.png, _2_rueda.png).
+    (2) Con el tope elegido, se aleja de a `step_px` hasta `camera_pitch.calib_max_px` sacando una captura por paso
+    (paso_NN_YYYpx.png), propone el paso cuyo horizonte se parece al de las capturas de referencia y guarda
+    camera_pitch.limit y camera_pitch.from_limit_px."""
     c = s.cfg["camera_pitch"]
     step, top = int(step_px or c["step_px"]), int(c["calib_max_px"])
     s.say("Referencia (tu camara normal en terreno plano):")
@@ -661,16 +682,18 @@ def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str
         s.say("No hay una referencia medible. Pasa capturas con --referencia (camara normal, terreno plano). No se guardo nada.")
         return 1
     s.say(f"Horizonte de referencia: {ref:.3f}.")
-    s.say(f"\nEsto MANDA INPUT REAL al juego: la rueda del mouse y arrastres con el clic derecho (F12 o la esquina del mouse cortan).\n"
-          f"Parate en un lugar PLANO, sin monstruos cerca y deja el juego a la vista. Va a llevar la camara al tope y bajar de a "
-          f"{step} px hasta {top} px sacando una captura por paso.")
+    limits = [tope] if tope in LIMITS else list(LIMITS)
+    s.say("\nEsto MANDA INPUT REAL al juego: arrastres con el clic derecho y la rueda del mouse (F12 o la esquina del mouse "
+          "cortan).\nParate en un lugar PLANO, sin monstruos cerca y deja el juego a la vista. Prueba el tope "
+          + " y el tope ".join(limits) + f" (arrastre, despues rueda lejos) y despues se aleja de a {step} px hasta {top} px "
+          "sacando una captura por paso.")
     if not s.confirm("Empiezo"):
         s.say("Cancelado: no se mando nada.")
         return 1
     if s.countdown is not None:
         s.countdown()
     out_dir = _debug_path(s, "calibrate_camara_tope/x").parent
-    for old in out_dir.glob("paso_*.png"):
+    for old in list(out_dir.glob("paso_*.png")) + list(out_dir.glob("fase_*.png")):
         old.unlink()
     cp = CameraPitch(s.cfg)
 
@@ -678,13 +701,41 @@ def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str
         img = s.grab()
         return img, perceive(img, s.cfg, parts=CAL_PARTS)
 
-    if cp.to_top(look, s.gi, s.sleep, s.clock(), "calibracion", 0) is None:
-        s.say("No se pudo llevar la camara al tope (sin punto libre del piso, ventana minimizada o captcha). No se guardo nada.")
+    results: dict = {}
+    for lim in limits:
+        seen: dict = {}
+
+        def on_phase(name, cur, lim=lim, seen=seen):
+            img, p = cur
+            n = {"tope": 1, "rueda": 2}[name]
+            cv2.imwrite(str(out_dir / f"fase_{lim}_{n}_{name}.png"), img)
+            seen[name] = character_whole(img, p, s.cfg)
+
+        if cp.to_top(look, s.gi, s.sleep, s.clock(), f"calibracion ({lim})", 0, limit=lim, on_phase=on_phase) is None:
+            s.say(f"  tope {lim}: no se pudo llevar la camara al tope (sin punto libre del piso, ventana minimizada o captcha)")
+            results[lim] = False
+            continue
+        results[lim] = bool(seen.get("rueda"))
+        s.say(f"  tope {lim}: despues del arrastre el personaje " + ("se ve entero" if seen.get("tope") else "NO se ve entero")
+              + "; despues de la rueda " + ("se ve entero" if seen.get("rueda") else "NO se ve entero (camara pegada)")
+              + f"  [fase_{lim}_1_tope.png, fase_{lim}_2_rueda.png]")
+    chosen_limit = choose_limit(results)
+    if chosen_limit is None:
+        s.say(f"Con ningun tope se ve al personaje entero despues de la rueda. Mira las capturas fase_*.png en {out_dir}. "
+              "No se guardo nada.")
         return 1
-    rows: list[tuple[int, float | None]] = []
-    files: dict[int, str] = {}
-    for n, px in enumerate(range(0, top + 1, step)):
-        if n > 0 and cp.move_down(look(), look, s.gi, s.sleep, step) is None:
+    both = len(limits) > 1 and all(results.get(x) for x in limits)
+    s.say(f"Uso el tope {chosen_limit}" + (" (los dos sirven; desde el horizontal los pasos tienen horizonte medible)"
+                                         if both else "") + ".")
+    if cp.to_top(look, s.gi, s.sleep, s.clock(), f"calibracion ({chosen_limit})", 0, limit=chosen_limit) is None:
+        s.say("No se pudo llevar la camara al tope. No se guardo nada.")
+        return 1
+    rows: list = []
+    files: dict = {}
+    # desde el tope "arriba" el angulo normal queda mucho mas lejos: se recorre hasta to_limit_px
+    span = top if chosen_limit == "horizontal" else max(top, int(c["to_limit_px"]))
+    for n, px in enumerate(range(0, span + 1, step)):
+        if n > 0 and cp.move_down(look(), look, s.gi, s.sleep, step, chosen_limit) is None:
             s.say(f"Se corto en el paso {n} ({px} px): no hay punto libre para arrastrar. Muevete a un lugar mas despejado.")
             break
         s.sleep(float(s.cfg["explore"]["settle_s"]))
@@ -695,17 +746,18 @@ def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str
         path = out_dir / f"paso_{n:02d}_{px:03d}px.png"
         cv2.imwrite(str(path), img)
         files[px] = path.name
-        s.say(f"  paso {n:2d}: {px:3d} px abajo del tope: " + (f"horizonte {res.horizon_frac:.3f}" if ok and res is not None
+        s.say(f"  paso {n:2d}: {px:3d} px desde el tope: " + (f"horizonte {res.horizon_frac:.3f}" if ok and res is not None
               else ("todo piso (no se ve horizonte)" if res is not None and res.saturated else "no se pudo medir")))
     if len(rows) < 2:
         s.say("Muy pocos pasos para proponer algo. No se guardo nada.")
         return 1
     best = propose_step(rows, ref)
     s.say(f"\nCapturas en {out_dir}. Horizonte de referencia {ref:.3f}.")
-    s.say("Paso -> px abajo del tope" + (f"; propuesto: {best} px ({files[best]})" if best is not None else "; sin propuesta"))
+    s.say("Paso -> px desde el tope" + (f"; propuesto: {best} px ({files[best]})" if best is not None else "; sin propuesta"))
     chosen = best
     if not s.yes:
-        ans = s.ask(f"Cuantos px usar (uno de la lista; Enter = {best if best is not None else 'cancelar'}): ").strip()
+        default = best if best is not None else "cancelar"
+        ans = s.ask(f"Cuantos px usar (uno de la lista; Enter = {default}): ").strip()
         if ans:
             if not ans.isdigit() or int(ans) not in dict(rows):
                 s.say("Ese valor no esta en la lista. No se guardo nada.")
@@ -714,7 +766,7 @@ def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str
     if chosen is None:
         s.say("Sin propuesta ni eleccion: no se guardo nada.")
         return 1
-    ok = apply_changes(s, [Change(("camera_pitch", "from_limit_px"), chosen)])
+    ok = apply_changes(s, [Change(("camera_pitch", "limit"), chosen_limit), Change(("camera_pitch", "from_limit_px"), chosen)])
     if ok:   # deja la camara en el angulo elegido
         after = CameraPitch(s.cfg)
         after.reset(look, s.gi, s.sleep, s.clock(), "fin de la calibracion")

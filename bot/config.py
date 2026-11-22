@@ -171,7 +171,7 @@ DEFAULTS: dict[str, Any] = {
     # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
     # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "to_limit_px": 700, "from_limit_px": 60,
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "limit": "horizontal", "to_limit_px": 700, "from_limit_px": 60,
                      "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
                      "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
                      "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
@@ -994,6 +994,8 @@ def _validate_camera_pitch(cfg: dict) -> None:
             raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
     if c.get("zoom_out_sign") not in (-1, 1) or isinstance(c.get("zoom_out_sign"), bool):
         raise ConfigError("camera_pitch.zoom_out_sign debe ser -1 o 1 (sentido de la rueda que ALEJA la camara)")
+    if c.get("limit") not in ("horizontal", "arriba"):
+        raise ConfigError("camera_pitch.limit debe ser \"horizontal\" o \"arriba\"")
     if c["min_drag_px"] < 20:
         raise ConfigError("camera_pitch.min_drag_px debe ser >= 20 (un arrastre que casi no mueve el mouse puede seleccionar un monstruo)")
     if c["max_drag_px"] < 2 * c["min_drag_px"]:

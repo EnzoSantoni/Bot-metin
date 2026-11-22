@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("camara-tope", parents=[common],
                        help="ACTIVO (manda input): calibrar cuantos px bajar desde el tope de la camara")
     p.add_argument("--paso", type=int, default=None, help="px de cada paso (default: camera_pitch.step_px)")
+    p.add_argument("--tope", choices=("horizontal", "arriba"), default=None,
+                   help="probar solo ese tope (default: prueba los dos y usa el que deja ver al personaje entero)")
     p.add_argument("--referencia", nargs="+", default=None, metavar="PNG",
                    help="capturas con tu camara normal en terreno plano (default: samples/cam_01 y cam_04)")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
@@ -88,7 +90,7 @@ def _run_camara_tope(args: argparse.Namespace, s: cal.Session) -> int:
     control.start()
     s.countdown = lambda: control.countdown(on_tick=lambda n: print(f"Arrancando en {n}... (F12 o la esquina del mouse cortan)"))
     try:
-        return cal.cmd_camara_tope(s, args.paso, args.referencia)
+        return cal.cmd_camara_tope(s, args.paso, args.referencia, args.tope)
     except PanicStop:
         print("Cortado por panico. No se guardo nada.")
         return 1

@@ -92,8 +92,8 @@ def test_calibrate_y_bot_usan_el_zoom_out_sign_de_config_json(tmp_path, sign):
     cfg = load_config(p)
     gi = _GI()
     cp = CameraPitch(cfg)
-    # percepcion minima para la rueda; la segunda captura es None y corta antes de los arrastres
+    cp._drag = lambda cur, perceive, gi_, dy: cur   # los arrastres al tope no importan aca: solo la rueda de despues
     perc = (None, type("P", (), {"mask": _Mask()})())
-    calls = iter([perc, None])
+    calls = iter([perc, perc, None])
     cp.to_top(lambda: next(calls), gi, lambda s: None, 0.0, "test")
     assert gi.wheel == [sign * int(DEFAULTS["camera_pitch"]["zoom_out_clicks"])]
