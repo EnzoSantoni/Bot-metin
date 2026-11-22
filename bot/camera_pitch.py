@@ -164,7 +164,10 @@ class CameraPitch:
             return None
         clicks = int(c["zoom_out_clicks"])
         if clicks > 0:
-            if not gi.zoom(int(c["zoom_out_sign"]) * clicks, cur[1].mask):
+            wheel = int(c["zoom_out_sign"]) * clicks
+            logger.info("Camara: rueda %+d (camera_pitch.zoom_out_sign = %d; + = hacia adelante) para alejar",
+                        wheel, int(c["zoom_out_sign"]))
+            if not gi.zoom(wheel, cur[1].mask):
                 logger.warning("Camara: no se pudo girar la rueda (zoom lejos); sigo con los arrastres")
             cur = perceive()   # el zoom movio todo en pantalla: se vuelven a ubicar monstruos y etiquetas
             if cur is None:
