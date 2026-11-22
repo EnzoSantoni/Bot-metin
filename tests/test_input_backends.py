@@ -95,7 +95,7 @@ class FakePDI:
         self.PAUSE = 1
         self.FAILSAFE = True
         self.KEYBOARD_MAPPING = {k: i for i, k in enumerate(
-            ["ctrlleft", "g", "space", "z", "f1", "f11", "f12", "q", "e", "w", "a", "s", "d", "escape"])}
+            ["ctrlleft", "g", "t", "space", "z", "f1", "f11", "f12", "q", "e", "w", "a", "s", "d", "escape"])}
         self.calls = []
 
     def keyDown(self, k): self.calls.append(("keyDown", k))

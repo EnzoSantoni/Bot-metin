@@ -64,6 +64,7 @@ class CameraPitch:
         self.floor_streak = 0      # capturas seguidas mirando al piso
         self.fruitless = 0         # reinicios por piso seguidos que no sacaron la vista del piso
         self.actions = 0           # acciones mandadas (rueda, G, toques de T)
+        self.tap_ms: list[float] = []   # duracion real (ms) de los toques de T del ultimo reinicio
         self.resets = 0            # reinicios completos
 
     # --- cuando ---
@@ -118,10 +119,15 @@ class CameraPitch:
         return True
 
     def tap_down(self, gi: Any, sleep: Callable[[float], None], n: int) -> bool:
-        """Paso (c): `n` toques cortos de T (`t_tap_ms`, `t_gap_ms` entre toques). Nunca T mantenida. False si se corto."""
+        """Paso (c): `n` toques cortos de T (`t_tap_ms`, `t_gap_ms` entre toques), cada uno con duracion PRECISA (`gi.tap`:
+        reloj de alta precision; con la espera normal un toque de 120 ms duraba 120-165 ms y el angulo no se repetia). Nunca T
+        mantenida. Las duraciones reales quedan en `tap_ms`. False si se corto."""
         for _ in range(max(0, int(n))):
-            if not gi.hold(FLAT_ACTION, float(self.c["t_tap_ms"]) / 1000):
+            if not gi.tap(FLAT_ACTION, float(self.c["t_tap_ms"]) / 1000):
                 return False
+            real = getattr(gi, "last_tap_s", None)
+            if isinstance(real, (int, float)):
+                self.tap_ms.append(real * 1000)
             self.actions += 1
             sleep(float(self.c["t_gap_ms"]) / 1000)
         return True
@@ -144,8 +150,11 @@ class CameraPitch:
         logger.info("Camara: reinicio (rueda %+d, G %.1f s, T x%d de %d ms, rueda %+d) [%s]",
                     int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"]), float(c["g_hold_s"]), int(c["t_taps"]),
                     int(c["t_tap_ms"]), int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"]), why)
+        self.tap_ms = []
         if not self.run(perceive, gi, sleep):
             return False
+        if self.tap_ms:
+            logger.info("Camara: toques de T medidos: %s ms", ", ".join(f"{v:.1f}" for v in self.tap_ms))
         sleep(float(self.cfg["explore"]["settle_s"]))
         self.resets += 1
         if why == "piso":

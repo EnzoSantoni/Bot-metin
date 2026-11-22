@@ -208,15 +208,18 @@ def presses(be):
 def test_reset_secuencia_rueda_g_toques_de_t_y_rueda():
     g, be, _, _ = make()
     c = cfg()
-    held = []
-    real_hold = g.hold
+    held, tapped = [], []
+    real_hold, real_tap = g.hold, g.tap
     g.hold = lambda action, s: held.append((action, s)) or real_hold(action, s)
+    g.tap = lambda action, s: tapped.append((action, s)) or real_tap(action, s)
     cp = CameraPitch(c)
     assert cp.reset(one(), g, lambda s: None, 100.0, "prueba") is True
     seq = presses(be)
     assert seq[0] == ("rueda", 20) and seq[-1] == ("rueda", 20)        # rueda lejos al principio y al final
     assert seq[1:-1] == [("g", "ok")] + [("t", "ok")] * 4               # G una vez y 4 toques de T
-    assert held == [("camera_top", 3.0)] + [("camera_flat", 0.12)] * 4   # G mantenida 3 s; T toques de 120 ms (nunca larga)
+    assert held == [("camera_top", 3.0)]                                 # G mantenida 3 s
+    assert tapped == [("camera_flat", 0.12)] * 4                         # T: toques precisos de 120 ms (nunca mantenida)
+    assert len(cp.tap_ms) == 4 and all(119.9 <= v <= 135.0 for v in cp.tap_ms)
     assert not any(e[0] in ("mouse_down", "mouse_up") for e in be.events)   # nada de clics ni arrastres
     assert be.pressed == ([], []) and cp.resets == 1 and cp.last_reset_t == 100.0
 
@@ -282,8 +285,12 @@ def with_cam(h, cam):
         h.win.last_capture_rect = h.win.client_rect_on_screen()
         return cam.image()
     h.win.capture = capture
-    real_hold = h.gi.hold
+    real_hold, real_tap = h.gi.hold, h.gi.tap
     h.cam_states = []
+
+    def tap(action, seconds):
+        hold(action, None)
+        return real_tap(action, seconds)
 
     def hold(action, seconds):
         if action in ("camera_top", "camera_flat"):
@@ -294,8 +301,9 @@ def with_cam(h, cam):
                 cam.taps += 1
                 if cam.taps >= int(h.bot.cfg["camera_pitch"]["t_taps"]) and not cam.keep_floor:
                     cam.floor = False
-        return real_hold(action, seconds)
+        return True if seconds is None else real_hold(action, seconds)
     h.gi.hold = hold
+    h.gi.tap = tap
 
 
 def pitch_cfg(**over):

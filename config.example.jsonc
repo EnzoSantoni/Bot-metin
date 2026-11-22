@@ -367,7 +367,8 @@
   //  cada metin): para farmear con la camara acomodada a mano. Reinicio con TECLAS (sin arrastres del mouse ni medir el angulo):
   //  (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: 1 = hacia adelante, -1 = hacia
   //  atras; en Guabina tools/prueba_camara.py mostro que 1 ACERCA, asi que alli va -1); (b) mantener G (controls.camera_top) g_hold_s hasta el tope de la vista
-  //  desde arriba; (c) t_taps toques CORTOS de T (controls.camera_flat, t_tap_ms cada uno, t_gap_ms entre toques) hasta el
+  //  desde arriba; (c) t_taps toques CORTOS de T (controls.camera_flat, t_tap_ms cada uno medido con reloj de alta precision,
+  //  t_gap_ms entre toques; el log dice cuanto duro cada uno) hasta el
   //  angulo de farmeo: nunca T mantenida (llega a plano y la camara se ACERCA al personaje; ese zoom solo se saca con la rueda);
   //  (d) rueda hacia "lejos" otra vez, por seguridad. step_pause_s: pausa entre pasos. t_taps se calibra con
   //  `calibrate.py camara` (guiado: toca T de a uno y pregunta).

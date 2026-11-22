@@ -76,6 +76,10 @@ class _GI:
         self.held.append((action, seconds))
         return True
 
+    def tap(self, action, seconds):
+        self.held.append((action, seconds))
+        return True
+
 
 class _Mask:
     def allows(self, x, y):

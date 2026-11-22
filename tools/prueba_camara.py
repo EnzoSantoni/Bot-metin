@@ -71,6 +71,7 @@ try:
     shot("2_G_tope_arriba")
     for i in range(1, int(cfg["camera_pitch"]["t_taps"]) + 1):
         cp.tap_down(gi, sleep, 1)
+        print(f"toque {i} de T: {gi.last_tap_s * 1000:.1f} ms (pedido {int(cfg['camera_pitch']['t_tap_ms'])} ms)", flush=True)
         shot(f"3_T_toque_{i}")
     cp.wheel_out(look, gi)
     shot("4_rueda_final")

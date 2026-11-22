@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 from bot.capture import elevation_mismatch
+from bot.input import precise
 from bot.control import BotControl, PanicStop
 from bot.input.base import InputBackend, parse_keys
 from bot.vision.metin import player_point
@@ -45,6 +46,7 @@ class GameInput:
         self.rng = rng or random.Random()
         self._in = cfg["input"]
         self._controls = cfg["controls"]
+        self.last_tap_s: float | None = None   # duracion real del ultimo `tap` (reloj de alta precision)
         control.add_pause_callback(backend.release_all, _noop)   # en pausa no queda nada apretado
 
     # --- helpers ---
@@ -190,6 +192,28 @@ class GameInput:
         if len(keys) != 1:
             raise ValueError(f"hold solo admite una tecla, {action!r} es una combinacion")
         return self._hold_down(keys, seconds)
+
+    def tap(self, action: str, seconds: float) -> bool:
+        """Toque CORTO y PRECISO de una tecla (los toques de T de la camara): key_down, espera medida con el reloj de alta
+        precision (`bot.input.precise`, sin los saltos de ~15 ms de la espera normal) y key_up. La duracion real queda en
+        `last_tap_s`. False si el juego no estaba listo; siempre suelta la tecla."""
+        keys = self._key_spec(action)
+        if len(keys) != 1:
+            raise ValueError(f"tap solo admite una tecla, {action!r} es una combinacion")
+        with self._action() as ready:
+            if not ready:
+                return False
+            with precise.fine_timer():
+                self.backend.key_down(keys[0])
+                t0 = precise._clock()
+                try:
+                    precise.wait_until(t0 + float(seconds))
+                finally:
+                    self.backend.key_up(keys[0])
+                    self.last_tap_s = precise._clock() - t0
+            self.control.check()
+            self._delay()
+            return True
 
     def hold_keys(self, actions: list[str], seconds: float) -> bool:
         """Mantiene a la vez 1 o 2 teclas de movimiento (acciones de `controls`, p. ej. ["move_up", "move_right"]) durante
