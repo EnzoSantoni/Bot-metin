@@ -137,7 +137,7 @@ def test_regla_b_confirmado_bloqueado_usa_espacio_y_reclic(caplog):
     assert len(env.world.clicks_on_metin) == 1
 
 
-def test_regla_b_monstruo_seleccionado_espacio_escape_y_reclic(caplog):
+def test_regla_b_monstruo_seleccionado_espacio_clic_directo_sin_escape(caplog):
     caplog.set_level(logging.INFO)
     env = SimEnv(2, start=(560, 150))
     m = env.world.add_metin((600, 150))
@@ -147,15 +147,31 @@ def test_regla_b_monstruo_seleccionado_espacio_escape_y_reclic(caplog):
     kinds = [k for _, k, _ in env.world.selected_log]
     assert kinds[0] == "monster" and kinds[-1] == "metin"
     assert any("Seleccion equivocada con" in x for x in messages(caplog))
-    assert sum(1 for e in env.backend.events if e == ("key_down", "esc")) >= 1
+    assert not any(e == ("key_down", "esc") for e in env.backend.events)
 
 
-def test_regla_b_monstruo_seleccionado_sigue_contando_para_el_descarte():
+def test_regla_b_monstruo_seleccionado_en_metin_con_nombre_no_se_descarta():
+    """Un metin con nombre (etiqueta) no se descarta por seleccion equivocada repetida: se reintenta y, agotados los clics sin
+    confirmar (`approach.max_clicks`), se aparta unos segundos (no 10 minutos) para elegir otro."""
     h = Harness(lambda h, n: perc_far(panel=__import__("bot.vision.panel", fromlist=["PanelInfo"]).PanelInfo(
         present=True, kind="other", name=None), n_near=3, metins=[metin()]) if h.bot.state is State.ATACAR
         else perc(metins=[metin()]), attack={"max_wrong_selections": 2})
-    h.run_until(lambda: any("seleccion equivocada repetida" in w for _, w in h.seen), limit=200)
-    assert h.keys("space") >= 1 and h.keys("esc") >= 1 and len(h.bot.discarded) >= 1
+    h.run_until(lambda: any(w.startswith("sin confirmar:") for _, w in h.seen), limit=400)
+    assert not any("seleccion equivocada repetida" in w for _, w in h.seen)
+    assert h.keys("space") >= 1 and h.keys("esc") == 0
+    assert all(s.expiry - h.clock.t <= 31 for s in h.bot.discarded)   # apartado ~30 s, no el descarte de 10 minutos
+
+
+def test_regla_b_clic_a_piedra_sin_nombre_que_selecciona_monstruo_se_ignora():
+    """Una piedra SIN etiqueta que al clickearla muestra un monstruo si se confirma que no es un metin: se ignora esa posicion."""
+    from bot.vision.panel import PanelInfo
+    h = Harness(lambda h, n: perc_far(panel=PanelInfo(present=True, kind="other", name=None), metins=[metin()])
+                if h.bot.state is State.ATACAR else perc(metins=[metin()]), attack={"max_wrong_selections": 2})
+    h.run_until(lambda: h.bot.state is State.ATACAR)
+    a = h.bot._atk
+    a.stone = True   # el clic fue sobre una piedra sin etiqueta
+    h.run_until(lambda: any("se selecciono otra cosa" in w or "seleccion equivocada repetida" in w for _, w in h.seen), limit=200)
+    assert h.bot.ignored or h.bot.discarded
 
 
 def test_bloqueo_se_detecta_quieto_o_en_circulo_pero_no_caminando_recto():
@@ -260,6 +276,7 @@ def test_centro_llega_al_centro_y_despues_barre_y_explora():
 # ---------------------------------------------------------------- E: exploracion en tramos y barridos
 def test_regla_e_destinos_bien_adentro_y_rumbos_distintos():
     env = SimEnv(6, start=(520.0, 150.0))
+    env.cfg["explore"]["center_laps"] = 0   # esta regla es de los tramos al azar (el ultimo recurso, tras las vueltas en el centro)
     targets, headings = [], []
     orig = env.bot.navigator.leg_target
 
@@ -319,6 +336,7 @@ def test_acercarse_piedra_lejana_aparece_la_etiqueta_y_ataca():
 def test_acercarse_si_es_avaricia_ignora_esa_posicion(caplog):
     caplog.set_level(logging.INFO)
     env = SimEnv(1, start=(480, 150))
+    env.cfg["explore"]["center_laps"] = 0   # la busqueda recorre la zona (tramos al azar) para encontrar la piedra
     ava = env.world.add_metin((580, 150), name=AVA)
     env.run_until(max_s=200)
     assert all(m is not ava for _, m in env.world.clicks_on_metin)

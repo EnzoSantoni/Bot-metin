@@ -95,7 +95,11 @@
     "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
     "camera_left": "q", "camera_right": "e",
     "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
-    "deselect": "esc"
+    //  deselect: SIN USO. El bot ya no aprieta Escape (con nada seleccionado abre el menu de opciones del juego); para dejar
+    //  a un monstruo se hace clic directo en el metin. Queda por compatibilidad.
+    //  close_menu: SOLO si el menu de opciones del juego esta abierto y el clic en su boton Cancelar no lo cerro tras
+    //  vision.game_menu.close_clicks intentos (con el menu abierto, Escape si lo cierra).
+    "deselect": "esc", "close_menu": "esc"
   },
 
   // Seguridad (bot/control.py). Si el juego corre como administrador, ejecuta el bot como administrador:
@@ -202,7 +206,15 @@
             // surrounded_space_s (montado empuja); sin monstruos: un paso al costado (attack.sidestep_s, A/D/W+A/W+D alternando).
             // Sigue en el mismo estado. Tras surrounded_max reacciones seguidas sin avanzar, el DESTRABAR de siempre.
             // Reemplaza a surrounded_s y a attack.walk_stuck_s (obsoletas: si estan en config.json se ignoran con un WARNING).
-            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
+            "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+            // Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
+            // (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino, no se sale de la zona y no se
+            // probo en ese lugar), se camina con W detour_s y se mira si avanza. Un rumbo que no avanza se recuerda (blocked_keep
+            // lugares, a blocked_radius_u y +-blocked_tol_deg) y no se repite. Los tramos de W sin avanzar (CENTRO, VOLVER) usan la
+            // misma secuencia y comparten el presupuesto surrounded_max. Sin rumbo conocido: tras probe_blind pruebas de W sin
+            // medir se gira a ciegas blind_turn_deg grados y se prueba de nuevo (nunca se empuja W contra la pared con rumbo "?").
+            "detour_angles_deg": [90.0, -90.0, 135.0, -135.0, 180.0], "detour_s": 2.5, "blocked_keep": 12,
+            "blocked_radius_u": 15.0, "blocked_tol_deg": 40.0, "probe_blind": 2, "blind_turn_deg": 120.0},
 
   // Loop principal (bot/bot.py). cycle_ms: ritmo minimo de un ciclo (captura + decision). captcha_full_search_every:
   // cada N ciclos el captcha se busca en toda la imagen (respaldo de la zona fija). hold_chunk_s: las teclas sostenidas
@@ -214,8 +226,10 @@
   //  mount_wait_s: espera tras cada Ctrl+G de una habilidad (estimada). press_hold_s: cuanto se mantiene la tecla.
   //  recast_margin_s: se relanza este tiempo antes de que venza. attack_settle_s: atacando, solo se lanza pasado este
   //  tiempo desde el ultimo clic. chunk_s (<= 0.5): las esperas se parten en tramos con chequeo de captcha y panico.
+  //  near_break_hp (0-1): atacando no se lanza si la ultima vida leida del metin es <= este valor (durante la habilidad no se ve
+  //  el panel: un metin que se rompe a ciegas no se cuenta ni se recoge).
   "skill_timing": {"mount_wait_s": 1.5, "press_hold_s": 0.1, "recast_margin_s": 0.0, "attack_settle_s": 3.0,
-                   "chunk_s": 0.5},
+                   "chunk_s": 0.5, "near_break_hp": 0.35},
 
   // ATACAR. confirm_timeout_s: tiempo sin ver el panel del metin (ni moverse) antes de reclickear.
   //  hp_stall_s: la vida no baja por tanto tiempo -> reclic. max_reclicks: mas que esto -> descartar el metin.
@@ -228,7 +242,8 @@
   //  Regla B (ESTIMADOS): blocked_s = confirmado, la vida no baja por tanto tiempo y el personaje esta quieto o gira en
   //  circulo (recorrido en la ventana > circle_ratio x desplazamiento neto, con al menos circle_min_path unidades) ->
   //  ESPACIO (stuck.space_s) y reclic en el metin (cuenta como reclic). Seleccion equivocada de un monstruo (panel "other")
-  //  con >= wrong_monsters_min monstruos cerca -> ESPACIO, Escape y reclic (sigue contando para max_wrong_selections).
+  //  con >= wrong_monsters_min monstruos cerca (o bichos encima, ver vision.monsters.on_me_px) -> ESPACIO y clic directo en
+  //  el metin (SIN Escape); sin bichos, clic directo en el metin (sigue contando para max_wrong_selections).
   //  blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
   //  Si el personaje sale de la zona atacando un metin cuya posicion queda afuera (o no se conoce), esa posicion se descarta.
   //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
@@ -264,10 +279,19 @@
              //  PUNTO DE CLIC EN EL CUERPO DE LA PIEDRA: el de la etiqueta (vision.metin.click_dy debajo de ella) cae en la base
              //  o en el piso; se corre hacia arriba label_click_up_frac * click_dy px (medido: la piedra lejana queda ~45 px
              //  debajo del centro de la etiqueta, click_dy 65). Con una piedra lejana asociada se usa el centro de su rect.
-             //  VERIFICACION RAPIDA: a los confirm_check_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
+             //  VERIFICACION RAPIDA: a los confirm_wait_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
              //  (piedra/etiqueta relocalizada; si cae en el mismo punto, quick_up_px mas arriba por intento), hasta quick_reclicks;
              //  despues el flujo de siempre (confirm_timeout_s). No cuentan para max_reclicks.
-             "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
+             "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+             //  RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
+             //  movimiento (coordenadas cambiando); sin confirmar, otro clic recien despues de confirm_wait_s. name_gap_px: el
+             //  clic cae siempre a mas de tantos px debajo del nombre de la etiqueta (nunca sobre el nombre ni la franja de arriba).
+             //  PANEL AUSENTE (error del juego: a veces atacando un metin no aparece la barra de vida): quieto y pegado, sin
+             //  panel y con un monstruo cerca, con panel_recover se hace UN clic derecho (apretar y soltar, sin mover la
+             //  camara) sobre el cuerpo del monstruo por episodio; el juego muestra su nombre y vida y, si se esta atacando un
+             //  metin, el panel vuelve a mostrar la vida del metin. Si en recover_wait_s no vuelve: no ataca, clic izquierdo al
+             //  metin. La senal por animacion del arma no esta implementada (no es confiable sin secuencias etiquetadas).
+             "min_click_gap_s": 1.5, "name_gap_px": 20, "panel_recover": true, "recover_wait_s": 1.5,
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
@@ -283,7 +307,15 @@
              //  corrida. NUNCA hace clic en otro metin hasta romper el actual y recoger. Lo encontrado se recuerda next_keep_s
              //  segundos: al terminar RECOGER gira esos pasos y va directo a el (a <= relocate_px del punto recordado).
              "scan_enabled": true, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
-             "scan_hp_margin_s": 2.0},
+             "scan_hp_margin_s": 2.0,
+             //  BICHOS ENCIMA (nombres rojos solapados o a <= vision.monsters.on_me_px del nombre amarillo del personaje): panel
+             //  perdido / seleccion equivocada / trabado -> ESPACIO (on_me_space_s en la deseleccion) antes del reclic.
+             //  PIEDRA TAPADA: dos panel perdidos seguidos con vida alta (lost_swap_after) -> el reclic va a otro punto candidato
+             //  de la parte visible de la piedra (vision.click_point), no al mismo.
+             //  TRAS UN CAPTCHA: se retoma el metin que se atacaba (su punto de pantalla y su posicion en el mapa; si el personaje
+             //  seguia caminando hacia el, la etiqueta mas cercana que ya esta tan cerca o mas que al hacer el clic) y durante
+             //  after_captcha_keep_s no se lo suelta por "hay otro objetivo a la vista" (solo por target_keep_s).
+             "on_me_space_s": 1.0, "lost_swap_after": 2, "after_captcha_keep_s": 20.0},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
@@ -305,7 +337,12 @@
   "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
              "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-             "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
+             "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0,
+             //  Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto entre
+             //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
+             //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos
+             //  de esta fraccion de su distancia (histeresis).
+             "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...
@@ -324,10 +361,14 @@
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
               "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0,
-              "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+              "sweep_deg": 325.0, "sweep_max_factor": 1.5,
+              //  Paso de la vuelta: sweep_step_deg grados por giro (campo de vision horizontal estimado ~70 grados: 30 grados deja
+              //  ~57% de superposicion); se analiza en cada paso. Metin con nombre objetivo a <= sweep_attack_u del personaje (o a
+              //  <= sweep_cut_floor de piso): se ataca ya. Piedras: hover para confirmar el nombre (hasta sweep_max_hovers por vuelta).
+              "sweep_step_deg": 30.0, "sweep_attack_u": 60.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
               "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
               "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
-              "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+              "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
               "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
   //  UNA VUELTA (con el rumbo de la camara leido del cono del minimapa, vision.minimap): el barrido gira en pasos hasta sweep_deg
   //  grados acumulados (tope: camera_steps * sweep_max_factor pasos) y arma la LISTA de candidatos con su posicion en el MAPA
@@ -338,30 +379,41 @@
   //  aparece camina candidate_walk_u hacia el (candidate_walk_tries veces) y vuelve a mirar. No hay otra vuelta mientras la lista
   //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Una
   //  etiqueta objetivo a menos de sweep_cut_floor de piso (muy pegada) corta la vuelta y se ataca. Vuelta sin nada: va al
-  //  punto listo del mapa de metin o, si no hay, al centro (si esta a mas de center_return_u) y vuelve a mirar desde ahi.
+  //  punto listo del mapa de metin (hora desconocida = lista) o, si no hay, al centro (si esta a mas de center_return_u); se camina
+  //  hasta llegar (arrive_u / navigation.arrive_dist) y recien ahi se busca. Ya en el centro y sin nada: otra vuelta alli, hasta
+  //  center_laps seguidas; despues, un tramo al azar. Sin cono legible se usa el rumbo estimado por el movimiento.
   //  ground_scale_u (ESTIMADO de events.log/bot.log del 2026-11-20: 10-20 u por unidad de piso, mediana ~13) se afina solo
   //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
   //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
-  // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
-  //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
-  //  Enzo quiere conservar: null = no corrige (se mide con `calibrate.py camara`, que lo guarda aca). Con referencia, despues de
-  //  romper cada metin (antes de buscar), cada every_s mientras explora y durante la busqueda mientras ataca, si el horizonte
-  //  se fue mas de tolerance, arrastra con el CLIC DERECHO en vertical (drag_s s, drag_steps pasos) desde un punto libre del piso
-  //  (a >= drag_clear_px de etiquetas, piedras y personaje). dy = gain * (medido - ref), tope max_drag_px, hasta max_steps
-  //  arrastres por correccion; gain (px por unidad de horizon_frac; gain_px_per_frac es el inicial) se aprende solo, con signo,
-  //  comparando antes y despues de cada arrastre (promedio gain_ema; se ignora si el horizonte se movio menos de
-  //  min_gain_move_frac). Medicion con confianza < min_confidence: no corrige. calib_samples / calib_pause_s: capturas de
-  //  `calibrate.py camara`.
-  //  Medicion: franja central de +-strip_half_frac del ancho; el color del piso sale de una muestra a sample_top_px..sample_bottom_px
-  //  debajo del personaje; un pixel es piso si su tono difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila
-  //  es piso con >= row_floor_frac de pixeles piso (descartando UI y el rectangulo del personaje player_box_px = [medio ancho,
-  //  arriba, abajo]); el horizonte es la primera fila que deja de serlo run_rows seguidas. min_valid_px: pixeles utiles minimos por
-  //  fila; min_floor_rows: menos filas de piso que eso = medicion dudosa. (Medidos sobre samples/, ver PROGRESS.md.)
-  "camera_pitch": {"enabled": true, "ref_horizon_frac": null, "tolerance": 0.04, "gain_px_per_frac": 600.0,
-                   "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
-                   "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
-                   "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+  // Angulo vertical de la camara. NO se mide el angulo (la fila del horizonte depende del terreno): se REINICIA desde el tope.
+  //  reset = (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: -1 = hacia atras; si en el
+  //  juego aprieta el zoom en vez de alejar, ponelo en 1; se prueba con test_input.py --solo camara); (b) clic derecho
+  //  arrastrando hacia ARRIBA to_limit_px en total (tope horizontal; en arrastres de <= max_drag_px); (c) arrastre hacia ABAJO
+  //  from_limit_px (de ahi sale tu angulo normal). from_limit_px es una ESTIMACION (comparando samples/cam_01 y cam_02: el
+  //  horizonte pasa de la fila ~415 a ~100, unos 9-13 grados, con una ganancia supuesta de 0.15-0.25 grados por px): calibralo con
+  //  `calibrate.py camara-tope` (parado en terreno PLANO; manda input real: baja de a step_px hasta calib_max_px y propone el paso
+  //  que se parece a tu angulo normal; lo guarda aca).
+  //  Cuando: al arrancar, despues de cada metin roto, al empezar una vuelta de busqueda si pasaron mas de every_s desde el ultimo
+  //  reinicio, y cuando la camara mira el piso (floor_frames capturas seguidas sin horizonte mientras se busca; minimo min_gap_s
+  //  entre reinicios, que se multiplica si el reinicio no saco la vista del piso). Nunca mientras ataca, recoge o hay captcha.
+  //  Seguridad: un arrastre siempre mueve el mouse >= min_drag_px (un clic derecho SIN mover sobre un monstruo lo selecciona) y su
+  //  inicio, medio y final estan a >= drag_clear_px de etiquetas, monstruos, objetos, piedras y personaje y fuera de la interfaz;
+  //  drag_s / drag_steps: duracion y pasos de cada arrastre; drag_pause_s: pausa entre arrastres; al final explore.settle_s.
+  //  Detector "mira el piso" (bot/vision/pitch.py como detector, no como medida): franja central de +-strip_half_frac del ancho;
+  //  el color del piso sale de una muestra a sample_top_px..sample_bottom_px debajo del personaje; un pixel es piso si su tono
+  //  difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila es piso con >= row_floor_frac de pixeles piso
+  //  (descartando UI y el rectangulo del personaje player_box_px = [medio ancho, arriba, abajo]); piso hasta el borde de arriba
+  //  = todo piso. Si la central no es medible (ladera de dos tonos), cuentan las dos franjas de +-side_half_frac centradas a
+  //  +-side_offset_frac del ancho. min_valid_px: pixeles utiles minimos por fila; min_floor_rows: menos filas que eso = dudoso.
+  //  (Medidos sobre samples/cam_*.png y debug/run_20261121_230828, ver PROGRESS.md.) step_px / calib_max_px: paso y tope de
+  //  `calibrate.py camara-tope`. (ref_horizon_frac, tolerance, gain_px_per_frac, max_steps, gain_ema, min_gain_move_frac,
+  //  calib_samples, calib_pause_s: de la correccion por horizonte, ya no se usan.)
+  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+                   "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
+                   "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                   "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
+                   "min_confidence": 0.5,
                    "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                    "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
                    "min_valid_px": 20, "min_floor_rows": 40},
@@ -386,8 +438,23 @@
   "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
                "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+               //  Regla de zona de los metin: con posicion conocida solo se va a los que quedan a <= metin_outside_u afuera
+               //  del borde (menos que outside_tolerance). Sin posicion (camara no lista): solo si estan a distancia de piso
+               //  <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde.
+               "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                "far_monsters_n": 2, "far_monsters_px": 200,
                "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+               //  ACERCARSE CON TECLADO (navigation.mode = teclado): a mas de click_floor (distancia de piso) del metin elegido se
+               //  alinea la vista con Q/E hasta que la piedra quede a <= center_tol_px del centro horizontal, se camina con W en
+               //  tramos de walk_chunk_s re-detectando la piedra y se FRENA al llegar a click_floor. Quieto (quiet_reads
+               //  lecturas de coordenadas iguales y settle_s sin teclas) se vuelve a ubicar la piedra en la captura nueva y se hace
+               //  UN clic en el centro de su cuerpo. Sin confirmar: otro clic quieto; a los max_clicks se elige otro (la posicion
+               //  se ignora retry_ignore_s, no se descarta). align_turns_max giros seguidos sin centrar: se camina igual.
+               //  Tramos de W sin avanzar: con bichos ESPACIO; sin bichos se cancela el acercamiento (o clic si ya
+               //  esta a <= stuck_click_floor). keys_enabled=false vuelve al clic que camina solo.
+               "keys_enabled": true, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+               "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
+               "stuck_click_floor": 4.0,
                //  ELECCION: una etiqueta objetivo va antes que una piedra sin etiqueta, salvo que la distancia de piso de la
                //  piedra sea < unlabeled_closer_ratio x la de la etiqueta. Las piedras sin etiqueta con la base por debajo de
                //  near_unlabeled_y_frac del alto (cerca del personaje: de cerca los metin siempre muestran su nombre, asi que
@@ -448,17 +515,23 @@
     // girar la camara; Q/E solo sirven para mirar (barridos, MIRAR). El clic izquierdo queda para atacar un metin.
     // "clic" = caminar con clics en el piso (modo anterior, con la camara aprendida).
     "mode": "teclado",
-    // Modo teclado (bot/keynav.py). El bot aprende hacia donde camina W en el juego (cam_h) midiendo cada tramo y
-    // elige la combinacion de teclas cuyo desvio (W 0, W+D +45, D +90, S+D +135, S 180, S+A -135, A -90, W+A -45) queda mas
-    // cerca del rumbo al destino; si A/D caminan al reves lo detecta (2 muestras seguidas) y lo corrige solo.
+    // Modo teclado (bot/keynav.py). cam_h = hacia donde camina W en el juego: sale del cono del minimapa (mismo marco que las
+    // coordenadas) y, si no se lee, del desplazamiento medido en cada tramo. Con lateral=false (por defecto) el bot camina SOLO
+    // con W y alinea la vista con Q/E (align_deg); con lateral=true elige entre 8 combinaciones (W 0, W+D +45, D +90, S+D +135,
+    // S 180, S+A -135, A -90, W+A -45). En las capturas reales A/D giran la vista (~36 grados/s), por eso lateral es false.
     // chunk_s: tramo de caminata entre chequeos; probe_s: W de prueba para medir cam_h cuando no se conoce; align_deg y
     // max_turn_deg: solo para giros de la vista; turn_deg_per_s: velocidad inicial de giro de Q/E (= 360 /
-    // (explore.camera_steps * explore.camera_step_s)), se aprende (Q/E al reves se concluye con 2 giros seguidos);
+    // (explore.camera_steps * explore.camera_step_s)), se aprende;
     // walk_speed: velocidad inicial de caminata en unidades/s, tambien se aprende; min_step_s: tramo minimo;
     // edge_measure_u: desplazamiento minimo para medir cam_h cuando el personaje ya paso la guardia de zona (ahi no hay
-    // lugar para tramos largos); view_right_key: tecla (camera_left o camera_right) que gira la VISTA a la derecha.
+    // lugar para tramos largos).
+    // SENTIDOS FIJOS: view_right_key = tecla (camera_left o camera_right) que gira la VISTA a la derecha; ad_side = "normal"
+    //  (D va a la derecha de W) o "reverso". Con "auto" (por defecto) se determinan UNA vez con senses_votes muestras
+    //  coherentes (sin fijar se asume camera_right y "normal"), se guardan en senses_file (se reusan en la proxima corrida) y
+    //  quedan fijos: la evidencia contraria solo avisa, nunca invierte. Ponerlos a mano los fija desde el arranque.
     "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
-                 "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"}
+                 "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "auto",
+                 "ad_side": "auto", "lateral": false, "senses_votes": 3, "senses_file": "logs/sentidos.json"}
   },
 
   "vision": {
@@ -471,11 +544,13 @@
     //  debug/run_20261120_121005: el minimapa tiene el norte fijo, el personaje esta en (ancho + center_dx, center_dy) y el cono
     //  mide ~40 grados (~20 a pie). Se muestrea cada step_deg entre r_min y r_max px (sin pixeles rojos ni V < min_val, min_samples
     //  validos por rayo); cono = arco con exceso de V sobre la mediana > max(min_excess, rel_frac x percentil 95) y ancho
-    //  width_deg [min, max]. El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el mismo marco de las coordenadas.
-    //  heading_offset_deg: correccion inicial; el bot la aprende (EMA offset_ema) contra el rumbo medido de W (keynav).
+    //  width_deg [min, max]; si no lee hay un segundo pase relajado (umbrales x relax_factor, ancho relax_width_deg).
+    //  El rumbo es atan2(dy, dx) con y hacia abajo (0 = este), el MISMO marco de las coordenadas (sin espejo; medido en
+    //  debug/run_20261121_205635). heading_offset_deg = 0; el bot lo afina solo con tramos de W (EMA offset_ema, tope +-offset_max_deg).
     "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
                 "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
-                "heading_offset_deg": 0.0, "offset_ema": 0.3},
+                "relax_factor": 0.5, "relax_width_deg": [8.0, 100.0],
+                "heading_offset_deg": 0.0, "offset_ema": 0.15, "offset_max_deg": 20.0},
     // Zonas de interfaz que la deteccion ignora. Coordenadas del area de cliente.
     //  anchor: top-left, top-center, top-right, center-left, center, center-right,
     //          bottom-left, bottom-center, bottom-right (punto de la imagen donde se ancla).
@@ -594,8 +669,33 @@
       "max_gap_px": 10, "word_gap_px": 8,             // separacion maxima verde->rojo; hueco maximo entre palabras
       "max_label_w": 260,                             // ancho maximo de la etiqueta (verde + nombre)
       "max_zone_overlap": 0.5,
-      "near_radius_px": 120                           // "cerca del personaje" (px, centro de etiqueta a player_point)
+      "near_radius_px": 120,                          // "cerca del personaje" (px, centro de etiqueta a player_point)
+      "on_me_px": 30,                                 // etiqueta de monstruo solapada o a <= on_me_px de la del personaje = bicho encima
+      "on_me_body_px": 90                             // o con la etiqueta a <= on_me_body_px del personaje (montado: la propia queda ~50 px mas arriba)
     },
+
+    // Etiqueta del propio personaje: "Lv NN" verde + nombre en AMARILLO plano (distinto de los monstruos: nivel verde y nombre
+    // rojo). Con bichos pegados o encima de ella (monsters_on_me) casi seguro lo estan bloqueando.
+    // search = [dx0, dy0, dx1, dy1] respecto del punto del personaje (montado la etiqueta queda ~130 px arriba).
+    "own_label": { "name_bgr": [76, 215, 255], "search": [-170, -230, 170, -20] },
+
+    // Menu de opciones del juego (lo abre Escape sin nada seleccionado). Se reconoce por el boton "Cancelar" (plantilla recortada
+    // de una captura real: score 1.0 en 5 capturas con menu, < 0.45 en 73 sin menu). search = fracciones [x0, y0, x1, y1].
+    // Se cierra con un clic en Cancelar cada close_retry_s; tras close_clicks clics sin cerrarlo, controls.close_menu.
+    "game_menu": { "enabled": true, "template": "templates/ui/menu_cancelar.png", "min_score": 0.8,
+                   "search": [0.3, 0.45, 0.7, 0.85], "close_retry_s": 1.0, "close_clicks": 3 },
+
+    // Punto de clic sobre la parte VISIBLE de la piedra (bot/vision/click_point.py). Candidatos = grid (fracciones [fx, fy] del
+    // rect del cuerpo, medido con el nucleo de color de far_metin), descartados si caen en la columna bajo una etiqueta de
+    // monstruo (la silueta mide body_h_k * distancia al horizonte [min body_h_min_px], se extiende body_h_mult veces ese alto
+    // hacia abajo, ancho body_w_frac de el + col_margin_px) o sobre la etiqueta del personaje (own_margin_px), o si el parche
+    // de radio patch_r tiene < min_stone_frac de pixeles de color de piedra (calido, saturacion >= stone_s_min: un tronco o la
+    // nieve son grises). stone_search = [medio ancho, arriba, abajo] px donde se busca el cuerpo cerca del punto de clic.
+    "click_point": { "grid": [[0.5, 0.5], [0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5], [0.3, 0.3], [0.7, 0.3],
+                              [0.3, 0.7], [0.7, 0.7]],
+                     "body_h_k": 0.33, "body_h_min_px": 40, "body_h_mult": 1.3, "body_w_frac": 0.3, "col_margin_px": 8,
+                     "patch_r": 4, "min_stone_frac": 0.25, "stone_s_min": 60, "stone_search": [60, 60, 25],
+                     "own_margin_px": 6 },
 
     // Objetos en el piso (bot/vision/items.py). El recuadro tiene borde negro exacto de 1 px, fondo oscuro
     // translucido y texto blanco sin antialiasing; una linea (alto 15 px) o dos (30 px) si tiene dueno, con el
@@ -664,7 +764,17 @@
       // como respaldo (find_captcha(..., full=True)).
       "search_region": { "anchor": "center-right", "dx": -400, "dy": -180, "w": 400, "h": 374 },
       "footer": { "template": "templates/captcha/pie.png",    "offset": [24, 146] },
-      "keypad": { "template": "templates/captcha/teclado.png", "offset": [9, 49] }
+      "keypad": { "template": "templates/captcha/teclado.png", "offset": [9, 49] },
+      // Captcha de la FRASE (cartel dorado arriba al centro: "la siguiente frase es: - - - p - - ..."). El bot NO lo resuelve:
+      // se trata como el captcha normal. El marco es el mismo de los anuncios del servidor, asi que ademas de la barra con las
+      // manijas (frame) se exige el texto fijo "la siguiente frase es:" (text) en cualquier lugar del cuerpo del cartel;
+      // las letras a completar no importan. size = [ancho, alto] del cartel desde la barra; search_region = donde buscar la barra.
+      "frase": {
+        "search_region": { "anchor": "top-center", "dx": -500, "dy": 100, "w": 1000, "h": 140 },
+        "frame": { "template": "templates/captcha/frase_marco.png", "min_score": 0.8 },
+        "text":  { "template": "templates/captcha/frase_texto.png", "min_score": 0.8 },
+        "size": [548, 66]
+      }
     },
 
     // Pantalla de muerte: botones "Volver a Empezar Aqui" y "...en la Ciudad". search = region (desde la

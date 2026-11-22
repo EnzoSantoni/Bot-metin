@@ -73,6 +73,12 @@ def make_cfg(**over):
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
     cfg["spawns"]["enabled"] = False
     cfg["items_catalog"]["enabled"] = cfg["history"]["enabled"] = False
+    cfg["camera_pitch"].update(enabled=False, drag_s=0.0)   # el reinicio de la camara lo prueba tests/test_camera_pitch.py
+    # los tests de fondo no prueban la regla de zona de los metin (Fase 6i): sin limite de piso/margen y con la tolerancia entera;
+    # los de esa regla (tests/test_metin_zona.py) usan `strict_zone=True`
+    if not over.pop("strict_zone", False):
+        cfg["approach"].update(blind_near_floor=1000.0, blind_inside_margin=-1000.0,
+                               metin_outside_u=float(cfg["farm_zone"]["outside_tolerance"]))
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     cfg["explore"].update(camera_steps=2, camera_step_s=0.01)
@@ -197,7 +203,7 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
     assert all("panel" in c[1] for c in h.calls if c[0] is State.ATACAR)
 
 
-def test_seleccion_equivocada_manda_escape():
+def test_seleccion_equivocada_sin_escape():
     def script(h, n):
         if h.bot.state is State.ATACAR:
             return perc(panel=PanelInfo(present=True, kind="other", name="se_rang"))
@@ -205,7 +211,7 @@ def test_seleccion_equivocada_manda_escape():
 
     h = Harness(script)
     h.run_until(lambda: h.states()[-1:] == [State.BUSCAR] and State.ATACAR in h.states())
-    assert h.keys("esc") == 1
+    assert h.keys("esc") == 0
     assert h.states()[:2] == [State.ATACAR, State.BUSCAR]
 
 
@@ -223,7 +229,7 @@ def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
     h.run_until(lambda: State.EXPLORAR in h.states())
     assert h.states()[:3] == [State.ATACAR, State.BUSCAR, State.EXPLORAR]
     assert h.clicks() == 3            # clic inicial + 2 reclics
-    assert h.keys("esc") == 1 and len(h.bot.discarded) == 1
+    assert h.keys("esc") == 0 and len(h.bot.discarded) == 1
     assert h.states().count(State.ATACAR) == 1   # no se vuelve a elegir
     # pasado el tiempo de descarte vuelve a ser candidato
     h.clock.t += h.cfg["attack"]["discard_minutes"] * 60 + 1
@@ -412,7 +418,7 @@ def test_atacando_afuera_abandona_y_vuelve():
     h = Harness(script)
     h.train_camera()
     h.run_until(lambda: State.VOLVER in h.states())
-    assert h.states()[:2] == [State.ATACAR, State.VOLVER] and h.keys("esc") == 1
+    assert h.states()[:2] == [State.ATACAR, State.VOLVER] and h.keys("esc") == 0
 
 
 def test_trabado_destraba_y_vuelve_al_estado_anterior():
@@ -427,7 +433,7 @@ def test_trabado_destraba_y_vuelve_al_estado_anterior():
 
 def test_destrabe_agota_intentos_y_va_al_centro():
     h = Harness(lambda h, n: perc(), stuck={"max_attempts": 4})
-    h.run_until(lambda: State.CENTRO in h.states())
+    h.run_until(lambda: State.CENTRO in h.states(), limit=1500)
     why = dict((s_, w) for s_, w in h.seen)[State.CENTRO]
     assert "4 intentos" in why and h.bot.stats.centros == 1
     ep = h.bot._ep
@@ -436,14 +442,17 @@ def test_destrabe_agota_intentos_y_va_al_centro():
     assert h.keys("s") >= 1                                                  # uno de los intentos fue ATRAS
 
 
-def test_atacar_sin_confirmar_reclickea_y_trabado_destraba():
+def test_atacar_sin_confirmar_reclickea_quieto_y_a_los_max_clicks_elige_otro():
+    """Sin panel y sin avanzar: clics quietos separados por `attack.min_click_gap_s`, tope `approach.max_clicks` y despues se
+    aparta el metin unos segundos (no se lo descarta 10 minutos) y se elige otro."""
     def script(h, n):
         return perc(metins=[metin()])
 
     h = Harness(script, attack={"confirm_timeout_s": 1.0})
     h.train_camera()
-    h.run_until(lambda: State.DESTRABAR in h.states())
-    assert h.states()[:2] == [State.ATACAR, State.DESTRABAR] and h.clicks() >= 2
+    h.run_until(lambda: any(w.startswith("sin confirmar:") for _, w in h.seen))
+    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and h.clicks() == int(h.cfg["approach"]["max_clicks"])
+    assert all(s.expiry - h.clock.t <= 31 for s in h.bot.discarded)
 
 
 NEAR_EDGE_XY = (442, 170)   # adentro del poligono a +4.6 u del borde (menos que explore_margin)
@@ -599,7 +608,8 @@ def test_explorar_barre_la_camara_y_ataca_si_aparece_un_metin():
         sweeps = h.keys("q") + h.keys("e")
         return perc(metins=[metin()] if sweeps >= 2 else [])
 
-    h = Harness(script)
+    h = Harness(script, explore={"sweep_step_deg": 180.0})   # vuelta de 2 pasos, cada uno de una sola pulsacion
+    h.bot.keynav.rate = 18000.0
     h.train_camera()
     h.run_until(lambda: State.ATACAR in h.states())
     assert h.states()[:2] == [State.EXPLORAR, State.ATACAR]
@@ -607,7 +617,8 @@ def test_explorar_barre_la_camara_y_ataca_si_aparece_un_metin():
 
 
 def test_explorar_sin_nada_camina_hacia_un_punto_del_poligono():
-    h = Harness(lambda h, n: perc())
+    h = Harness(lambda h, n: perc(), explore={"sweep_step_deg": 180.0})   # vuelta de 2 pasos
+    h.bot.keynav.rate = 18000.0
     h.run_until(lambda: h.clicks() >= 1)
     assert h.keys("q") + h.keys("e") == 2          # primero el barrido
     assert h.bot._ex.phase == "walk" and h.bot.zone.accepts(h.bot._ex.target)

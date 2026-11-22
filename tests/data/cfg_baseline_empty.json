@@ -6,7 +6,12 @@
   "pause_ms": 300
  },
  "approach": {
+  "align_turns_max": 6,
+  "blind_inside_margin": 15.0,
+  "blind_near_floor": 3.0,
   "blind_player_radius": 25.0,
+  "center_tol_px": 140,
+  "click_floor": 2.0,
   "far_monsters_n": 2,
   "far_monsters_px": 200,
   "hover_label_px": 120,
@@ -14,17 +19,26 @@
   "hover_wait_s": 0.3,
   "ignore_minutes": 10.0,
   "ignore_radius": 10.0,
+  "keys_enabled": true,
   "label_exclude_down_px": 100,
   "label_match_px": 100,
   "lost_cycles": 6,
   "match_px": 200,
+  "max_clicks": 4,
   "max_seconds": 40.0,
   "max_tries_per_spot": 3,
+  "metin_outside_u": 15.0,
   "near_unlabeled_y_frac": 0.55,
   "no_label_ignore_s": 120.0,
-  "unlabeled_closer_ratio": 0.5
+  "quiet_reads": 2,
+  "retry_ignore_s": 30.0,
+  "settle_s": 0.4,
+  "stuck_click_floor": 4.0,
+  "unlabeled_closer_ratio": 0.5,
+  "walk_chunk_s": 0.5
  },
  "attack": {
+  "after_captcha_keep_s": 20.0,
   "arrive_px": 120,
   "blocked_s": 4.0,
   "blocked_window_frac": 0.8,
@@ -80,8 +94,8 @@
     -15
    ]
   ],
-  "confirm_check_s": 0.5,
   "confirm_timeout_s": 6.0,
+  "confirm_wait_s": 1.5,
   "discard_error_frac": 0.3,
   "discard_minutes": 10.0,
   "discard_radius": 8.0,
@@ -89,18 +103,24 @@
   "hp_stall_s": 8.0,
   "keep_with_others_s": 8.0,
   "label_click_up_frac": 0.37,
+  "lost_swap_after": 2,
   "max_deselect_reclicks": 6,
   "max_reclicks": 3,
   "max_seconds": 120.0,
   "max_unstick": 4,
   "max_wrong_selections": 3,
   "min_break_s": 15.0,
+  "min_click_gap_s": 1.5,
   "monster_clear_px": 25,
+  "name_gap_px": 20,
   "next_keep_s": 60.0,
+  "on_me_space_s": 1.0,
+  "panel_recover": true,
   "quick_reclicks": 2,
   "quick_up_px": 10,
   "reclick_stall_s": 5.0,
   "reclick_wait_s": 1.0,
+  "recover_wait_s": 1.5,
   "relocate_px": 150,
   "scan_after_s": 5.0,
   "scan_enabled": true,
@@ -113,20 +133,20 @@
   "wrong_monsters_min": 1
  },
  "camera_pitch": {
-  "calib_pause_s": 0.3,
-  "calib_samples": 5,
+  "calib_max_px": 300,
   "drag_clear_px": 140,
+  "drag_pause_s": 0.1,
   "drag_s": 0.3,
   "drag_steps": 6,
   "enabled": true,
-  "every_s": 30.0,
-  "gain_ema": 0.5,
-  "gain_px_per_frac": 600.0,
-  "max_drag_px": 150,
-  "max_steps": 3,
+  "every_s": 60.0,
+  "floor_frames": 2,
+  "from_limit_px": 60,
+  "max_drag_px": 200,
   "min_confidence": 0.5,
+  "min_drag_px": 20,
   "min_floor_rows": 40,
-  "min_gain_move_frac": 0.01,
+  "min_gap_s": 8.0,
   "min_sat": 10,
   "min_valid_px": 20,
   "player_box_px": [
@@ -134,15 +154,19 @@
    140,
    130
   ],
-  "ref_horizon_frac": null,
   "row_floor_frac": 0.5,
   "run_rows": 8,
   "sample_bottom_px": 170,
   "sample_top_px": 70,
+  "side_half_frac": 0.06,
+  "side_offset_frac": 0.14,
+  "step_px": 15,
   "strip_half_frac": 0.12,
+  "to_limit_px": 700,
   "tol_hue": 10,
   "tol_val": 22,
-  "tolerance": 0.04
+  "zoom_out_clicks": 20,
+  "zoom_out_sign": -1
  },
  "captcha_wait": {
   "clear_confirm": 2,
@@ -156,6 +180,7 @@
   "buff": "f1",
   "camera_left": "q",
   "camera_right": "e",
+  "close_menu": "esc",
   "deselect": "esc",
   "mount": "ctrl+g",
   "move_down": "s",
@@ -220,6 +245,7 @@
   "candidate_tie_u": 4.0,
   "candidate_walk_tries": 2,
   "candidate_walk_u": 30.0,
+  "center_laps": 2,
   "center_return_u": 25.0,
   "edge_return_u": 5.0,
   "ground_reach_u": 4.0,
@@ -237,9 +263,12 @@
   "recent_legs": 3,
   "settle_frames": 2,
   "settle_s": 0.6,
+  "sweep_attack_u": 60.0,
   "sweep_cut_floor": 2.0,
   "sweep_deg": 325.0,
   "sweep_max_factor": 1.5,
+  "sweep_max_hovers": 6,
+  "sweep_step_deg": 30.0,
   "visited_keep": 8,
   "walk_timeout_s": 20.0
  },
@@ -304,14 +333,18 @@
   "fit_segments": 8,
   "heading_tolerance_deg": 30.0,
   "keyboard": {
+   "ad_side": "auto",
    "align_deg": 20.0,
    "chunk_s": 0.5,
    "edge_measure_u": 3.0,
+   "lateral": false,
    "max_turn_deg": 180.0,
    "min_step_s": 0.15,
    "probe_s": 0.4,
+   "senses_file": "logs/sentidos.json",
+   "senses_votes": 3,
    "turn_deg_per_s": 60.0,
-   "view_right_key": "camera_right",
+   "view_right_key": "auto",
    "walk_speed": 15.0
   },
   "max_angle_deg": 60,
@@ -352,10 +385,14 @@
   "max_seconds": 90.0,
   "min_step_s": 0.1,
   "mount_wait_s": 2.0,
+  "near_px": 160,
+  "progress_window_s": 3.0,
   "reposition_frac": 0.5,
   "reposition_s": 3.0,
+  "same_px": 25,
   "same_spot_u": 3.0,
   "step_s": 0.25,
+  "switch_ratio": 0.6,
   "track_px": 80,
   "z_interval_s": 0.4
  },
@@ -380,6 +417,18 @@
  "stuck": {
   "back_key_s": 0.6,
   "back_s": 1.0,
+  "blind_turn_deg": 120.0,
+  "blocked_keep": 12,
+  "blocked_radius_u": 15.0,
+  "blocked_tol_deg": 40.0,
+  "detour_angles_deg": [
+   90.0,
+   -90.0,
+   135.0,
+   -135.0,
+   180.0
+  ],
+  "detour_s": 2.5,
   "dir_step_deg": 30.0,
   "episode_ttl_s": 120.0,
   "fast_s": 1.8,
@@ -393,6 +442,7 @@
   "min_dir_sep_deg": 60.0,
   "min_move": 2.0,
   "monsters_min": 2,
+  "probe_blind": 2,
   "progress_tol": 1.0,
   "repeat_max": 3,
   "repeat_window_s": 120.0,
@@ -419,6 +469,27 @@
     ],
     "template": "templates/captcha/pie.png"
    },
+   "frase": {
+    "frame": {
+     "min_score": 0.8,
+     "template": "templates/captcha/frase_marco.png"
+    },
+    "search_region": {
+     "anchor": "top-center",
+     "dx": -500,
+     "dy": 100,
+     "h": 140,
+     "w": 1000
+    },
+    "size": [
+     548,
+     66
+    ],
+    "text": {
+     "min_score": 0.8,
+     "template": "templates/captcha/frase_texto.png"
+    }
+   },
    "keypad": {
     "offset": [
      9,
@@ -438,6 +509,60 @@
    "size": [
     152,
     194
+   ]
+  },
+  "click_point": {
+   "body_h_k": 0.33,
+   "body_h_min_px": 40,
+   "body_h_mult": 1.3,
+   "body_w_frac": 0.3,
+   "col_margin_px": 8,
+   "grid": [
+    [
+     0.5,
+     0.5
+    ],
+    [
+     0.5,
+     0.3
+    ],
+    [
+     0.5,
+     0.7
+    ],
+    [
+     0.3,
+     0.5
+    ],
+    [
+     0.7,
+     0.5
+    ],
+    [
+     0.3,
+     0.3
+    ],
+    [
+     0.7,
+     0.3
+    ],
+    [
+     0.3,
+     0.7
+    ],
+    [
+     0.7,
+     0.7
+    ]
+   ],
+   "min_stone_frac": 0.25,
+   "own_margin_px": 6,
+   "patch_r": 4,
+   "stone_s_min": 60,
+   "stone_search": [
+    60,
+    60,
+    25
    ]
   },
   "coords": {
@@ -642,6 +767,19 @@
     }
    }
   },
+  "game_menu": {
+   "close_clicks": 3,
+   "close_retry_s": 1.0,
+   "enabled": true,
+   "min_score": 0.8,
+   "search": [
+    0.3,
+    0.45,
+    0.7,
+    0.85
+   ],
+   "template": "templates/ui/menu_cancelar.png"
+  },
   "glyphs": {
    "coords": {
     "color": [
@@ -754,10 +892,16 @@
    "min_excess": 18.0,
    "min_samples": 6,
    "min_val": 50,
-   "offset_ema": 0.3,
+   "offset_ema": 0.15,
+   "offset_max_deg": 20.0,
    "r_max": 50,
    "r_min": 14,
    "rel_frac": 0.45,
+   "relax_factor": 0.5,
+   "relax_width_deg": [
+    8.0,
+    100.0
+   ],
    "step_deg": 2.0,
    "width_deg": [
     12.0,
@@ -785,6 +929,8 @@
    "min_green_w": 12,
    "min_red_pixels": 15,
    "near_radius_px": 120,
+   "on_me_body_px": 90,
+   "on_me_px": 30,
    "probe_w": 30,
    "red_bgr": [
     9,
@@ -792,6 +938,19 @@
     235
    ],
    "word_gap_px": 8
+  },
+  "own_label": {
+   "name_bgr": [
+    76,
+    215,
+    255
+   ],
+   "search": [
+    -170,
+    -230,
+    170,
+    -20
+   ]
   },
   "panel": {
    "bar": {

@@ -81,7 +81,7 @@ class Floor:
                     self.zs += 1
                     if self.zs >= self.z_needed:
                         self.zs = 0
-                        self.items.remove(near[0])
+                        self.items.remove(min(near, key=lambda i: math.dist(item_point(i), FEET)))   # Guabina: el mas cercano
             elif e == ("key_down", "g"):
                 self.log.append(("g",))
         self.seen = len(ev)
@@ -193,7 +193,7 @@ def test_z_se_repite_hasta_que_desaparece_la_etiqueta_y_recien_ahi_el_siguiente(
     assert counts == [2, 2, 2, 2, 1, 1, 1, 1]
     ts = [t for _, t in h.floor.z_log]
     assert all(b - a >= 0.4 - 1e-9 for a, b in zip(ts, ts[1:]))          # z_interval_s
-    assert "Z (4) esperando que desaparezca" in caplog.text and "recogido tras 4 Z" in caplog.text
+    assert "Z (4) esperando que desaparezca" in caplog.text and "recogido(s)" in caplog.text
 
 
 def test_se_reacomoda_a_los_reposition_s_y_sigue_con_z(caplog):
@@ -227,14 +227,38 @@ def test_no_se_sube_mientras_quede_un_objeto_valido():
     assert not h.floor.items and h.keys("g") == 2 and kinds(h)[-1] == "g"
 
 
-def test_el_objeto_actual_no_cambia_aunque_aparezca_otro_mas_cercano():
+def test_el_objeto_actual_es_el_mas_cercano_a_los_pies_en_cada_ciclo():
+    """Guabina junta con cada Z el MAS CERCANO: si aparece uno encima de los pies pasa a ser el actual."""
     h = floor_harness([DOWN], floor_kw={"z_needed": 4})
     start(h)
     h.run_until(lambda: h.keys("z") >= 1)
-    h.floor.items.append([FEET[0] + 20.0, FEET[1] - 18.0])     # aparece uno encima de los pies
-    n = len(h.floor.items)
-    h.run_until(lambda: len(h.floor.items) < n, limit=300)
-    assert h.floor.items == [[FEET[0] + 20.0, FEET[1] - 18.0]]   # se termino con el primero antes de ir al nuevo
+    h.floor.items.append([FEET[0] + 1.0, FEET[1] - 18.0])     # aparece uno justo debajo de los pies
+    new = (int(FEET[0] + 1), int(FEET[1] - 18))
+    h.run_until(lambda: h.bot._pk.cur is not None and h.bot._pk.cur.point == new, limit=100)
+    assert h.bot._pk.cur.point == new
+
+
+def test_un_vecino_cerca_no_se_toma_por_el_mismo_objeto_y_la_recogida_se_cuenta(caplog):
+    """El objeto actual desaparece (lo junto el Z) y queda otro a ~50 px: no es el mismo (same_px), cuenta como recogido."""
+    caplog.set_level(logging.INFO)
+    near_a = [FEET[0] + 10.0, FEET[1] - 18.0]
+    near_b = [FEET[0] + 60.0, FEET[1] - 18.0]
+    h = floor_harness([near_a, near_b], floor_kw={"z_needed": 2})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    assert not h.floor.items and h.bot.stats.items == 2
+    assert "me rindo" not in caplog.text
+
+
+def test_un_objeto_que_no_era_el_actual_y_desaparece_con_z_cuenta_como_progreso_y_reinicia_el_actual():
+    h = floor_harness([[FEET[0] + 10.0, FEET[1] - 18.0], DOWN], floor_kw={"z_needed": 99})
+    start(h)
+    h.run_until(lambda: h.keys("z") >= 2)
+    cur = h.bot._pk.cur
+    assert cur is not None and cur.z >= 1
+    h.floor.items.pop(0)                  # el juego junto otro (el de los pies): desaparece mientras se aprieta Z
+    h.run_until(lambda: h.bot.stats.items >= 1, limit=200)
+    assert h.bot.stats.items == 1 and h.bot._pk.cur is None or h.bot._pk.cur.z <= 1
 
 
 def test_fuera_de_la_zona_corta_la_recogida_y_vuelve():

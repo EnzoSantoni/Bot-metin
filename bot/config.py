@@ -48,7 +48,10 @@ DEFAULTS: dict[str, Any] = {
     "controls": {
         "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
         "camera_left": "q", "camera_right": "e",
-        "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d", "deselect": "esc",
+        "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
+        # deselect: SIN USO (el bot ya no aprieta Escape: abre el menu de opciones si no hay nada seleccionado). close_menu:
+        # solo si el menu de opciones esta abierto y el clic en su boton Cancelar no lo cerro tras close_clicks intentos.
+        "deselect": "esc", "close_menu": "esc",
     },
     # Seguridad (bot/control.py): panico, pausa, esquina de pantalla, cuenta regresiva, corte forzado.
     "safety": {"panic_key": "f12", "pause_key": "f11", "corner_px": 5, "corner_poll_ms": 50,
@@ -124,7 +127,14 @@ DEFAULTS: dict[str, Any] = {
               # sostenida, clic de ataque) y las coordenadas se mueven < min_move durante fast_s -> con >= monsters_min monstruos
               # cerca ESPACIO surrounded_space_s, si no un paso al costado (attack.sidestep_s); y sigue en el mismo estado.
               # surrounded_max reacciones seguidas sin avanzar -> DESTRABAR. (Reemplaza a surrounded_s y attack.walk_stuck_s.)
-              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3},
+              "fast_s": 1.8, "surrounded_space_s": 1.5, "surrounded_max": 3,
+              # Trabado caminando SIN monstruos en modo teclado (pared, acantilado, arbol): en vez del paso al costado se GIRA la vista
+              # (detour_angles_deg respecto de donde miraba; se elige el que mas se acerca al destino y no se probo en este lugar), se
+              # camina con W detour_s y se mira si avanza; un rumbo que no avanza se recuerda (blocked_keep, a blocked_radius_u del
+              # lugar y +-blocked_tol_deg) y no se repite. Sin rumbo conocido, tras probe_blind pruebas de W sin medir se gira a ciegas
+              # blind_turn_deg grados y se prueba de nuevo.
+              "detour_angles_deg": [90.0, -90.0, 135.0, -135.0, 180.0], "detour_s": 2.5, "blocked_keep": 12,
+              "blocked_radius_u": 15.0, "blocked_tol_deg": 40.0, "probe_blind": 2, "blind_turn_deg": 120.0},
     # Loop principal (bot/bot.py): ritmo minimo por ciclo y cada cuantos ciclos se busca el captcha en toda la imagen.
     # hold_chunk_s: las teclas sostenidas (ESPACIO, W, S, giros de camara) se parten en tramos de este largo con un
     # chequeo de captcha entre tramos.
@@ -132,9 +142,11 @@ DEFAULTS: dict[str, Any] = {
     # Habilidades con temporizador (bot/skills.py; las habilidades en si estan en character.skills). mount_wait_s: espera tras
     # cada Ctrl+G de una habilidad (estimada); press_hold_s: cuanto se mantiene la tecla; recast_margin_s: se relanza este
     # tiempo antes de que venza; attack_settle_s: atacando, solo se lanza pasado este tiempo desde el ultimo clic;
-    # chunk_s: las esperas (montar, animacion) se parten en tramos de este largo con chequeo de captcha y panico.
+    # chunk_s: las esperas (montar, animacion) se parten en tramos de este largo con chequeo de captcha y panico;
+    # near_break_hp: atacando, no se lanza si la ultima vida leida del metin es <= este valor (0-1): durante la habilidad no se
+    # ve el panel y un metin que se rompe a ciegas no se cuenta ni se recoge (roto real = panel perdido con vida baja).
     "skill_timing": {"mount_wait_s": 1.5, "press_hold_s": 0.1, "recast_margin_s": 0.0, "attack_settle_s": 3.0,
-                     "chunk_s": 0.5},
+                     "chunk_s": 0.5, "near_break_hp": 0.35},
     # ATACAR: tiempos en s, descarte en minutos, radio de descarte en unidades del juego.
     "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
                "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
@@ -166,16 +178,32 @@ DEFAULTS: dict[str, Any] = {
                # (no se juzga trabado por estar quieto).
                "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
                # Punto de clic: el de la etiqueta (click_dy debajo de ella) se corre hacia arriba label_click_up_frac * click_dy
-               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_check_s del clic sin panel
+               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_wait_s del clic sin panel
                # de metin, reclic mejor apuntado (hasta quick_reclicks; si cae en el mismo punto, quick_up_px mas arriba).
-               "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
+               "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+               # RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
+               # movimiento (coordenadas cambiando). name_gap_px: el clic nunca cae a menos de tantos px debajo del nombre.
+               # PANEL AUSENTE (error del juego: a veces atacando un metin no aparece la barra de vida): si el personaje esta
+               # quieto y pegado y hay un monstruo cerca, panel_recover hace UN clic derecho (apretar y soltar, sin mover) sobre
+               # el cuerpo del monstruo por episodio; si el panel vuelve al metin sigue atacando, si no en recover_wait_s hay un
+               # clic izquierdo al metin. La senal por animacion del arma NO se implemento (no es confiable sin secuencias).
+               "min_click_gap_s": 1.5, "name_gap_px": 20, "panel_recover": True, "recover_wait_s": 1.5,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
                "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
                # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
                # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
                "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
-               "scan_hp_margin_s": 2.0},
+               "scan_hp_margin_s": 2.0,
+               # Bichos encima (nombres rojos pegados al amarillo del personaje, vision.monsters.on_me_px): ESPACIO antes de
+               # reclickear (deseleccion, seleccion equivocada, trabado). on_me_space_s = duracion de ESPACIO en esos casos.
+               "on_me_space_s": 1.0,
+               # Tras un captcha el metin que se atacaba se retoma directo (su punto de pantalla y su posicion en el mapa):
+               # durante after_captcha_keep_s no se lo suelta por "hay otro objetivo a la vista" (keep_with_others_s).
+               "after_captcha_keep_s": 20.0,
+               # Dos clics seguidos al mismo metin con el panel perdido enseguida (vida alta) -> el siguiente punto candidato
+               # de la piedra (otro lado) en vez de repetir el mismo: lost_swap_after = perdidas antes de cambiar de punto.
+               "lost_swap_after": 2},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
     # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
     # su etiqueta desaparezca (gone_cycles capturas sin verla). A los reposition_s sigue ahi: reacomodo (llegada a
@@ -183,13 +211,20 @@ DEFAULTS: dict[str, Any] = {
     "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
-    # Angulo vertical de la camara (bot/vision/pitch.py, bot/camera_pitch.py). ref_horizon_frac = null: no corrige (se mide con
-    # `calibrate.py camara`). Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "ref_horizon_frac": None, "tolerance": 0.04, "gain_px_per_frac": 600.0,
-                     "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
-                     "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
-                     "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+               "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0,
+               # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
+               # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
+               # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
+               # este esta a menos de esta fraccion de su distancia (histeresis).
+               "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
+    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
+    # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
+    # bot/vision/pitch.py. Ver config.example.jsonc.
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+                     "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
+                     "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                     "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
+                     "min_confidence": 0.5,
                      "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                      "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
                      "min_valid_px": 20, "min_floor_rows": 40},
@@ -214,13 +249,19 @@ DEFAULTS: dict[str, Any] = {
                 # candidate_keep_s: vigencia; candidate_merge_u: fusion de los que caen cerca; candidate_tie_u: empate de distancia
                 # (gana el mas cerca del centro); candidate_max_u: mas lejos no se guarda; candidate_broken_u: radio que se borra
                 # alrededor de un metin roto; sweep_cut_floor: etiqueta objetivo a menos de esta distancia de piso corta la vuelta;
-                # center_return_u: vuelta sin nada y sin punto del mapa listo -> centro si esta a mas de esto.
+                # center_return_u: sin metin y sin punto del mapa listo -> centro si esta a mas de esto (se camina hasta llegar);
+                # center_laps: vueltas de busqueda seguidas en el centro sin nada antes de permitir un tramo al azar.
                 # ground_scale_u: escala inicial (unidades del juego por unidad de piso), se aprende (ground_scale_ema) acotada a
                 # ground_scale_bounds x el inicial; ground_reach_u: alcance de ataque que se suma a lo recorrido al medirla.
-                "sweep_deg": 325.0, "sweep_max_factor": 1.5, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+                "sweep_deg": 325.0, "sweep_max_factor": 1.5,
+                # Paso de la vuelta: sweep_step_deg grados por giro (campo de vision horizontal estimado ~70 grados con
+                # vision.ground.focal_frac 0.7: 30 grados deja ~57% de superposicion). En cada paso se analiza; un metin con
+                # nombre objetivo a <= sweep_attack_u del personaje (o a <= sweep_cut_floor de piso) se ataca ya, sin terminar
+                # la vuelta; una piedra se confirma con hover (hasta sweep_max_hovers por vuelta) y se guarda en la lista.
+                "sweep_step_deg": 30.0, "sweep_attack_u": 60.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
                 "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
                 "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
-                "center_return_u": 25.0, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
+                "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
                 "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
     # ACERCARSE (piedra lejana sin etiqueta): max_seconds de la caminata; ignore_minutes / ignore_radius: posicion que
     # resulto ser de otro tipo; lost_cycles: ciclos sin ver la piedra para abandonar; label_match_px: una etiqueta a
@@ -228,6 +269,9 @@ DEFAULTS: dict[str, Any] = {
     # label_exclude_down_px: la piedra con etiqueta se excluye de las lejanas hasta tantos px debajo de la etiqueta.
     # Sin camara lista (la posicion en el juego no se conoce): un metin (con etiqueta o piedra) se ataca/persigue si el
     # personaje esta adentro de la zona o en la franja de tolerancia, sin limite de distancia en pantalla;
+    # Regla de zona de los metin: con posicion conocida solo se va a los que quedan a <= metin_outside_u afuera del borde
+    # (menos que la tolerancia, para no salir del todo); sin posicion (camara no lista) solo si estan a una distancia de
+    # piso <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde.
     # blind_player_radius = un descarte o ignorado guardado con la posicion del JUGADOR solo aplica a menos de tantas
     # unidades de ese lugar.
     # ACERCARSE = hover (mover el mouse sobre la piedra, sin clic) para leer su etiqueta: espera hover_wait_s, busca una
@@ -239,8 +283,19 @@ DEFAULTS: dict[str, Any] = {
     "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                  "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
                  "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+                 "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                  "far_monsters_n": 2, "far_monsters_px": 200,
                  "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+                 # ACERCARSE con teclado: a mas de click_floor (distancia de piso) se alinea la vista con Q/E hasta que la piedra
+                 # quede a <= center_tol_px del centro horizontal, se camina con W en tramos de walk_chunk_s (re-detectando la
+                 # piedra) y se FRENA al llegar a click_floor; quieto (quiet_reads lecturas iguales y settle_s sin tecla) un
+                 # clic en el cuerpo. Sin confirmar, otro clic quieto y a los max_clicks se elige otro (sin descartar: la
+                 # posicion se ignora retry_ignore_s). align_turns_max giros seguidos sin centrar -> se camina igual.
+                 # Tramos de W sin avanzar (keynav: stuck): con bichos ESPACIO, si no se cancela el acercamiento (o se hace el clic si
+                 # esta a <= stuck_click_floor).
+                 "keys_enabled": True, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+                 "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
+                 "stuck_click_floor": 4.0,
                  "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
     # CENTRO: llega al centro del poligono a <= arrive_dist unidades (el tope de tiempo es volver.max_seconds).
     "center": {"arrive_dist": 8.0},
@@ -277,9 +332,14 @@ DEFAULTS: dict[str, Any] = {
         # giro de Q/E (= 360 / (explore.camera_steps * explore.camera_step_s)), se aprende; max_turn_deg = giro maximo
         # por orden; walk_speed = velocidad inicial de caminata (u/s), se aprende; min_step_s = tramo de W minimo;
         # edge_measure_u = desplazamiento minimo para medir el rumbo cuando el personaje esta pasado de la guardia de zona;
-        # view_right_key = tecla (camera_left / camera_right) que gira la VISTA a la derecha (se aprende si esta al reves).
+        # view_right_key = tecla (camera_left / camera_right) que gira la VISTA a la derecha; ad_side = "normal" (D camina a la
+        # derecha de W) o "reverso"; con "auto" se determinan UNA vez (senses_votes muestras coherentes; sin fijar se asume
+        # camera_right y "normal"), se guardan en senses_file y quedan FIJOS el resto de la corrida (la evidencia contraria
+        # solo avisa). lateral = caminar tambien con A/D: en este juego A/D giran la vista, asi que por defecto es false (se camina
+        # con W y la vista se alinea con Q/E).
         "keyboard": {"chunk_s": 0.5, "probe_s": 0.4, "align_deg": 20.0, "turn_deg_per_s": 60.0, "max_turn_deg": 180.0,
-                     "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "camera_right"},
+                     "walk_speed": 15.0, "min_step_s": 0.15, "edge_measure_u": 3.0, "view_right_key": "auto",
+                     "ad_side": "auto", "lateral": False, "senses_votes": 3, "senses_file": "logs/sentidos.json"},
     },
     "vision": {
         # Plano del piso (bot/ground.py) para comparar distancias con perspectiva: horizonte a horizon_frac del alto,
@@ -289,10 +349,14 @@ DEFAULTS: dict[str, Any] = {
         # Rumbo de la camara desde el cono del minimapa (bot/vision/minimap.py): centro del minimapa (el personaje) a
         # (ancho + center_dx, center_dy); rayos cada step_deg entre r_min y r_max px; se ignoran pixeles rojos y de V < min_val;
         # un rayo necesita min_samples validos; el cono = arco de rayos con exceso de V sobre la mediana > max(min_excess,
-        # rel_frac x percentil 95) y de ancho width_deg [min, max]. heading_offset_deg: se suma al rumbo medido (se aprende).
+        # rel_frac x percentil 95) y de ancho width_deg [min, max]; si no lee, segundo pase relajado (umbrales x relax_factor y
+        # ancho relax_width_deg). El cono esta en el MISMO marco que las coordenadas (0 = este, y hacia abajo; sin espejo, medido en
+        # debug/run_20261121_205635): heading_offset_deg = 0 se suma al rumbo medido y el bot solo lo afina con tramos de W
+        # (EMA offset_ema, tope +-offset_max_deg).
         "minimap": {"center_dx": -68, "center_dy": 68, "r_min": 14, "r_max": 50, "step_deg": 2.0, "min_val": 50,
                     "min_samples": 6, "min_excess": 18.0, "rel_frac": 0.45, "width_deg": [12.0, 70.0],
-                    "heading_offset_deg": 0.0, "offset_ema": 0.3},
+                    "relax_factor": 0.5, "relax_width_deg": [8.0, 100.0],
+                    "heading_offset_deg": 0.0, "offset_ema": 0.15, "offset_max_deg": 20.0},
         # Zonas de interfaz ignoradas. dx/dy: esquina superior izquierda respecto del punto de
         # anclaje (medido sobre ./samples). Los rectangulos se recortan al tamano de la imagen.
         "exclusion_zones": [
@@ -372,7 +436,29 @@ DEFAULTS: dict[str, Any] = {
             "max_gap_px": 10, "word_gap_px": 8,
             "max_zone_overlap": 0.5,
             "near_radius_px": 120,
+            "on_me_px": 30,   # etiqueta de monstruo solapada o a <= on_me_px de la del personaje = bicho encima
+            "on_me_body_px": 90,   # o con la etiqueta a <= on_me_body_px del personaje (montado: la propia queda ~50 px mas arriba)
         },
+        # Etiqueta del propio personaje ("Lv NN" verde + nombre en amarillo plano): sirve para saber si hay bichos encima.
+        # search = [dx0, dy0, dx1, dy1] respecto del punto del personaje (montado, la etiqueta queda ~130 px arriba).
+        "own_label": {"name_bgr": [76, 215, 255], "search": [-170, -230, 170, -20]},
+        # Menu de opciones del juego (lo abre Escape sin nada seleccionado): se lo reconoce por el boton "Cancelar" (plantilla
+        # recortada de una captura real; score 1.0 en las 5 con menu y < 0.45 en las 73 sin menu). search = fracciones
+        # [x0, y0, x1, y1] de la imagen. Se lo cierra con un clic en ese boton.
+        "game_menu": {"enabled": True, "template": "templates/ui/menu_cancelar.png", "min_score": 0.8,
+                      "search": [0.3, 0.45, 0.7, 0.85],
+                      # Cierre: clic en Cancelar y, si sigue abierto, reintenta cada close_retry_s; tras close_clicks clics
+                      # fallidos usa la tecla controls.close_menu (Escape, que ahi SI lo cierra).
+                      "close_retry_s": 1.0, "close_clicks": 3},
+        # Punto de clic sobre la parte VISIBLE de la piedra (bot/vision/click_point.py): candidatos dentro del rect del cuerpo
+        # (fracciones [fx, fy] del rect), descartados si caen en la columna bajo una etiqueta de monstruo (la silueta mide
+        # body_h_k * distancia al horizonte, hasta body_h_mult veces, ancho body_w_frac de ese alto + col_margin_px) o sobre la
+        # etiqueta del personaje; se puntua por pixeles de color de piedra en un parche de patch_r px (min_stone_frac minimo).
+        "click_point": {"grid": [[0.5, 0.5], [0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5], [0.3, 0.3], [0.7, 0.3],
+                                 [0.3, 0.7], [0.7, 0.7]],
+                        "body_h_k": 0.33, "body_h_min_px": 40, "body_h_mult": 1.3, "body_w_frac": 0.3, "col_margin_px": 8,
+                        "patch_r": 4, "min_stone_frac": 0.25, "stone_s_min": 60, "stone_search": [60, 60, 25],
+                        "own_margin_px": 6},
         # Objetos en el piso (bot/vision/items.py): recuadro con borde negro exacto de 1 px, fondo oscuro
         # translucido y texto blanco sin antialiasing. Con dueno, una linea amarilla (0,255,255) encima del nombre.
         "items": {
@@ -435,6 +521,14 @@ DEFAULTS: dict[str, Any] = {
             "search_region": {"anchor": "center-right", "dx": -400, "dy": -180, "w": 400, "h": 374},
             "footer": {"template": "templates/captcha/pie.png", "offset": [24, 146]},
             "keypad": {"template": "templates/captcha/teclado.png", "offset": [9, 49]},
+            # Captcha de la FRASE: cartel dorado arriba al centro "la siguiente frase es: - - - p - - ...". El marco es el mismo
+            # de los anuncios del servidor, asi que ademas de la barra con las manijas (frame) se pide el texto fijo "la siguiente
+            # frase es:" en cualquier lugar del cuerpo del cartel (size = [ancho, alto] del cartel desde la barra); las letras
+            # que faltan completar no importan. search_region = donde buscar la barra.
+            "frase": {"search_region": {"anchor": "top-center", "dx": -500, "dy": 100, "w": 1000, "h": 140},
+                      "frame": {"template": "templates/captcha/frase_marco.png", "min_score": 0.8},
+                      "text": {"template": "templates/captcha/frase_texto.png", "min_score": 0.8},
+                      "size": [548, 66]},
         },
         # Pantalla de muerte (bot/vision/death.py): botones "Volver a Empezar Aqui" y "...en la Ciudad".
         # search = region (desde la esquina sup. izq. de la imagen) donde se buscan las plantillas.
@@ -507,7 +601,12 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"))
+                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
+                 ("attack", "confirm_check_s"),
+                 # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
+                 ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
+                 ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
+                 ("camera_pitch", "gain_ema"), ("camera_pitch", "min_gain_move_frac"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -565,6 +664,7 @@ def _validate_vision(vision: dict) -> None:
     _validate_captcha_death(vision)
     _validate_items(vision)
     _validate_far_monsters(vision)
+    _validate_ataque_vision(vision)
 
 
 FAR_MODES = ("color", "estructura", "ambos")
@@ -627,11 +727,14 @@ def _validate_far_monsters(vision: dict) -> None:
     _validate_far_structure(fm)
     mm = _require_dict(vision.get("minimap"), "vision.minimap")
     for k in ("center_dx", "center_dy", "r_min", "r_max", "step_deg", "min_val", "min_samples", "min_excess", "rel_frac",
-              "heading_offset_deg", "offset_ema"):
+              "heading_offset_deg", "offset_ema", "relax_factor", "offset_max_deg"):
         v = mm.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool):
             raise ConfigError(f"vision.minimap.{k} debe ser un numero")
     _require_numbers(mm.get("width_deg"), "vision.minimap.width_deg", 2)
+    _require_numbers(mm.get("relax_width_deg"), "vision.minimap.relax_width_deg", 2)
+    if not 0 < mm["relax_factor"] <= 1 or mm["offset_max_deg"] < 0 or not 0 < mm["relax_width_deg"][0] <= mm["relax_width_deg"][1] <= 180:
+        raise ConfigError("vision.minimap: 0 < relax_factor <= 1, offset_max_deg >= 0, relax_width_deg = [min, max] con 0 < min <= max <= 180")
     if (mm["r_min"] <= 0 or mm["r_min"] >= mm["r_max"] or mm["step_deg"] <= 0 or mm["min_samples"] < 1
             or not 0 < mm["width_deg"][0] <= mm["width_deg"][1] <= 180 or not 0 < mm["offset_ema"] <= 1):
         raise ConfigError("vision.minimap: 0 < r_min < r_max, step_deg > 0, min_samples >= 1, width_deg = [min, max] "
@@ -647,7 +750,41 @@ def _validate_far_monsters(vision: dict) -> None:
         _require_numbers(mo.get(k), f"vision.monsters.{k}", n)
     nums(mo, "monsters", ("color_tol", "min_red_pixels", "min_green_pixels", "min_green_w", "max_green_w",
                           "min_green_h", "max_green_h", "probe_w", "max_label_w", "max_gap_px", "word_gap_px",
-                          "max_zone_overlap", "near_radius_px"), ("min_red_pixels",))
+                          "max_zone_overlap", "near_radius_px", "on_me_px", "on_me_body_px"), ("min_red_pixels",))
+
+
+def _validate_ataque_vision(vision: dict) -> None:
+    """vision.own_label, vision.game_menu y vision.click_point."""
+    ol = _require_dict(vision.get("own_label"), "vision.own_label")
+    _require_numbers(ol.get("name_bgr"), "vision.own_label.name_bgr", 3)
+    _require_numbers(ol.get("search"), "vision.own_label.search", 4)
+    if ol["search"][0] >= ol["search"][2] or ol["search"][1] >= ol["search"][3]:
+        raise ConfigError("vision.own_label.search debe ser [dx0, dy0, dx1, dy1] con dx0 < dx1 y dy0 < dy1")
+    gm = _require_dict(vision.get("game_menu"), "vision.game_menu")
+    if not isinstance(gm.get("enabled"), bool):
+        raise ConfigError("vision.game_menu.enabled debe ser true o false")
+    _require_text(gm.get("template"), "vision.game_menu.template")
+    _require_numbers(gm.get("search"), "vision.game_menu.search", 4)
+    if not (0 <= gm["search"][0] < gm["search"][2] <= 1 and 0 <= gm["search"][1] < gm["search"][3] <= 1):
+        raise ConfigError("vision.game_menu.search son fracciones [x0, y0, x1, y1] de la imagen (0 <= x0 < x1 <= 1)")
+    for k in ("min_score", "close_retry_s", "close_clicks"):
+        v = gm.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ConfigError(f"vision.game_menu.{k} debe ser un numero > 0")
+    cp = _require_dict(vision.get("click_point"), "vision.click_point")
+    grid = cp.get("grid")
+    if not isinstance(grid, list) or not grid:
+        raise ConfigError("vision.click_point.grid debe ser una lista no vacia de [fx, fy]")
+    for g in grid:
+        _require_numbers(g, "vision.click_point.grid[]", 2)
+        if not all(0 <= v <= 1 for v in g):
+            raise ConfigError("vision.click_point.grid: fx y fy van entre 0 y 1")
+    _require_numbers(cp.get("stone_search"), "vision.click_point.stone_search", 3)
+    for k in ("body_h_k", "body_h_min_px", "body_h_mult", "body_w_frac", "col_margin_px", "patch_r", "min_stone_frac",
+              "stone_s_min", "own_margin_px"):
+        v = cp.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ConfigError(f"vision.click_point.{k} debe ser un numero >= 0")
 
 
 def _validate_items(vision: dict) -> None:
@@ -804,6 +941,15 @@ def _validate_captcha_death(vision: dict) -> None:
         _require_text(a.get("template"), f"vision.captcha.{k}.template")
         _require_numbers(a.get("offset"), f"vision.captcha.{k}.offset", 2)
     _require_numbers(c.get("size"), "vision.captcha.size", 2)
+    fr = _require_dict(c.get("frase"), "vision.captcha.frase")
+    _require_numbers(fr.get("size"), "vision.captcha.frase.size", 2)
+    for k in ("frame", "text"):
+        a = _require_dict(fr.get(k), f"vision.captcha.frase.{k}")
+        _require_text(a.get("template"), f"vision.captcha.frase.{k}.template")
+        if not isinstance(a.get("min_score"), (int, float)) or not 0 < a["min_score"] <= 1:
+            raise ConfigError(f"vision.captcha.frase.{k}.min_score debe estar entre 0 y 1")
+    if _require_dict(fr.get("search_region"), "vision.captcha.frase.search_region").get("anchor") not in ANCHORS:
+        raise ConfigError(f"vision.captcha.frase.search_region.anchor invalido (usa {', '.join(ANCHORS)})")
     sr = _require_dict(c.get("search_region"), "vision.captcha.search_region")
     if sr.get("anchor") not in ANCHORS:
         raise ConfigError(f"vision.captcha.search_region.anchor invalido (usa {', '.join(ANCHORS)})")
@@ -903,23 +1049,28 @@ def _validate_controls_safety_input(cfg: dict) -> None:
 
 
 def _validate_camera_pitch(cfg: dict) -> None:
-    """camera_pitch: angulo vertical de la camara (referencia opcional + parametros de la medicion y del arrastre)."""
+    """camera_pitch: reinicio de la camara desde el tope (zoom, arrastres) + parametros del detector de "mira el piso"."""
     c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
     if not isinstance(c.get("enabled"), bool):
         raise ConfigError("camera_pitch.enabled debe ser true o false")
-    ref = c.get("ref_horizon_frac")
-    if ref is not None and (not isinstance(ref, (int, float)) or isinstance(ref, bool) or not 0 <= ref <= 1):
-        raise ConfigError("camera_pitch.ref_horizon_frac debe ser null o un numero entre 0 y 1")
-    positive = ("tolerance", "gain_px_per_frac", "max_drag_px", "max_steps", "every_s", "drag_s", "drag_steps",
-                "calib_samples", "gain_ema", "drag_clear_px", "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val",
-                "row_floor_frac", "run_rows", "min_valid_px")
-    nonneg = ("min_confidence", "calib_pause_s", "min_gain_move_frac", "sample_top_px", "min_sat", "min_floor_rows")
+    positive = ("to_limit_px", "from_limit_px", "max_drag_px", "min_drag_px", "every_s", "drag_steps",
+                "drag_clear_px", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac", "step_px", "calib_max_px",
+                "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val", "row_floor_frac", "run_rows", "min_valid_px")
+    nonneg = ("zoom_out_clicks", "drag_s", "drag_pause_s", "min_confidence", "sample_top_px", "min_sat", "min_floor_rows")
     for k in positive + nonneg:
         v = c.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
             raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
-    if not 0 < c["gain_ema"] <= 1 or not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5:
-        raise ConfigError("camera_pitch.gain_ema y row_floor_frac deben estar en (0, 1] y strip_half_frac en (0, 0.5]")
+    if c.get("zoom_out_sign") not in (-1, 1) or isinstance(c.get("zoom_out_sign"), bool):
+        raise ConfigError("camera_pitch.zoom_out_sign debe ser -1 o 1 (sentido de la rueda que ALEJA la camara)")
+    if c["min_drag_px"] < 20:
+        raise ConfigError("camera_pitch.min_drag_px debe ser >= 20 (un arrastre que casi no mueve el mouse puede seleccionar un monstruo)")
+    if c["max_drag_px"] < 2 * c["min_drag_px"]:
+        raise ConfigError("camera_pitch.max_drag_px debe ser >= 2 * min_drag_px")
+    if c["to_limit_px"] < c["min_drag_px"]:
+        raise ConfigError("camera_pitch.to_limit_px debe ser >= min_drag_px")
+    if not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5 or not 0 < c["side_half_frac"] <= 0.5:
+        raise ConfigError("camera_pitch.row_floor_frac debe estar en (0, 1] y strip_half_frac / side_half_frac en (0, 0.5]")
     if c["sample_top_px"] >= c["sample_bottom_px"]:
         raise ConfigError("camera_pitch.sample_top_px debe ser menor que sample_bottom_px")
     _require_numbers(c.get("player_box_px"), "camera_pitch.player_box_px", 3)
@@ -950,12 +1101,25 @@ def _validate_tracking_navigation(cfg: dict) -> None:
          ("window_s", "min_move", "max_attempts", "unstuck_radius_px", "back_key_s", "resolve_dist",
           "repeat_max", "repeat_window_s", "look_step_s", "dir_step_deg", "episode_ttl_s", "space_fail_max",
           "forward_chunk_s", "back_s", "look_walk_s", "fast_s", "surrounded_space_s", "surrounded_max"))
+    st = cfg["stuck"]
+    for k in ("detour_s", "blocked_keep", "blocked_radius_u", "blocked_tol_deg", "probe_blind", "blind_turn_deg"):
+        if not isinstance(st.get(k), (int, float)) or isinstance(st.get(k), bool) or st[k] <= 0:
+            raise ConfigError(f"stuck.{k} debe ser un numero > 0")
+    da = st.get("detour_angles_deg")
+    if not isinstance(da, list) or not da or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in da):
+        raise ConfigError("stuck.detour_angles_deg debe ser una lista de numeros (grados)")
     nums("approach", ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "label_match_px", "match_px",
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
+                      "blind_near_floor", "metin_outside_u",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
-                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s"),
+                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s", "click_floor",
+                      "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
+                      "align_turns_max", "stuck_click_floor"),
          ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
-          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries"))
+          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries", "click_floor",
+          "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
+    if not isinstance(cfg["approach"].get("keys_enabled"), bool):
+        raise ConfigError("approach.keys_enabled debe ser true o false")
     nums("center", ("arrive_dist",), ("arrive_dist",))
     nums("loop", ("cycle_ms", "captcha_full_search_every", "hold_chunk_s"), ("captcha_full_search_every", "hold_chunk_s"))
     nums("attack", ("confirm_timeout_s", "hp_stall_s", "max_reclicks", "max_seconds", "broken_confirm_cycles",
@@ -965,13 +1129,16 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
                     "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
-                    "confirm_check_s", "quick_reclicks", "quick_up_px"),
+                    "confirm_wait_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
+                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
           "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s", "confirm_check_s"))
+          "next_keep_s", "keep_with_others_s", "confirm_wait_s", "lost_swap_after", "min_click_gap_s", "recover_wait_s"))
     a = cfg["attack"]
+    if not isinstance(a.get("panel_recover"), bool):
+        raise ConfigError("attack.panel_recover debe ser true o false")
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")
     if not 0 <= a["label_click_up_frac"] < 1:
@@ -984,11 +1151,15 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("attack.clear_offsets_px debe ser una lista de pares [dx, dy]")
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
-                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"),
+                    "gone_cycles", "reposition_s", "reposition_frac", "item_max_s",
+                    "same_px", "near_px", "progress_window_s", "switch_ratio"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
-          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s"))
-    nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s"),
+          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_s", "reposition_frac", "item_max_s",
+          "same_px", "near_px", "progress_window_s", "switch_ratio"))
+    nums("skill_timing", ("mount_wait_s", "press_hold_s", "recast_margin_s", "attack_settle_s", "chunk_s", "near_break_hp"),
          ("press_hold_s", "chunk_s"))
+    if not 0 <= cfg["skill_timing"]["near_break_hp"] <= 1:
+        raise ConfigError("skill_timing.near_break_hp debe estar entre 0 y 1")
     if cfg["skill_timing"]["chunk_s"] > 0.5:
         raise ConfigError("skill_timing.chunk_s debe ser <= 0.5 (chequeo de captcha entre tramos)")
     if not isinstance(cfg["pickup"].get("dismount"), bool):
@@ -1000,12 +1171,14 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     ex = cfg["explore"]
     for k in ("sweep_deg", "sweep_max_factor", "aim_tol_deg", "aim_max_turns", "candidate_keep_s", "candidate_merge_u",
               "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u", "sweep_cut_floor",
-              "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
+              "sweep_step_deg", "sweep_attack_u", "sweep_max_hovers", "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
         v = ex.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"explore.{k} debe ser un numero > 0")
     if ex["sweep_deg"] > 360 or ex["ground_scale_ema"] > 1:
         raise ConfigError("explore.sweep_deg debe ser <= 360 y explore.ground_scale_ema <= 1")
+    if not isinstance(ex.get("center_laps"), int) or isinstance(ex.get("center_laps"), bool) or ex["center_laps"] < 0:
+        raise ConfigError("explore.center_laps debe ser un entero >= 0 (0 = tramos al azar apenas no hay punto ni candidatos)")
     if not isinstance(ex.get("candidate_walk_tries"), int) or ex["candidate_walk_tries"] < 0:
         raise ConfigError("explore.candidate_walk_tries debe ser un entero >= 0")
     _require_numbers(ex.get("ground_scale_bounds"), "explore.ground_scale_bounds", 2)
@@ -1029,8 +1202,16 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         v = kb.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"navigation.keyboard.{k} debe ser un numero > 0")
-    if kb.get("view_right_key") not in ("camera_left", "camera_right"):
-        raise ConfigError("navigation.keyboard.view_right_key debe ser \"camera_left\" o \"camera_right\"")
+    if kb.get("view_right_key") not in ("auto", "camera_left", "camera_right"):
+        raise ConfigError("navigation.keyboard.view_right_key debe ser \"auto\", \"camera_left\" o \"camera_right\"")
+    if kb.get("ad_side") not in ("auto", "normal", "reverso"):
+        raise ConfigError("navigation.keyboard.ad_side debe ser \"auto\", \"normal\" o \"reverso\"")
+    if not isinstance(kb.get("lateral"), bool):
+        raise ConfigError("navigation.keyboard.lateral debe ser true o false")
+    v = kb.get("senses_votes")
+    if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+        raise ConfigError("navigation.keyboard.senses_votes debe ser un entero >= 1")
+    _require_text(kb.get("senses_file"), "navigation.keyboard.senses_file")
     _require_numbers(n.get("click_radius_px"), "navigation.click_radius_px", 2)
     cr = n["click_radius_px"]
     if cr[0] <= 0 or cr[0] > cr[1]:

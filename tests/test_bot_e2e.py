@@ -169,7 +169,7 @@ def test_empujon_fuera_de_la_tolerancia_vuelve_enseguida():
 # ---------------------------------------------------------------- 8. franja de tolerancia
 def test_metin_en_la_franja_se_ataca_y_se_vuelve_adentro():
     env = SimEnv(8, phi=-0.7, start=(480, 170))
-    m = env.world.add_metin((415, 170), name=OSC)
+    m = env.world.add_metin((425, 170), name=OSC)   # franja a ~12 u del borde (<= approach.metin_outside_u)
     for v in ((100, 0), (0, 100)):   # camara ya calibrada: sin ella un metin lejos en pantalla no se ataca
         env.bot.camera.update(v, tuple(env.world._m() @ v))
     assert env.bot.camera.ready
@@ -184,13 +184,13 @@ def test_metin_en_la_franja_se_ataca_y_se_vuelve_adentro():
 
 # ---------------------------------------------------------------- 9. seleccion equivocada
 @pytest.mark.parametrize("n_wrong", [1, 2])
-def test_seleccion_equivocada_escape_y_sigue(n_wrong):
+def test_seleccion_equivocada_clic_directo_sin_escape_y_sigue(n_wrong):
     env = SimEnv(9, phi=2.0)
     m = env.world.add_metin((580, 150), name=OSC)
     env.world.wrong_select = n_wrong
     assert env.run_until(lambda: not m.alive, max_s=300) == "cond"
     esc = sum(1 for e in env.backend.events if e == ("key_down", "esc"))
-    assert esc >= n_wrong
+    assert esc == 0   # nunca Escape: abre el menu de opciones del juego
     assert [k for _, k, _ in env.world.selected_log][:n_wrong] == ["monster"] * n_wrong
 
 
@@ -261,13 +261,16 @@ def test_robustez_mundos_aleatorios(seed):
 def test_robustez_mundos_aleatorios_con_teclado(seed):
     """Mismos mundos al azar (camaras giradas, espejadas, inclinadas) con la caminata por coordenadas: VOLVER vuelve al tope
     de 25 s (a ciegas por clic tardaba 40-46 s en 2 de 20 mundos)."""
-    env = random_world(seed, make_cfg(navigation={"mode": "teclado"}))
+    cfg = make_cfg(navigation={"mode": "teclado"})
+    cfg["navigation"]["keyboard"]["lateral"] = True   # estos mundos no tienen cono y sus A/D desplazan de costado: modelo de 8 combinaciones
+    env = random_world(seed, cfg)
     dist = env.track_zone()
     assert env.run_until(max_s=300) == "limite"
     assert max(dist) <= tol(env)
     assert len(env.world.broken) >= 1 or any(t.new == "EXPLORAR" for t in env.transitions)
+    limits = {**LIMITS, "BUSCAR": 10}   # BUSCAR incluye girar hasta 12 pasos de camara hacia el metin visto mientras se atacaba (~8.6 s)
     for st, secs in env.max_state_seconds(ignore=("CAPTCHA", "EXPLORAR")).items():
-        assert secs <= LIMITS.get(st, 5), (st, secs)
+        assert secs <= limits.get(st, 5), (st, secs)
     assert env.backend.pressed == ([], [])
 
 

@@ -406,7 +406,8 @@ def test_no_se_evalua_mientras_se_revive():
 def test_habilidades_no_salen_durante_la_vuelta_ni_el_giro_hacia_un_candidato():
     from types import SimpleNamespace
     def safe(phase, walk=None):
-        b = SimpleNamespace(_scan=None, state=State.EXPLORAR, _walk=walk, _ex=SimpleNamespace(phase=phase))
+        b = SimpleNamespace(_scan=None, state=State.EXPLORAR, _walk=walk, _ex=SimpleNamespace(phase=phase), _apr=None,
+                            _last_click_t=-1e9, atk={"min_click_gap_s": 0.6})
         return Bot._skill_safe(b, 0.0)
     assert not safe("sweep") and not safe("aim")
     assert safe("walk") and safe("cwalk")

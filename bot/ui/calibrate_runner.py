@@ -35,14 +35,16 @@ ZONA_STEPS = (
     "zona elegido (con copia .bak) y se redibuja la zona.",
 )
 
-CAMARA_TITLE = "Calibrar el ángulo vertical de la cámara"
+CAMARA_TITLE = "Calibrar la cámara (desde el tope)"
 CAMARA_STEPS = (
-    "1. Poné el juego al frente y dejá la cámara con el ángulo vertical que más te gusta (ni muy de arriba ni muy rasante), "
-    "con piso a la vista alrededor del personaje.",
-    "2. No toques nada: el programa mide varias capturas seguidas (la altura del horizonte) y muestra el promedio.",
-    "3. Respondé Sí a guardar: queda como referencia en el perfil del personaje (camera_pitch.ref_horizon_frac) y el bot "
-    "corrige el ángulo después de romper y recoger.",
-    "F12 cancela sin guardar. Esta ventana no manda teclas ni clics al juego.",
+    "ATENCIÓN: esta calibración MANDA INPUT REAL al juego (la rueda del mouse y arrastres con el clic derecho). Parate en un "
+    "lugar PLANO, sin monstruos cerca, con el juego al frente y sin tocar el mouse mientras corre.",
+    "1. El programa mide primero la referencia (capturas de tu cámara normal en terreno plano, samples/cam_01 y cam_04).",
+    "2. Respondé Sí a empezar: tras la cuenta regresiva lleva la cámara al tope (zoom lejos y arriba), baja de a pasos y saca una "
+    "captura por paso (debug/calibrate_camara_tope).",
+    "3. Propone cuántos px bajar desde el tope para que se parezca a tu cámara normal: Enter acepta el propuesto, o escribí otro "
+    "de la lista. Respondé Sí a guardar: queda en el perfil del personaje (camera_pitch.from_limit_px).",
+    "F12 o la esquina del mouse cortan sin guardar.",
 )
 
 
@@ -83,10 +85,10 @@ def validate_metin_name(name: str, existing: list[str]) -> str | None:
 def build_calibrate_command(sub: str, *, nombre: str | None = None, servidor: str = "", personaje: str = "", zona: str = "",
                             config: str | None = None, python: str | None = None,
                             script: str | Path = CALIBRATE) -> list[str]:
-    """Linea de comandos de `calibrate.py <metin|zona|camara|personaje|perfiles-migrar> --ui` con los perfiles elegidos. Sin
+    """Linea de comandos de `calibrate.py <metin|zona|camara-tope|personaje|perfiles-migrar> --ui` con los perfiles elegidos. Sin
     `--si`: las preguntas las responde la persona desde la ventana. `personaje` no pasa `--personaje` (el nombre es
     el del perfil, que puede no existir todavia); `perfiles-migrar` corre `perfiles migrar`."""
-    if sub not in ("metin", "zona", "camara", "personaje", "perfiles-migrar"):
+    if sub not in ("metin", "zona", "camara-tope", "personaje", "perfiles-migrar"):
         raise ValueError(f"subcomando no soportado desde la interfaz: {sub}")
     cmd = [python or ctl.gui_python(), "-u", str(script)]
     cmd += ["perfiles", "migrar"] if sub == "perfiles-migrar" else [sub]

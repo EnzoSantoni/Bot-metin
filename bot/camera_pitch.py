@@ -1,23 +1,31 @@
-"""Correccion del angulo vertical de la camara: mide el horizonte (bot/vision/pitch.py) y, si se fue de la referencia,
-arrastra con el clic derecho en vertical desde un punto libre del piso hasta volver a ella.
+"""Angulo vertical de la camara: reinicio desde el TOPE (no se mide el horizonte para saber el angulo: depende del terreno).
 
-El sentido y la magnitud del arrastre se APRENDEN: `gain` (px de arrastre por unidad de horizon_frac de error) se ajusta
-comparando la medicion antes y despues de cada arrastre (EMA); el signo inicial es una suposicion y se corrige solo.
-El estado (gain) vive en el objeto: no se guarda en config.json. Config: `camera_pitch`.
+`reset()` lleva el zoom al tope "lejos" (rueda), la camara al tope horizontal (clic derecho arrastrando hacia ARRIBA mas de lo
+que hace falta) y desde ahi baja una cantidad FIJA de pixeles (`from_limit_px`) hasta el angulo normal. El juego sube la camara
+solo al acercarse a bordes o montanas y NO la devuelve: por eso se reinicia al arrancar, tras cada metin roto, cada `every_s` y
+cuando se detecta que la camara mira el piso (`looks_at_floor`, con bot/vision/pitch.py solo como detector de "todo piso").
+
+Un arrastre siempre mueve el mouse (>= `min_drag_px`) y no empieza ni termina sobre un monstruo, una etiqueta, un metin, un
+objeto ni la interfaz: un clic derecho SIN mover sobre un monstruo lo selecciona. Config: `camera_pitch`.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from typing import Any, Callable
 
-from bot.vision.pitch import PitchResult, measure_horizon
+from bot.vision.metin import player_point
+from bot.vision.pitch import measure_horizon
 
 logger = logging.getLogger(__name__)
 
-MIN_DRAG_PX = 3        # un arrastre menor no mueve nada util
-GAIN_LIMITS = (50.0, 5000.0)   # |gain| acotado (px por unidad de horizon_frac)
 DRAG_BUTTON = "right"
+BACKOFF_MAX = 8   # tope del multiplo de `min_gap_s` tras reinicios por piso que no arreglaron nada
+# Filas (fraccion del alto) y columnas (fraccion del ancho) donde se prueba el punto inicial del arrastre.
+FREE_ROWS = (0.72, 0.64, 0.80, 0.56, 0.88, 0.48, 0.40, 0.32)
+FREE_COLS = (0.35, 0.65, 0.25, 0.75, 0.5, 0.15, 0.85)
+PATH_SAMPLES = (0.0, 0.5, 1.0)   # puntos del recorrido (fraccion de dy) que tienen que estar permitidos y libres
 
 
 def _gap(pt: tuple[int, int], rect: Any) -> float:
@@ -25,144 +33,162 @@ def _gap(pt: tuple[int, int], rect: Any) -> float:
     return math.hypot(max(rect.x - pt[0], 0, pt[0] - rect.right), max(rect.y - pt[1], 0, pt[1] - rect.bottom))
 
 
+def split_px(total: int, max_px: int) -> list[int]:
+    """Parte `total` px en la menor cantidad de arrastres parejos de a lo sumo `max_px` (suman exactamente `total`)."""
+    n = max(1, math.ceil(total / max_px))
+    base, extra = divmod(int(total), n)
+    return [base + (1 if i < extra else 0) for i in range(n)]
+
+
+def looks_at_floor(img: Any, cfg: dict, mask: Any = None, player_xy: tuple[int, int] | None = None) -> bool:
+    """La camara mira el piso: no se ve horizonte. True si la franja central es todo piso hasta el borde de arriba, o si la
+    central no es medible (piso de dos tonos: ladera de montana) y las dos franjas laterales (a +-`side_offset_frac` del ancho)
+    son todo piso."""
+    c = cfg["camera_pitch"]
+    res = measure_horizon(img, cfg, mask, player_xy)
+    if res is not None and res.saturated and res.confidence >= float(c["min_confidence"]):
+        return True
+    if res is not None and res.confidence >= float(c["min_confidence"]):
+        return False   # hay horizonte medido (o piso corto): no es piso
+    side = copy.deepcopy(cfg)
+    side["camera_pitch"]["strip_half_frac"] = float(c["side_half_frac"])
+    w = img.shape[1]
+    if player_xy is None:
+        player_xy = player_point(img.shape, cfg)
+    for off in (-1, 1):
+        r = measure_horizon(img, side, mask, (int(player_xy[0] + off * float(c["side_offset_frac"]) * w), player_xy[1]))
+        if r is None or not r.saturated or r.confidence < float(c["min_confidence"]):
+            return False
+    return True
+
+
 class CameraPitch:
-    """Estado y logica de la correccion vertical. No captura ni manda input por su cuenta: recibe `gi`, una funcion de
-    captura y una de espera."""
+    """Estado y logica del reinicio de la camara. No captura ni manda input por su cuenta: recibe `gi`, una funcion que
+    captura y percibe y una de espera."""
 
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
         self.c = cfg["camera_pitch"]
-        self.gain = float(self.c["gain_px_per_frac"])
-        self.last_check_t = -math.inf
-        self.last_error: float | None = None
-        self.drags = 0   # arrastres mandados (contador)
-        self._warned = False
+        self.last_reset_t = -math.inf
+        self.floor_streak = 0      # capturas seguidas mirando al piso
+        self.fruitless = 0         # reinicios por piso seguidos que no sacaron la vista del piso
+        self.drags = 0             # arrastres mandados
+        self.resets = 0            # reinicios completos
 
-    # --- estado ---
+    # --- cuando ---
     @property
-    def ref(self) -> float | None:
-        r = self.c["ref_horizon_frac"]
-        return None if r is None else float(r)
+    def enabled(self) -> bool:
+        return bool(self.c["enabled"])
 
-    @property
-    def active(self) -> bool:
-        """Habilitado y con referencia calibrada. Sin referencia avisa una sola vez."""
-        if not self.c["enabled"]:
+    def periodic_due(self, t: float) -> bool:
+        """Pasaron `every_s` desde el ultimo reinicio (se chequea al empezar cada vuelta de busqueda)."""
+        return self.enabled and t - self.last_reset_t >= float(self.c["every_s"])
+
+    def floor_gap_s(self) -> float:
+        """Minimo entre reinicios por piso: `min_gap_s`, multiplicado si los ultimos no arreglaron nada (terreno alto)."""
+        return float(self.c["min_gap_s"]) * min(BACKOFF_MAX, 1 + self.fruitless)
+
+    def observe(self, img: Any, p: Any, t: float) -> bool:
+        """Cuenta capturas seguidas mirando al piso. True si hay que reiniciar: `floor_frames` seguidas y al menos
+        `floor_gap_s()` desde el ultimo reinicio."""
+        if not self.enabled:
             return False
-        if self.ref is None:
-            if not self._warned:
-                self._warned = True
-                logger.info("Angulo vertical sin calibrar: corre calibrate.py camara")
+        if not looks_at_floor(img, self.cfg, p.mask, p.player_xy):
+            self.floor_streak = 0
             return False
-        return True
+        self.floor_streak += 1
+        return self.floor_streak >= int(self.c["floor_frames"]) and t - self.last_reset_t >= self.floor_gap_s()
 
-    def due(self, t: float) -> bool:
-        """Pasaron `every_s` desde el ultimo chequeo (para el chequeo periodico de EXPLORAR)."""
-        return t - self.last_check_t >= float(self.c["every_s"])
-
-    # --- medicion ---
-    def measure(self, img: Any, p: Any) -> PitchResult | None:
-        """Mide el horizonte en `img` con la mascara y el personaje de la percepcion `p`. Loguea el valor."""
-        res = measure_horizon(img, self.cfg, p.mask, p.player_xy)
-        if res is not None:
-            logger.debug("Angulo vertical: horizonte %.3f (referencia %s, confianza %.2f)", res.horizon_frac,
-                         "-" if self.ref is None else f"{self.ref:.3f}", res.confidence)
-        return res
-
-    def error(self, res: PitchResult | None) -> float | None:
-        """medido - referencia, o None si no hay referencia o la medicion no es confiable."""
-        if res is None or self.ref is None or res.confidence < float(self.c["min_confidence"]):
-            return None
-        return res.horizon_frac - self.ref
-
-    def out_of_tolerance(self, res: PitchResult | None) -> bool:
-        e = self.error(res)
-        return e is not None and abs(e) > float(self.c["tolerance"])
-
-    # --- arrastre ---
-    def plan_dy(self, err: float) -> int:
-        """Pixeles de arrastre vertical (con signo, + = hacia abajo) para corregir `err`, acotados por `max_drag_px`."""
-        mx = int(self.c["max_drag_px"])
-        return int(max(-mx, min(mx, round(self.gain * err))))
-
-    def free_point(self, p: Any) -> tuple[int, int] | None:
-        """Punto del piso libre donde empezar el arrastre: permitido (el y el final de un arrastre de +-`max_drag_px`),
-        a >= `drag_clear_px` de toda etiqueta de metin, monstruo, objeto o piedra lejana y del personaje."""
+    # --- punto del arrastre ---
+    def free_point(self, p: Any, dy: int) -> tuple[int, int] | None:
+        """Punto del piso donde empezar un arrastre vertical de `dy` px: el inicio, el medio y el final permitidos por la
+        mascara y a >= `drag_clear_px` de toda etiqueta de metin, monstruo, objeto o piedra lejana y del personaje."""
         h, w = p.shape[0], p.shape[1]
-        clear, mx = float(self.c["drag_clear_px"]), int(self.c["max_drag_px"])
+        clear = float(self.c["drag_clear_px"])
         rects = ([d.label_rect for d in p.metins] + [m.rect for m in p.monsters] + [i.rect for i in p.items]
                  + [f.rect for f in p.far_metins])
         px, py = p.player_xy
-        for fy in (0.72, 0.64, 0.80, 0.56):
-            for fx in (0.35, 0.65, 0.25, 0.75, 0.5, 0.15, 0.85):
-                pt = (int(w * fx), int(h * fy))
-                if not all(p.mask.allows(pt[0], pt[1] + k) for k in (-mx, 0, mx)):
+        for fy in FREE_ROWS:
+            for fx in FREE_COLS:
+                x, y0 = int(w * fx), int(h * fy)
+                pts = [(x, y0 + int(round(dy * f))) for f in PATH_SAMPLES]
+                if not all(0 <= q[1] < h and p.mask.allows(*q) for q in pts):
                     continue
-                gap = min([_gap(pt, r) for r in rects] + [math.hypot(pt[0] - px, pt[1] - py)])
+                gap = min([_gap(q, r) for q in pts for r in rects] + [math.hypot(q[0] - px, q[1] - py) for q in pts])
                 if gap >= clear:
-                    return pt
+                    return (x, y0)
         return None
 
-    def learn(self, before: PitchResult, after: PitchResult, dy: int) -> bool:
-        """Ajusta `gain` con lo que se movio el horizonte con el arrastre `dy`: efecto s = (despues - antes) / dy (fraccion por
-        px); gain = -1 / s (para anular el error). Se ignoran las mediciones saturadas, de baja confianza o sin movimiento."""
-        if dy == 0 or before.saturated or after.saturated:
-            return False
-        mn = float(self.c["min_confidence"])
-        if before.confidence < mn or after.confidence < mn:
-            return False
-        move = after.horizon_frac - before.horizon_frac
-        if abs(move) < float(self.c["min_gain_move_frac"]):
-            logger.info("Angulo vertical: el arrastre de %+d px casi no movio el horizonte (%+.3f): no aprendo", dy, move)
-            return False
-        new = -dy / move
-        new = math.copysign(min(max(abs(new), GAIN_LIMITS[0]), GAIN_LIMITS[1]), new)
-        old = self.gain
-        a = float(self.c["gain_ema"])
-        self.gain = new if old * new < 0 else (1 - a) * old + a * new   # signo opuesto: se adopta el nuevo sin promediar
-        logger.info("Angulo vertical: arrastre %+d px movio el horizonte %+.3f; ganancia %.0f -> %.0f px/frac", dy, move, old,
-                    self.gain)
-        return True
+    # --- reinicio ---
+    def _drag(self, cur: tuple[Any, Any], perceive: Callable[[], Any], gi: Any, dy: int) -> tuple[Any, Any] | None:
+        """Un arrastre vertical con el clic derecho (`dy` < 0 = hacia arriba) desde un punto libre de la percepcion `cur`
+        (img, p). Devuelve la percepcion nueva (despues del arrastre) o None si no se pudo (se corta el reinicio)."""
+        assert abs(dy) >= int(self.c["min_drag_px"])   # un arrastre sin mover seleccionaria el monstruo de abajo
+        p = cur[1]
+        pt = self.free_point(p, dy)
+        if pt is None:
+            logger.warning("Camara: no hay un punto libre del piso para arrastrar %+d px: se corta el reinicio", dy)
+            return None
+        if not gi.drag(DRAG_BUTTON, pt[0], pt[1], 0, dy, p.mask, float(self.c["drag_s"]), int(self.c["drag_steps"])):
+            return None
+        self.drags += 1
+        return perceive()
 
-    def correct(self, p: Any, img: Any, gi: Any, capture: Callable[[], Any], sleep: Callable[[], None], why: str,
-                max_steps: int | None = None) -> bool:
-        """Mide y, si hace falta, arrastra hasta `max_steps` veces (con `sleep()` y una captura nueva entre medio).
-        `capture()` devuelve una imagen o None (ventana minimizada, captcha: se corta). True si al final esta dentro de la
-        tolerancia o no hizo falta corregir (o no se pudo medir)."""
-        res = self.measure(img, p)
-        e = self.error(res)
-        logger.info("Angulo vertical (%s): horizonte %s, referencia %.3f (vision.ground.horizon_frac = %s)%s", why,
-                    "no medible" if res is None else f"{res.horizon_frac:.3f}", self.ref or 0.0,
-                    self.cfg["vision"]["ground"]["horizon_frac"],
-                    "" if res is None or e is not None else " (confianza baja: no corrijo)")
-        steps = int(self.c["max_steps"]) if max_steps is None else max_steps
-        learned, dragged, started_saturated = False, False, res is not None and res.saturated
-        for n in range(steps):
-            if e is None or abs(e) <= float(self.c["tolerance"]):
-                break
-            dy = self.plan_dy(e)
-            pt = self.free_point(p)
-            if abs(dy) < MIN_DRAG_PX or pt is None:
-                logger.info("Angulo vertical: no hay punto libre del piso para arrastrar" if pt is None
-                            else "Angulo vertical: correccion menor a %d px", MIN_DRAG_PX)
-                break
-            logger.info("Angulo vertical: error %+.3f, arrastro %+d px con el clic derecho desde %s (intento %d/%d)",
-                        e, dy, pt, n + 1, steps)
-            if not gi.drag(DRAG_BUTTON, pt[0], pt[1], 0, dy, p.mask, float(self.c["drag_s"]), int(self.c["drag_steps"])):
-                break
-            self.drags += 1
-            dragged = True
-            sleep()
-            img = capture()
-            if img is None:
-                return False
-            after = self.measure(img, p)
-            if res is not None and after is not None:
-                learned = self.learn(res, after, dy) or learned
-            res, e = after, self.error(after)
-        ok = e is None or abs(e) <= float(self.c["tolerance"])
-        if not ok and dragged and not learned and started_saturated and res is not None and res.saturated:
-            # Sigue mirando el piso sin que el arrastre cambie nada medible: lo mas probable es que el sentido este al reves.
-            self.gain = -self.gain
-            logger.warning("Angulo vertical: sigue todo piso despues de arrastrar; doy vuelta el sentido del arrastre")
-        return ok
+    def plan_down(self, px: int) -> list[int]:
+        """Arrastres (dy con signo, + = abajo) que bajan la camara `px` px en neto, cada uno de >= `min_drag_px` (y de <=
+        `max_drag_px`). Menos que `min_drag_px`: baja `px + min_drag_px` y vuelve a subir `min_drag_px` (neto `px`)."""
+        mn = int(self.c["min_drag_px"])
+        if px <= 0:
+            return []
+        return split_px(px, int(self.c["max_drag_px"])) if px >= mn else [px + mn, -mn]
+
+    def move_down(self, cur: tuple[Any, Any], perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None],
+                  px: int) -> tuple[Any, Any] | None:
+        """Baja la camara `px` px (neto) con `plan_down`. Devuelve la percepcion final o None si se corto."""
+        for dy in self.plan_down(px):
+            cur = self._drag(cur, perceive, gi, dy)
+            if cur is None:
+                return None
+            sleep(float(self.c["drag_pause_s"]))
+        return cur
+
+    def to_top(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str,
+               down_px: int = 0) -> tuple[Any, Any] | None:
+        """Zoom lejos y camara al tope horizontal; despues baja `down_px`. Devuelve la ultima percepcion o None si se corto."""
+        c = self.c
+        self.last_reset_t, self.floor_streak = t, 0
+        ups = [-d for d in split_px(int(c["to_limit_px"]), int(c["max_drag_px"]))]
+        logger.info("Camara: reinicio desde el tope (zoom lejos, arriba %d px, abajo %d px) [%s]", int(c["to_limit_px"]), down_px, why)
+        cur = perceive()
+        if cur is None:
+            return None
+        clicks = int(c["zoom_out_clicks"])
+        if clicks > 0:
+            if not gi.zoom(int(c["zoom_out_sign"]) * clicks, cur[1].mask):
+                logger.warning("Camara: no se pudo girar la rueda (zoom lejos); sigo con los arrastres")
+            cur = perceive()   # el zoom movio todo en pantalla: se vuelven a ubicar monstruos y etiquetas
+            if cur is None:
+                return None
+        for dy in ups:
+            cur = self._drag(cur, perceive, gi, dy)
+            if cur is None:
+                return None
+            sleep(float(c["drag_pause_s"]))
+        return self.move_down(cur, perceive, gi, sleep, down_px)
+
+    def reset(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str) -> bool:
+        """Reinicio desde el tope (zoom lejos, arriba `to_limit_px`, abajo `from_limit_px`). `perceive()` captura y devuelve
+        (img, Perception) o None (ventana minimizada, captcha: se corta). True si llego hasta el final."""
+        if self.to_top(perceive, gi, sleep, t, why, int(self.c["from_limit_px"])) is None:
+            return False
+        sleep(float(self.cfg["explore"]["settle_s"]))
+        self.resets += 1
+        if why == "piso":
+            after = perceive()
+            if after is not None and looks_at_floor(after[0], self.cfg, after[1].mask, after[1].player_xy):
+                self.fruitless += 1
+                logger.info("Camara: despues del reinicio sigue todo piso (terreno alto): el proximo reinicio por piso espera %.0f s",
+                            self.floor_gap_s())
+            elif after is not None:
+                self.fruitless = 0
+        return True

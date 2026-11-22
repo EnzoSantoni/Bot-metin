@@ -1,5 +1,7 @@
 """Integracion de main (Fase 6e) con desarrollo: habilidades vs barrido de camara, revivir descarta el metin en curso,
 conteo por tipo con el recoger de objeto fijo, perfil y guia de calibracion del angulo vertical."""
+import pytest
+
 from bot.bot import State, _CurrentMetin, _Next, _Scan, _Attack
 from bot import profiles
 from bot.ui import calibrate_runner as cr
@@ -27,10 +29,19 @@ def test_revivir_descarta_metin_en_curso_y_proximo():
 
 
 def test_camera_pitch_va_al_perfil_del_personaje():
-    assert profiles.kind_of(("camera_pitch", "ref_horizon_frac")) == "personaje"
-    assert profiles.kind_of(("camera_pitch", "tolerance")) is None
+    assert profiles.kind_of(("camera_pitch", "from_limit_px")) == "personaje"
+    assert profiles.kind_of(("camera_pitch", "to_limit_px")) is None
+    assert profiles.kind_of(("camera_pitch", "ref_horizon_frac")) is None   # obsoleta (reemplazada por el reinicio desde el tope)
 
 
-def test_guia_calibrar_angulo_vertical():
-    cmd = cr.build_calibrate_command("camara", servidor="S", personaje="P", zona="Z", python="py", script="cal.py")
-    assert cmd[:4] == ["py", "-u", "cal.py", "camara"] and "--ui" in cmd and "--en-perfil" in cmd
+def test_sentidos_de_teclas_son_del_servidor():
+    assert profiles.kind_of(("navigation", "keyboard", "view_right_key")) == "servidor"
+    assert profiles.kind_of(("navigation", "keyboard", "ad_side")) == "servidor"
+    assert profiles.kind_of(("navigation", "keyboard", "lateral")) is None
+
+
+def test_guia_calibrar_camara_desde_el_tope():
+    cmd = cr.build_calibrate_command("camara-tope", servidor="S", personaje="P", zona="Z", python="py", script="cal.py")
+    assert cmd[:4] == ["py", "-u", "cal.py", "camara-tope"] and "--ui" in cmd and "--en-perfil" in cmd
+    with pytest.raises(ValueError):
+        cr.build_calibrate_command("camara")   # el subcomando viejo ya no existe

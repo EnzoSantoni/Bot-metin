@@ -2,6 +2,136 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## PARA ENZO (2026-11-22): Fase 6i, más metin por hora. `main` `c166291`, 1560 tests
+**Qué hice**, en orden (commit y push de cada uno):
+0. **Merge pendiente cerrado** (`6210496`):
+   - La tanda del ataque: sin Escape, bichos encima por los nombres, punto de clic visible, retomar tras captcha.
+   - La regla de la zona: un metin con posición conocida solo vale hasta 15 u afuera del borde; sin posición, solo si está cerca y vos adentro. La lista de candidatos ya no guarda puntos afuera.
+   - El mundo 19 del simulador pasa sin aflojar el test.
+1. **Diagnóstico de las corridas de las 22:31 y 23:08:** la tabla está en la sección siguiente.
+7. **Ángulo vertical** (`6e6d96b`):
+   - Reinicio desde el tope: zoom al tope lejos, arrastre hacia arriba hasta el tope horizontal, y después baja una cantidad fija (`camera_pitch.from_limit_px`, estimada en 60 hasta que la calibres).
+   - Se hace al arrancar, después de cada metin y cuando la cámara mira el piso.
+   - Calibración: `calibrate.py camara-tope`. Tus capturas cam_01 a cam_11 sirvieron.
+6. **Vuelta** (`6130685`):
+   - Pasos de 30° con pausa.
+   - Frena y ataca un metin con nombre cercano dentro de la zona; hace hover y anota los lejanos.
+   - Una vuelta vacía ya no manda a VOLVER: va al punto del mapa o al centro.
+   - **D:** lo visible se detectaba bien. El problema era la cámara mirando el piso.
+- **E, recoger** (mismo commit): cada Z junta el más cercano; contador de Z por objeto y sin saltos a vecinos.
+8. **Captcha de la frase dorada** (mismo commit): marco + texto fijo "la siguiente frase es:", sin falsos con los anuncios del servidor. Alarma y espera.
+2 a 5. **Acercarse y atacar** (`c166291`):
+   - Alinea la vista, avanza con W, frena, y quieto hace UN clic al centro de la piedra. Nunca en movimiento ni con menos de 1,5 s entre clics.
+   - No descarta metin con nombre por una selección equivocada.
+   - Sin panel pegado al metin: un clic derecho (soltar) sobre un bicho para recuperarlo.
+   - Barra espaciadora solo con bichos reales.
+
+**Qué quedó a medias o sin verificar:**
+- Nada probado en el juego.
+- **A medir:**
+  - `camera_pitch.from_limit_px` (calibrarlo);
+  - el signo de la rueda (`zoom_out_sign` -1: si acerca, poné 1);
+  - `approach.click_floor` (2.0) y `center_tol_px` (140);
+  - el flujo del clic derecho para recuperar el panel.
+- **Señal de la animación de ataque:** no la implementé. Sin secuencias reales etiquetadas no se puede comprobar que sea confiable.
+- **`config.json` de esta carpeta:** tiene `attack.confirm_check_s: 0.5`, que ahora es obsoleta y da un WARNING. Borrala cuando quieras.
+- **Metin inalcanzable con nombre:** se reintenta cada ~30 s, no se descarta 10 min.
+
+**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto **1E**. Primero `calibrate.py camara-tope` y después una corrida de 20 minutos. Espero 6 a 8 metin; el objetivo es 8 a 10.
+
+### Diagnóstico de las corridas de las 22:31 y 23:08 (2026-11-21)
+| Tiempo en | 22:31 (16 min, 4 metin) | 23:08 (20 min, 2 metin) |
+|---|---|---|
+| ATACAR | 488 s (51%) | 265 s (22%) |
+| EXPLORAR (vueltas y tramos) | 306 s (32%) | 631 s (53%) |
+| VOLVER | 82 s (9%) | 224 s (19%) |
+| RECOGER | 39 s (4%) | 14 s (1%) |
+| Resto (BUSCAR, DESTRABAR, CENTRO, CAPTCHA, ACERCARSE) | 45 s (5%) | 65 s (5%) |
+
+**Las 3 causas principales:**
+1. **La cámara mira al piso durante las vueltas.** Por eso EXPLORAR + VOLVER se comen el 41% (22:31) y el 72% (23:08) del tiempo.
+   - Vueltas con 0 candidatos: 19 de 21 (22:31) y 37 de 37 (23:08).
+   - Cuadros de barrido sin horizonte (mirando el piso): 9 de 13 y 15 de 19. Ejemplos: `debug\run_20261121_230828\0048_explorar_fase_sweep_raw.png` (piso visto desde arriba) y `0016` (cámara dentro de un árbol).
+   - Después de cada vuelta vacía cerca del borde, "barrido completo sin ver nada util cerca del borde" lo manda a VOLVER: 21 veces a las 22:31 y 13 a las 23:08.
+2. **Acercamiento y clic.** Hace clics con el personaje en movimiento y el punto salta.
+   - 22:31: 15 "Panel perdido con vida 100%", 14 "Trabado yendo al metin", 23 reclics y 7 "Seleccion equivocada". Los ataques duraron 122 s y 205 s en vez de ~85 s.
+   - 23:08: 9 metin descartados, 3 de ellos reales por "seleccion equivocada repetida", y uno de los ataques se estiró a 632 s (desde el primer panel confirmado hasta la rotura).
+3. **Barra espaciadora al aire.** A las 23:08 hubo 41 "Rodeado de… ESPACIO", varios sin bichos reales.
+
+**Objetivo de 8 a 10 metin en 20 min:** ~85 s de ataque + ~10 s de recogida + ≤ 30 s para encontrar y llegar = ~2 min por metin.
+**Orden de trabajo según esto:** 7 (ángulo vertical) → 6 (vuelta) → 2, 3 y 4 (acercamiento y ataque) → 5 (espacio) → 8 (captcha de frase).
+
+## Acercarse quieto y un clic, atacar sin panel y espacio solo con bichos (corridas de las 22:31 y 23:08, 2026-11-21)
+- **Ritmo de clics** (`bot/approach_keys.py`, mixin de `Bot`): ningún clic izquierdo de ataque con el personaje en movimiento (`approach.quiet_reads` lecturas de coordenadas iguales y `approach.settle_s` sin teclas) ni a menos de `attack.min_click_gap_s` (1.5) del anterior. Pasa por `_click_gate()` en `_click_attack`, `_quick_check`, `_reclick`, `_deselected` y el reclic pendiente; si no se puede, el clic espera (no cuenta como reclic).
+- **ACERCARSE con teclado** (`approach.keys_enabled`, solo modo teclado, metin a más de `approach.click_floor` (2.0, distancia de piso; pegado ~0.8) y con coordenadas): gira con Q/E hasta que la piedra quede a `approach.center_tol_px` del centro (si el giro la aleja invierte el sentido), W en tramos de `walk_chunk_s` re-detectando, frena a `click_floor` y, quieto, UN clic en el cuerpo (`_acercarse_keys`). Sin confirmar, ATACAR reclickea quieto a los `attack.confirm_wait_s` (1.5); a los `approach.max_clicks` (4) el metin se aparta `approach.retry_ignore_s` (30 s), no se descartan 10 min. Piedra sin nombre cerca: hover de siempre.
+- **Punto de clic**: `_aim` usa el bloque de color de la piedra (`stone_rect_near`) debajo del nombre; `_off_name` baja cualquier punto que caiga en el nombre o en `attack.name_gap_px` (20) debajo de él. Antes el punto caía entre el nombre y la piedra (capturas `tests/data/ataque_sin_panel_pegado.png` y `ataque_trabado_al_costado.png`).
+- **Descartes**: "selección equivocada repetida" ya no descarta un metin con etiqueta (se reintenta quieto); sí una piedra sin etiqueta que muestra otra cosa u otro tipo de metin.
+- **Panel ausente** (error del juego): quieto, pegado y con un monstruo cerca, UN clic derecho por metin (`attack.panel_recover`, `GameInput.right_click`) sobre el cuerpo del monstruo; panel con el metin -> sigue atacando; si no vuelve en `attack.recover_wait_s` -> clic izquierdo. La señal por animación del arma NO se implementó (sin secuencias etiquetadas no se puede medir que sea confiable).
+- **ESPACIO** solo con bichos (`_crowded`: `monsters_on_me` > 0 o `monsters_near` >= `stuck.monsters_min`); `_unblock` sin bichos hace paso al costado. "Rodeado de 0" era `monsters_on_me` > 0 con `monsters_near` = 0: el log ahora muestra los bichos encima.
+- **A medir en el juego**: `approach.click_floor` (2.0) y `center_tol_px` (140) son estimaciones (floor 0.7-0.9 = pegado en las capturas), y la velocidad real de giro de Q/E.
+
+## Ataque: sin Escape, bichos encima, piedra tapada y retomar tras captcha (prueba de las 20:56, 2026-11-21)
+- **Sin Escape** en todo el bot (`controls.deselect` queda sin uso). Para soltar a un monstruo: ESPACIO si hay bichos y clic directo en el metin.
+- **Menú de opciones** (`bot/vision/game_menu.py`, `vision.game_menu`): se reconoce por el botón "Cancelar" (plantilla `templates/ui/menu_cancelar.png`, recortada de `debug/run_20261121_205635` frames 0014/0015/0075-0077; score 1.0 vs < 0.45 en las otras). `Bot._close_menu`: clic en Cancelar; tras 3 clics sin cerrarlo, `controls.close_menu` (Escape, solo con el menú abierto). Capturas extra: `CAPTURAS_ATAQUE.md`.
+- **Bichos encima** (`monsters.find_own_label` / `monsters_on_me`, `p.own_label`, `p.monsters_on_me`): nombre amarillo (76,215,255) + "Lv" verde cerca del personaje; cuenta etiquetas rojas solapadas o a <= `vision.monsters.on_me_px` (30). Dispara ESPACIO en panel perdido, selección equivocada y trabados.
+- **Piedra tapada** (`bot/vision/click_point.py`, `Bot._clear_point`): candidatos dentro del cuerpo de la piedra, fuera de la columna bajo cada etiqueta de monstruo y de zonas sin color de piedra; con `attack.lost_swap_after` (2) panel perdidos seguidos con vida alta, el reclic va al siguiente candidato. En la captura de las 21:05:5x la piedra NO estaba tapada (ver nota de Claude en el reporte): lo que había eran 5 bichos sobre el personaje.
+- **Retomar tras captcha** (`_Resume`, `Bot._save_resume`): se guarda el metin al entrar a CAPTCHA; al salir se lo retoma (por pantalla, por mapa o, si el personaje seguía caminando hacia él, la etiqueta que ya está tan cerca o más que al hacer el clic) y durante `attack.after_captcha_keep_s` (20) no se lo suelta por "hay otro a la vista".
+
+- **Corrida de las 21:24 (B y F):** (B) si el personaje camina hacia el metin (coordenadas cambiando) no se reclickea aunque el panel se pierda (`_Attack.walking`); antes de cada reclic se redetecta la piedra en la captura actual y, si no se ve, no se clickea un punto viejo (vuelve a BUSCAR con el metin en curso). Causa de los 6 reclics a (428, 181): la camara giro mientras caminaba y la piedra paso de (277, 183) a (1452, 321). (F) montado, un bicho pegado a la montura tiene su nombre ~46-58 px debajo del nombre propio (mas que `on_me_px`): se suma `vision.monsters.on_me_body_px` (90, nombre a <= 90 px del personaje). **Sin resolver:** a las 21:30:10 y 21:32:35 aparece arriba al centro un cartel de captcha DISTINTO ("la siguiente frase es: - - - p - - d - -", marco dorado de ~517x63 en y=145) que `find_captcha` no detecta; coincide con los "Panel perdido con vida 100%". Capturas en `tests/data/ataque_frase_captcha_2132.png` y `ataque_punto_viejo_2129.png` (cartel vacio).
+
+## Resumen del 2026-11-20, tarde: Fase 6g (anterior)
+**Qué hice** (los 5 puntos de la prueba de las 12:10; commit y push de cada uno; `main` con 1392 tests):
+1. **Clic al centro de la piedra** (`3b125e2`):
+   - Antes el clic caía 6 a 22 px debajo de la piedra, en el piso. Lo medí en 10 pares reales de capturas de las 12:10.
+   - Ahora va al centro del cuerpo.
+   - Si a los 0,5 s el panel no muestra el metin, vuelve a hacer clic mejor apuntado (hasta 2 veces).
+2. **Trabado en 1,8 s** (`3b125e2`):
+   - Coordenadas quietas mientras debería moverse = trabado.
+   - Reacción: espacio con bichos cerca, paso al costado sin bichos, y sigue o vuelve a hacer clic en el mismo metin.
+   - No cuenta mientras gira la cámara, con la vida bajando ni ya llegado.
+3. **Una sola vuelta de búsqueda** (`87db579`):
+   - El rumbo de la cámara sale del **cono del minimapa** (estable ±2° en las capturas reales).
+   - Cada candidato se guarda con su posición en el mapa: tu posición + escala × distancia de piso. La escala inicial es 13 u, medida de la corrida, y se aprende en vivo.
+   - Al terminar la vuelta elige el mejor y gira directo hacia él, sin dar más vueltas.
+   - Los metin que ve mientras ataca quedan en esa misma lista.
+   - Si en la vuelta no ve nada, va al punto listo del mapa de metin o al centro.
+4. **Detector por estructura** (`c8e285f`):
+   - Busca piedra + aura + humo sin mirar el color.
+   - En las capturas reales encontró 57 de 57 piedras sin falsos (el de color: 34 de 57).
+   - Con el tono cambiado a verde, azul o violeta sigue encontrando todas.
+   - Queda en `"ambos"` (color + estructura) hasta probarlo en el juego.
+   - Para un metin nuevo: `calibrate.py metin` (nombre y tono) y, como mucho, 2 o 3 capturas (`CAPTURAS_METIN.md`).
+5. **"Ciudad 1"** (`c1bcd51`):
+   - El mapa de metin pasa a `data\Ciudad 1.mapa.json`. Al primer arranque migra solo `data\mapa_metin.json`, que queda como `.migrado`.
+   - En `desarrollo`, el perfil de zona se renombra a "Ciudad 1". El nombre viejo sigue funcionando.
+
+**Qué quedó a medias o sin verificar:**
+- Nada se probó en el juego.
+- **A mirar en el log:**
+  - que el cono del minimapa use el mismo norte que las coordenadas (el desfase se aprende solo);
+  - el valor de la escala ("Escala del mapa" en el log);
+  - que el trabado de 1,8 s no salte estando quieto a propósito.
+- **Ángulo vertical:** sigue apagado hasta que pases las capturas de `CAPTURAS_CAMARA.md`.
+- **Metin de otro color:** el detector está listo; para validarlo faltan las capturas de `CAPTURAS_METIN.md`.
+- **Procesos colgados:**
+  - Un subagente dejó un `python.exe` colgado (PID 27964, ~20 MB, esperando entrada). No lo maté porque al subagente se le negó el permiso. Cerralo vos con `taskkill /PID 27964 /F`.
+  - Otro dejó dos archivos sueltos fuera del proyecto: `C:\Program Files\Git\crops.py` y `C:\Program Files\Git\c1.png`. Se pueden borrar.
+
+**Qué probar primero:** `PRUEBAS_ESTA_NOCHE.md`, punto **1C**, en esta carpeta (`main`): una corrida de 15 minutos mirando el clic, el trabado, la vuelta única y el detector.
+
+## Resumen de la noche del 2026-11-20 (anterior)
+**Qué terminé:**
+- **`main`: los 6 puntos de la prueba de las 01:15 (Fase 6d)**, con commit y push de cada uno (`103aae8`, `04fea11`, `0c66ec3`), 1167 tests. Detalle en "Fase 6d: qué cambió".
+- **`desarrollo`** (1722 tests, último `4ed051f`):
+  - Tiene todo `main` (`eb77fbc`).
+  - Fase 12 parte 2, historial y objetos por tipo (`b3f3743`).
+  - Fase 13, modo bichos (`e104243`).
+  - Fase 14, revivir al morir, apagado por defecto (`14e8b59`).
+  - Interfaz completa (`a289fcb`, `7ce9a7c`).
+  - Pausa automática y parada programada (`2941d4e`).
+  - Revisión general con sus correcciones (`a7ce748`).
+  - Detalle y pendientes, arriba del PROGRESS.md de `desarrollo`.
+
 ## PARA ENZO AL VOLVER (2026-11-20, tarde)
 - **`desarrollo` (`3f6ef9c`, 1964 tests):**
   - Tiene toda la Fase 6g de `main`: clic al centro de la piedra, trabado en 1,8 s, una sola vuelta con candidatos en el mapa (cono del minimapa) y detector por estructura. El detalle está arriba del PROGRESS.md de `main`.
@@ -52,6 +182,7 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 ## Estado actual (2026-11-20)
 **Rama `desarrollo`** (worktree `D:\proyectos\metin-bot-desarrollo`): **Fases 9 (perfiles), 10 (interfaz), 11 (habilidades), 12 (prioridad de metin, historial y conteo de objetos por tipo) 13 (modo bichos) y 14 (revivir al morir, apagado por defecto) hechas, y la interfaz completa (tanda 1: Metin y Zona, base común; tanda 2: Personaje, Modo bichos, migrar config.json y pulido), con 1710 tests pasando (más la pausa automática y la parada programada).** Falta la prueba de Enzo en la PC (ver "A probar por Enzo → Rama `desarrollo`" y la sección de la Fase 14). `main` no se tocó.
 
+- **main f30ff26 (Fases 6h y 6i) integrado en desarrollo (2140 tests):** A/D giran la vista (camina solo con W y alinea con Q/E, `navigation.keyboard.lateral` false, sentidos fijos en `logs/sentidos.json`, desvio ante pared/acantilado, ir al punto/centro de verdad), ataque sin Escape con menu de opciones y `p.monsters_on_me`, punto de clic visible (`bot/vision/click_point.py`), zona de metin (`_metin_accepts`, `_blind_ok`), reinicio del angulo vertical desde el tope (`camera_pitch.reset`, `calibrate.py camara-tope`), vuelta en pasos de 30 grados, recoger por cercania, captcha de la frase dorada, acercarse quieto (`bot/approach_keys.py`, un clic quieto, `min_click_gap_s`, ESPACIO solo con `_crowded`). Todo junto con perfiles, interfaz, habilidades, prioridad, historial, bichos, REVIVIR, pausa automatica, parada programada y revision. Ver "Decisiones tomadas sin Enzo (integracion de las Fases 6h y 6i)".
 - **main c1bcd51 (Fase 6g) integrado en desarrollo:** clic al centro de la piedra (`_aim`), reclic a los 0.5 s sin panel (`_quick_check`), trabado rapido (`stuck.fast_s`) con ESPACIO o paso al costado, detector por estructura (`vision.far_metin.mode`, `hue_hints`, `calibrate.py tono`), una vuelta de busqueda con lista de candidatos en el mapa (`bot/candidates.py`, `bot/vision/minimap.py`, fases "aim"/"cwalk" de EXPLORAR, escaneo mientras ataca guardado en el mapa) y mapa "Ciudad 1" (`spawns.map_name`/`file`, formato v2). Todo junto con perfiles, interfaz, habilidades, prioridad, historial, bichos, REVIVIR, pausa automatica, parada programada y revision. Ver "Decisiones tomadas sin Enzo (integracion de la Fase 6g y zona Ciudad 1)".
 - **main 260bf29 (Fase 6f) integrado en desarrollo:** elección con etiquetas primero (`rank_goals`: piedra sin etiqueta gana solo si su distancia < `approach.unlabeled_closer_ratio` x la de la etiqueta; piedras bajas al final), hover sin nombre sin clic, metin en curso (`_cur`) solo con panel confirmado (antes vive en `_Attack.cm`), detector de piedras lejanas con filtros, `_surrounded` (ESPACIO si rodeado sin avanzar). Decisiones: (1) `_goals` = `rank_goals` y después `order_by_priority` (estable): con prioridad vacía es exactamente main; con prioridad, una etiqueta de tipo listado va antes que cualquier piedra o etiqueta no listada, y entre piedra y etiqueta no listada sigue la regla de main (tests en test_priority.py). (2) `_surrounded` también en BICHOS pero solo con caminata corta en curso (`_bi_target`); no en REVIVIR ni peleando con ESPACIO. (3) `stats.surrounded` va por @@STATUS (`surrounded`), fila "Rodeado" en estadísticas y `rodeado` en el historial. (4) Semillas 1 y 3 de test_skills: era una limitación del simulador (recogía en el punto del personaje y con radio en unidades; el bot apunta a los pies y tolera en píxeles); nuevo `SimEnv(real_pickup=True)` (recoge bajo los pies, alcance en píxeles, etiqueta sobre el objeto); el bot no tenía bug. (5) Líneas de base regeneradas con el código de main.
 - **main 0f8a855 (Fase 6e) integrado en desarrollo:** roto real por vida, sin reclics mientras la vida baja, escalera de trabado, metin en curso (`_CurrentMetin`), RECOGER de objeto fijo (Z hasta que desaparece), angulo vertical de la camara (`bot/camera_pitch.py`, `calibrate.py camara`), busqueda del proximo metin mientras ataca y filtro de coordenadas por confianza/velocidad, todo junto con perfiles, interfaz, habilidades, prioridad, historial/catalogo, modo bichos y revivir. Lineas de base regeneradas desde main. Ver "Decisiones tomadas sin Enzo (integracion de la Fase 6e)".
@@ -65,6 +196,30 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 **Fase 6c (correcciones tras la prueba de la 6b de las 22:43) en `main`: 980 tests pasan. PRÓXIMO PASO: Enzo repite la prueba de la 6b** (ver `PRUEBAS_ESTA_NOCHE.md`, punto 1).
 
 **Rama `main`: Fase 6c + recoger a pie, 992 tests pasan.**
+
+## Decisiones tomadas sin Enzo (integracion de las Fases 6h y 6i, main f30ff26)
+- **Habilidades:** `_skill_safe` ahora tambien devuelve False con el acercamiento por teclado en curso (`_apr`) y a menos de
+  `attack.min_click_gap_s` del ultimo clic (entre el clic y la confirmacion); el reinicio de camara es sincronico dentro de BUSCAR/EXPLORAR
+  y no se lanza nada adentro. `_cast_skill` no hace clics (solo teclas), asi que no necesita pasar por `_click_gate`.
+- **Habilidad vs metin por romperse (bug de interaccion encontrado por `test_skills`):** el roto real de main exige panel perdido con la ultima
+  vida <= `attack.broken_hp_ratio`; si el metin se rompia durante una habilidad (sin panel) con la vida leida mas alta, no se contaba ni se
+  recogia. Nuevo `skill_timing.near_break_hp` (0.35): atacando no se lanza una habilidad con la ultima vida leida <= ese valor.
+- **Bichos:** el reinicio de camara al arrancar vale tambien en BICHOS; el acercamiento por teclado y la vuelta no aplican; ESPACIO de pelear
+  (`_bi_fight`) no pasa por `_crowded`. Con `lateral=false` la caminata corta de BICHOS alinea la vista con Q/E: el test que prohibia Q/E se quito.
+- **REVIVIR:** `_pitch_reset` no corre en REVIVIR ni en ACERCARSE; al salir de REVIVIR (a un estado que no sea captcha/muerte/fin) hay un
+  reinicio de camara ("revivido"), como al arrancar.
+- **Pausa automatica:** el hook ya distingue input inyectado por el flag LLMHF_INJECTED en TODOS los botones y en la rueda (el reinicio de camara
+  y el clic derecho del bot no disparan la pausa); test nuevo en `test_user_input.py`.
+- **Interfaz:** el boton de la pestana Zona pasa a "Calibrar camara (desde el tope)" y corre `calibrate.py camara-tope --ui --en-perfil` en la
+  ventana guiada (avisa que manda input real); `calibrate.py camara` ya no existe. `camera_pitch.from_limit_px` se guarda en el PERFIL DEL
+  PERSONAJE (reemplaza a `ref_horizon_frac` en RULES); `navigation.keyboard.view_right_key` y `ad_side` (sentidos del juego) son del SERVIDOR.
+  Los tests de `camara-tope` usan una copia de `profiles/` (antes escribian en el perfil real).
+- **keynav.align:** el merge de revision habia quitado `KeyboardNav.align`, que main vuelve a usar (alinear con Q/E): restaurado.
+- **Habilidades vs vuelta:** una vuelta de busqueda de main dura ~40 s y no se lanza nada adentro: `test_relanza_al_vencer` acepta hasta 75 s.
+- **Catalogo de objetos con el recoger de main:** `_pickup_progress` cuenta las recogidas por objeto seguido; los puntos seguidos guardan ahora
+  tambien la firma/recorte de la etiqueta (`[punto, ciclos sin verlo, SeenItem]`) y al contar una recogida se registra su tipo (`_count_seen`).
+- **Prioridad:** `_goals` aplica `order_by_priority` despues de la regla ciega de main; `cands.best` recibe `zone.metin_priority` con `_metin_accepts`.
+- Lineas de base regeneradas con el codigo de main (`tests/data`); capturas `samples/cam_*.png` copiadas desde main (samples/ esta ignorado por git).
 
 ## Decisiones tomadas sin Enzo (noche del 2026-11-20)
 - **Integracion de la Fase 6g y zona Ciudad 1 (2026-11-20):**

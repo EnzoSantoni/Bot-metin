@@ -1,4 +1,5 @@
-"""Logica de `calibrate.py`: calibracion pasiva (lee la pantalla y escucha hotkeys; NUNCA manda teclas ni clics al juego).
+"""Logica de `calibrate.py`: calibracion pasiva (lee la pantalla y escucha hotkeys; NUNCA manda teclas ni clics al juego),
+salvo `camara-tope` que es ACTIVA (rueda y clic derecho arrastrando, con cuenta regresiva y confirmacion).
 
 Cada subcomando es una funcion `cmd_*(session, ...)` que devuelve 0 (ok) o 1 (no se guardo / no se pudo). Todo lo
 externo (ventana, teclado, `input()`, reloj, lectura de coordenadas) va inyectado en `Session` para poder probarlo.
@@ -22,7 +23,9 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-from bot.config import ConfigError, resolve_path, save_config, validate_config, validate_farm_zone
+from bot.camera_pitch import CameraPitch
+from bot.perception import perceive
+from bot.config import DEFAULTS, ConfigError, _merge, resolve_path, save_config, validate_config, validate_farm_zone
 from bot.debug_draw import annotate, draw_panel_coords
 from bot.geometry import Rect
 from bot.profiles import (KIND_DIRS, KINDS, apply_migration, build_config, has_path, kind_of, leaf_paths, list_profiles,
@@ -32,7 +35,7 @@ from bot.vision.items import find_boxes
 from bot.vision.coords import read_coords
 from bot.vision.metin import find_label_candidates, slugify, target_slugs
 from bot.vision.panel import find_frame, read_panel
-from bot.vision.pitch import draw_horizon, measure_horizon
+from bot.vision.pitch import measure_horizon
 from bot.vision.screen_mask import anchor_rect, build_screen_mask, find_ui_windows
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,8 @@ class Session:
     say: Callable[[str], None] = print
     ask: Callable[[str], str] = field(default=lambda prompt: input(prompt))
     prefer_profile: bool = False               # guardar en el perfil activo aunque config.json defina ese valor (lo usa la interfaz)
+    gi: Any = None                             # GameInput (solo los subcomandos ACTIVOS: camara-tope)
+    countdown: Callable[[], None] | None = None   # cuenta regresiva antes de mandar input (solo subcomandos activos)
 
     def confirm(self, question: str) -> bool:
         """s/n por consola; con --si responde que si sin preguntar."""
@@ -868,43 +873,106 @@ def cmd_zonas(s: Session) -> int:
     return 0
 
 
-# ----------------------------------------------------------------------------- camara
+# ----------------------------------------------------------------------------- camara-tope
 
-def cmd_camara(s: Session) -> int:
-    """Mide el horizonte (angulo vertical de la camara) en varias capturas con la camara como le gusta a Enzo y guarda el
-    promedio en camera_pitch.ref_horizon_frac. Pasivo: no manda nada al juego."""
-    c = s.cfg["camera_pitch"]
-    n = int(c["calib_samples"])
+DEFAULT_REFERENCES = ("samples/cam_01_plano_normal.png", "samples/cam_04_plano_normal_otra_vez.png")   # camara normal, terreno plano
+CAL_PARTS = ("metins", "far", "monsters")   # lo que hace falta para elegir un punto libre donde arrastrar
+
+
+def _reference_horizon(s: Session, paths: list[str] | None) -> float | None:
+    """Fila del horizonte (fraccion del alto) promedio de las capturas de referencia (camara normal en terreno plano)."""
     vals: list[float] = []
-    last, last_res = None, None
-    for i in range(n):
+    for name in (paths or list(DEFAULT_REFERENCES)):
+        p = resolve_path(name)
+        img = cv2.imread(str(p)) if p.exists() else None
+        if img is None:
+            s.say(f"  referencia {name}: no se pudo leer")
+            continue
+        res = measure_horizon(img, s.cfg)
+        if res is None or res.confidence < float(s.cfg["camera_pitch"]["min_confidence"]) or res.saturated:
+            s.say(f"  referencia {name}: no se pudo medir el horizonte")
+            continue
+        s.say(f"  referencia {name}: horizonte {res.horizon_frac:.3f} (fila {res.horizon_row})")
+        vals.append(res.horizon_frac)
+    return statistics.mean(vals) if vals else None
+
+
+def propose_step(rows: list[tuple[int, float | None]], ref: float) -> int | None:
+    """De (px, horizonte o None si no se pudo medir / todo piso) devuelve los px cuyo horizonte esta mas cerca de `ref`."""
+    ok = [(abs(h - ref), px) for px, h in rows if h is not None]
+    return min(ok)[1] if ok else None
+
+
+def cmd_camara_tope(s: Session, step_px: int | None = None, referencia: list[str] | None = None) -> int:
+    """ACTIVO (manda input real al juego): lleva la camara al tope (zoom lejos y arriba), baja de a `step_px` hasta
+    `camera_pitch.calib_max_px` sacando una captura por paso (debug/calibrate_camara_tope/paso_NN_YYYpx.png), propone el paso
+    cuyo horizonte (en terreno plano) mas se parece al de las capturas de referencia y guarda camera_pitch.from_limit_px."""
+    c = s.cfg["camera_pitch"]
+    step, top = int(step_px or c["step_px"]), int(c["calib_max_px"])
+    s.say("Referencia (tu camara normal en terreno plano):")
+    ref = _reference_horizon(s, referencia)
+    if ref is None:
+        s.say("No hay una referencia medible. Pasa capturas con --referencia (camara normal, terreno plano). No se guardo nada.")
+        return 1
+    s.say(f"Horizonte de referencia: {ref:.3f}.")
+    s.say(f"\nEsto MANDA INPUT REAL al juego: la rueda del mouse y arrastres con el clic derecho (F12 o la esquina del mouse cortan).\n"
+          f"Parate en un lugar PLANO, sin monstruos cerca y deja el juego a la vista. Va a llevar la camara al tope y bajar de a "
+          f"{step} px hasta {top} px sacando una captura por paso.")
+    if not s.confirm("Empiezo"):
+        s.say("Cancelado: no se mando nada.")
+        return 1
+    if s.countdown is not None:
+        s.countdown()
+    out_dir = _debug_path(s, "calibrate_camara_tope/x").parent
+    for old in out_dir.glob("paso_*.png"):
+        old.unlink()
+    cp = CameraPitch(s.cfg)
+
+    def look():
+        img = s.grab()
+        return img, perceive(img, s.cfg, parts=CAL_PARTS)
+
+    if cp.to_top(look, s.gi, s.sleep, s.clock(), "calibracion", 0) is None:
+        s.say("No se pudo llevar la camara al tope (sin punto libre del piso, ventana minimizada o captcha). No se guardo nada.")
+        return 1
+    rows: list[tuple[int, float | None]] = []
+    files: dict[int, str] = {}
+    for n, px in enumerate(range(0, top + 1, step)):
+        if n > 0 and cp.move_down(look(), look, s.gi, s.sleep, step) is None:
+            s.say(f"Se corto en el paso {n} ({px} px): no hay punto libre para arrastrar. Muevete a un lugar mas despejado.")
+            break
+        s.sleep(float(s.cfg["explore"]["settle_s"]))
         img = s.grab()
         res = measure_horizon(img, s.cfg)
-        if res is not None and res.confidence >= float(c["min_confidence"]):
-            vals.append(res.horizon_frac)
-            last, last_res = img, res
-            s.say(f"  captura {i + 1}/{n}: horizonte {res.horizon_frac:.3f} (fila {res.horizon_row}, confianza {res.confidence:.2f})")
-        else:
-            s.say(f"  captura {i + 1}/{n}: no se pudo medir"
-                  + ("" if res is None else f" (confianza {res.confidence:.2f})"))
-        if i + 1 < n:
-            s.sleep(float(c["calib_pause_s"]))
-    if len(vals) < max(1, (n + 1) // 2):
-        s.say(f"Solo {len(vals)} de {n} capturas se pudieron medir (hace falta piso a la vista debajo del personaje). "
-              "No se guardo nada.")
+        ok = res is not None and res.confidence >= float(c["min_confidence"]) and not res.saturated
+        rows.append((px, res.horizon_frac if ok and res is not None else None))
+        path = out_dir / f"paso_{n:02d}_{px:03d}px.png"
+        cv2.imwrite(str(path), img)
+        files[px] = path.name
+        s.say(f"  paso {n:2d}: {px:3d} px abajo del tope: " + (f"horizonte {res.horizon_frac:.3f}" if ok and res is not None
+              else ("todo piso (no se ve horizonte)" if res is not None and res.saturated else "no se pudo medir")))
+    if len(rows) < 2:
+        s.say("Muy pocos pasos para proponer algo. No se guardo nada.")
         return 1
-    ref = round(statistics.mean(vals), 3)
-    spread = max(vals) - min(vals)
-    s.say(f"Horizonte medido: {ref:.3f} (promedio de {len(vals)} capturas, dispersion {spread:.3f}).")
-    if spread > float(c["tolerance"]):
-        s.say("Ojo: las capturas difieren mas que la tolerancia (animaciones, monstruos tapando el piso). Si dudas, repeti.")
-    if any(v <= 0 for v in vals):
-        s.say("Ojo: en alguna captura el piso llega hasta el borde de arriba (camara muy inclinada hacia abajo): el valor es "
-              "aproximado.")
-    path = _debug_path(s, "calibrate_camara.png")
-    cv2.imwrite(str(path), draw_horizon(last, last_res, ref, float(c["tolerance"])))
-    s.say(f"Imagen con la linea del horizonte (verde = medido, amarillo = referencia +- tolerancia) en {path}")
-    return 0 if apply_changes(s, [Change(("camera_pitch", "ref_horizon_frac"), ref)]) else 1
+    best = propose_step(rows, ref)
+    s.say(f"\nCapturas en {out_dir}. Horizonte de referencia {ref:.3f}.")
+    s.say("Paso -> px abajo del tope" + (f"; propuesto: {best} px ({files[best]})" if best is not None else "; sin propuesta"))
+    chosen = best
+    if not s.yes:
+        ans = s.ask(f"Cuantos px usar (uno de la lista; Enter = {best if best is not None else 'cancelar'}): ").strip()
+        if ans:
+            if not ans.isdigit() or int(ans) not in dict(rows):
+                s.say("Ese valor no esta en la lista. No se guardo nada.")
+                return 1
+            chosen = int(ans)
+    if chosen is None:
+        s.say("Sin propuesta ni eleccion: no se guardo nada.")
+        return 1
+    ok = apply_changes(s, [Change(("camera_pitch", "from_limit_px"), chosen)])
+    if ok:   # deja la camara en el angulo elegido
+        after = CameraPitch(s.cfg)
+        after.reset(look, s.gi, s.sleep, s.clock(), "fin de la calibracion")
+    return 0 if ok else 1
 
 
 # ----------------------------------------------------------------------------- resumen

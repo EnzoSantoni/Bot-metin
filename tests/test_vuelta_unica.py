@@ -46,20 +46,21 @@ def laps(caplog):
 def test_una_sola_vuelta_elige_el_mas_cercano_y_gira_directo(caplog):
     caplog.set_level(logging.INFO)
     env = env_for(FACING_WEST)
-    near = env.world.add_metin((600.0, 150.0), name=OSC)     # 40 u al este
-    env.world.add_metin((640.0, 170.0), name=OSC)            # 89 u
-    env.world.add_metin((690.0, 130.0), name=NEG)            # 132 u
+    near = env.world.add_metin((650.0, 150.0), name=OSC)     # 90 u al este (mas lejos que explore.sweep_attack_u)
+    env.world.add_metin((680.0, 175.0), name=OSC)            # 125 u
+    env.world.add_metin((700.0, 130.0), name=NEG)            # 145 u
     assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
     assert env.world.clicks_on_metin[0][1] is near
     ms = msgs(caplog)
     lap = [m for m in ms if m.startswith("Vuelta de busqueda: ") and "candidatos (mejor" in m]
-    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (600," in lap[0]
+    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (650," in lap[0]
     assert laps(caplog) == 1   # una vuelta, no mas
-    assert count(caplog, "Giro hacia el candidato en (600, 150) del mapa") == 1
+    assert count(caplog, "Giro hacia el candidato en (650, 150) del mapa") == 1
     assert not any("sin nueva vuelta" in m for m in ms)
-    # la escala del juego se estima bien: el candidato quedo a 40 u +- 15 %
-    first = next(m for m in ms if m.startswith("Candidato: metin_de_oscuridad en (600"))
-    assert "a 40 u" in first or "a 39 u" in first or "a 41 u" in first
+    # la escala del juego se estima bien: el candidato quedo a 90 u +- 15 %
+    first = next(m for m in ms if m.startswith("Candidato: ") and " en (650" in m)
+    d = int(first.split(" a ")[1].split(" u")[0])
+    assert 77 <= d <= 103
 
 
 def test_empate_de_distancia_gana_el_mas_cerca_del_centro(caplog):
@@ -126,14 +127,56 @@ def test_candidato_no_visible_tras_girar_camina_hacia_el_sin_nueva_vuelta(caplog
     assert not any(" grados en " in x for x in ms)
 
 
-def test_si_q_e_estan_al_reves_lo_detecta_con_el_rumbo_y_llega_igual(caplog):
+def test_si_q_e_estan_al_reves_lo_llega_igual_a_un_candidato(caplog):
     caplog.set_level(logging.INFO)
     env = env_for(FACING_NORTH, start=(540.0, 150.0), right_key_ok=False)   # hay que girar 90 grados: el signo importa
     m = env.world.add_metin((620.0, 150.0), name=OSC)
     env.bot.cands.add((620.0, 150.0), "metin_de_oscuridad", True, 0.0)
     assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
     assert env.world.clicks_on_metin[0][1] is m
-    assert any("Q/E giran al reves" in x for x in msgs(caplog))
+
+
+def test_q_e_al_reves_se_determina_una_vez_con_el_cono_y_queda_fijo(caplog, tmp_path):
+    """Q/E al reves: tres giros leidos con el cono lo invierten UNA vez, se guarda en el archivo de estado y nunca mas se invierte."""
+    from bot.keynav import SensesStore
+    caplog.set_level(logging.INFO)
+    store = SensesStore(tmp_path / "sentidos.json")
+    env = env_for(FACING_NORTH, start=(540.0, 150.0), right_key_ok=False, bot_kw={"senses": store})
+    bot = env.bot
+    bot._img = object()    # la imagen no importa: el cono del simulador sale del mundo
+    bot._heading()         # primera lectura: cam_h medido
+    for i in range(3):
+        bot._rotate_camera("right", 1.0)
+        bot._frames += 1   # llego una captura nueva despues del giro
+        bot._heading()
+    assert bot.keynav.locked_q and bot.keynav.view_right_key == "camera_left"
+    assert count(caplog, "Q/E giran al reves") == 1
+    assert store.load() == {"view_right_key": "camera_left"}
+    for i in range(4):     # fijo: ya con el sentido bien, nada mas se invierte
+        bot._rotate_camera("left", 1.0)
+        bot._frames += 1
+        bot._heading()
+    assert bot.keynav.view_right_key == "camera_left" and count(caplog, "Q/E giran al reves") == 1
+
+
+def test_sentidos_guardados_se_reusan_en_la_proxima_corrida(tmp_path):
+    from bot.keynav import SensesStore
+    store = SensesStore(tmp_path / "sentidos.json")
+    store.save({"view_right_key": "camera_left"})
+    env = env_for(FACING_NORTH, right_key_ok=False, bot_kw={"senses": store})
+    assert env.bot.keynav.view_right_key == "camera_left" and env.bot.keynav.locked_q
+
+
+def test_sin_cono_el_rumbo_sale_del_movimiento_medido(caplog):
+    """Sin cono legible, `_heading` devuelve el cam_h de keynav (movimiento medido por coordenadas) y no inventa uno."""
+    caplog.set_level(logging.INFO)
+    env = SimEnv(3, phi=FACING_WEST, heading=False, start=(560.0, 150.0))
+    bot = env.bot
+    bot._img = object()
+    assert bot._heading() is None
+    bot.keynav.observe((10.0, 0.0), 1.0)      # un tramo de W hacia el este
+    assert bot._heading() == pytest.approx(0.0)
+    assert count(caplog, "No se lee el cono") == 1      # el aviso va cada 30 s como maximo
 
 
 def test_candidatos_vencidos_no_cuentan(caplog):

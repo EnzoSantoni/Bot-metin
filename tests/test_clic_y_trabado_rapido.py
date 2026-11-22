@@ -69,27 +69,28 @@ def _until_second_click(h, limit=200):
     raise AssertionError("no hubo segundo clic")
 
 
-def test_clic_sin_panel_reclickea_a_los_05_s_mejor_apuntado(caplog):
+def test_clic_sin_panel_reclickea_a_los_15_s_mejor_apuntado(caplog):
     caplog.set_level(logging.INFO)
 
     def script(h, n):
-        xy = (500 + n, 150)   # camina: no es una traba
+        xy = (500 + min(n, 8), 150)   # camina un rato y queda quieto (el reclic espera a que frene)
         if h.bot.state is State.ATACAR:
             return perc_far(coords=xy, metins=[metin()])   # sin panel
         return perc(coords=xy, metins=[metin()])
-    h = Harness(script, attack={"confirm_timeout_s": 50.0})
+    h = Harness(script, attack={"confirm_timeout_s": 50.0}, stuck={"fast_s": 1000.0})
     t0 = _until_second_click(h)
-    assert h.clock.t - t0 < 1.0   # a los ~0.5 s, no a los 5 s
-    assert any("Clic sin panel en 0.5 s: reclic mejor apuntado en (1000, 466)" in m for m in messages(caplog))
+    assert 1.5 <= h.clock.t - t0 < 2.6   # a los ~1.5 s (`attack.confirm_wait_s`), no antes ni a los 6 s
+    assert any("Clic sin panel en 1.5 s: reclic mejor apuntado en (1000, 466)" in m for m in messages(caplog))
     # primer clic: etiqueta (1000, 500) corrida 24 px hacia arriba; el reclic cae en el mismo punto y sube 10 px mas
     assert h.bot._atk.aim == (1000, 466)
 
 
 def test_los_reclics_rapidos_tienen_tope_y_despues_sigue_el_flujo_de_siempre(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(coords=(500 + n, 150), metins=[metin()]) if h.bot.state is State.ATACAR
-                else perc(coords=(500 + n, 150), metins=[metin()]), attack={"confirm_timeout_s": 50.0})
-    for _ in range(60):
+    xy = lambda n: (500 + min(n, 8), 150)   # camina un rato y queda quieto
+    h = Harness(lambda h, n: perc_far(coords=xy(n), metins=[metin()]) if h.bot.state is State.ATACAR
+                else perc(coords=xy(n), metins=[metin()]), attack={"confirm_timeout_s": 50.0}, stuck={"fast_s": 1000.0})
+    for _ in range(120):
         h.bot.step()
     assert sum("Clic sin panel" in m for m in messages(caplog)) == int(h.cfg["attack"]["quick_reclicks"])
     assert h.clicks() == 1 + int(h.cfg["attack"]["quick_reclicks"])
@@ -97,19 +98,21 @@ def test_los_reclics_rapidos_tienen_tope_y_despues_sigue_el_flujo_de_siempre(cap
 
 def test_con_panel_confirmado_no_hay_reclic_rapido(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(coords=(500 + n, 150), panel=target_panel(1.0), metins=[metin()])
-                if h.bot.state is State.ATACAR else perc(coords=(500 + n, 150), metins=[metin()]))
+    xy = lambda n: (500 + max(0, n - 5), 150)   # quieto al elegir (un clic nunca sale en movimiento) y despues camina
+    h = Harness(lambda h, n: perc_far(coords=xy(n), panel=target_panel(1.0), metins=[metin()])
+                if h.bot.state is State.ATACAR else perc(coords=xy(n), metins=[metin()]))
     for _ in range(40):
         h.bot.step()
     assert h.clicks() == 1 and not any("Clic sin panel" in m for m in messages(caplog))
 
 
-def test_el_panel_que_aparece_antes_de_los_05_s_cancela_el_reclic():
+def test_el_panel_que_aparece_antes_de_los_15_s_cancela_el_reclic():
     def script(h, n):
+        xy = (500 + max(0, n - 5), 150)   # quieto al elegir y despues camina
         if h.bot.state is State.ATACAR:
             panel = target_panel(1.0) if h.clock.t - h.bot._atk.start_t >= 0.2 else None
-            return perc_far(coords=(500 + n, 150), panel=panel, metins=[metin()])
-        return perc(coords=(500 + n, 150), metins=[metin()])
+            return perc_far(coords=xy, panel=panel, metins=[metin()])
+        return perc(coords=xy, metins=[metin()])
     h = Harness(script)
     for _ in range(40):
         h.bot.step()
@@ -249,8 +252,13 @@ def test_hover_y_barrido_de_camara_no_son_caminata():
 def test_config_nueva():
     a, s = DEFAULTS["attack"], DEFAULTS["stuck"]
     assert s["fast_s"] == 1.8 and "surrounded_s" not in s and "walk_stuck_s" not in a
-    assert (a["confirm_check_s"], a["quick_reclicks"], a["label_click_up_frac"]) == (0.5, 2, 0.37)
-    for sec, key, bad in (("stuck", "fast_s", 0), ("attack", "confirm_check_s", 0), ("attack", "quick_reclicks", -1),
+    assert (a["confirm_wait_s"], a["quick_reclicks"], a["label_click_up_frac"]) == (1.5, 2, 0.37)
+    assert "confirm_check_s" not in a and a["min_click_gap_s"] == 1.5 and a["panel_recover"] is True
+    ap = DEFAULTS["approach"]
+    assert ap["keys_enabled"] is True and ap["click_floor"] == 2.0 and ap["max_clicks"] == 4
+    for sec, key, bad in (("stuck", "fast_s", 0), ("attack", "confirm_wait_s", 0), ("attack", "quick_reclicks", -1),
+                          ("attack", "min_click_gap_s", -1), ("attack", "panel_recover", "si"),
+                          ("approach", "click_floor", 0), ("approach", "keys_enabled", 1), ("approach", "max_clicks", 0),
                           ("attack", "label_click_up_frac", 1.0), ("attack", "quick_up_px", "x"), ("attack", "arrive_px", -1)):
         cfg = copy.deepcopy(DEFAULTS)
         cfg[sec][key] = bad

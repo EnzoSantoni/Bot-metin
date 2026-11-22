@@ -182,6 +182,7 @@ def make_cfg(**over) -> dict:
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic; los del teclado usan make_cfg(navigation={"mode": "teclado"})
     cfg["spawns"]["enabled"] = False   # los tests no tocan el mapa de metin del usuario
     cfg["items_catalog"]["enabled"] = cfg["history"]["enabled"] = False
+    cfg["camera_pitch"]["enabled"] = False   # el reinicio de la camara (rueda y arrastres) lo prueba tests/test_camera_pitch.py
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     for sec, vals in over.items():

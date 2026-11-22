@@ -297,6 +297,17 @@ def test_hook_mouse_inyectado_no_dispara_fisico_si():
     assert fired.wait(2.0)
 
 
+def test_hook_clic_derecho_rueda_y_arrastres_inyectados_no_pausan():
+    """El reinicio de camara del bot (rueda + arrastres con clic derecho) es input inyectado: no es el usuario."""
+    hook, _, fired, _, _ = make_hook()
+    inj = ctypes.addressof(ms_struct(800, 600, ui.LLMHF_INJECTED))
+    for w in (ui.WM_BUTTON_DOWN[1], ui.WM_BUTTON_DOWN[2], ui.WM_BUTTON_DOWN[3], ui.WM_MOUSEWHEEL, ui.WM_MOUSEHWHEEL):
+        hook._on_mouse(0, w, inj)
+    assert not fired.wait(0.1)
+    hook._on_mouse(0, ui.WM_BUTTON_DOWN[1], ctypes.addressof(ms_struct(800, 600)))   # clic derecho fisico: si dispara
+    assert fired.wait(2.0)
+
+
 def test_hook_ignora_input_sobre_la_ventana_de_la_interfaz():
     hook, _, fired, _, _ = make_hook(ignore_pids={4242}, pid_at=4242, fg_pid=4242)
     hook._on_mouse(0, ui.WM_BUTTON_DOWN[0], ctypes.addressof(ms_struct(10, 10)))   # clic en Pausar / Detener

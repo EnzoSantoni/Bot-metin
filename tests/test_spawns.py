@@ -252,3 +252,49 @@ def test_validate_config_exige_map_name():
     cfg["spawns"]["map_name"] = " "
     with pytest.raises(ConfigError, match="map_name"):
         validate_config(cfg)
+
+
+# ---------------------------------------------------------------------- hora desconocida (0) y regla del centro
+def test_hora_desconocida_es_elegible_y_el_log_dice_que_no_se_sabe(tmp_path):
+    wall = Wall()
+    m = make_map(tmp_path, wall)
+    m.spots.append(__import__("bot.spawns", fromlist=["Spot"]).Spot(100.0, 100.0))     # last_broken = last_visit = 0
+    assert m.next_target((90.0, 100.0), ALL) is m.spots[0]
+    assert m.seconds_until_ready(ALL) == 0.0
+    txt = m.spots[0].ages(wall.t)
+    assert "?" in txt and "hora desconocida" in txt and "29921" not in txt
+    m.mark_visited(m.spots[0])                      # visitado ahora: la revisita si espera (la rotura sigue desconocida)
+    assert m.next_target((90.0, 100.0), ALL) is None and 0 < m.seconds_until_ready(ALL) <= m.revisit_s
+    wall.t += m.revisit_s + 1
+    assert m.next_target((90.0, 100.0), ALL) is m.spots[0]
+    assert "hora desconocida" in m.spots[0].ages(wall.t).split("visto")[0]
+    assert "min" in m.spots[0].ages(wall.t).split("visto")[1]
+
+
+def test_explorar_con_punto_sin_hora_va_a_el_y_no_loguea_una_edad_absurda(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    wall = Wall()
+    (tmp_path / "mapa.json").write_text(json.dumps({"version": 2, "mapa": "Ciudad 1",
+                                                    "spots": [{"x": 600.0, "y": 160.0, "n": 1, "last_broken": 0, "last_visit": 0}]}),
+                                        encoding="utf-8")
+    h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
+    _explorar_hasta_tramo(h)
+    assert h.bot._ex.spot is not None and h.bot._ex.target == (600.0, 160.0)
+    msg = next(r.message for r in caplog.records if "Mapa de metin: voy al punto" in r.message)
+    assert "hora desconocida" in msg and "29921" not in msg
+
+
+def test_sin_punto_listo_va_al_centro_y_camina_hasta_llegar_antes_de_buscar(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    wall = Wall()
+    sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
+    sm.record_broken((600.0, 160.0))      # recien roto: no reaparecio
+    h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
+    _explorar_hasta_tramo(h)
+    x = h.bot._ex
+    center = h.bot.navigator.return_target(h.bot.tracker.position)
+    if x.center:
+        assert x.target == center and x.spot is None
+        assert any("voy al centro" in r.message for r in caplog.records)
+    else:                                  # ya estaba en el centro: busca de nuevo desde ahi (nada de tramos al azar todavia)
+        assert any("busco de nuevo desde aqui" in r.message for r in caplog.records)

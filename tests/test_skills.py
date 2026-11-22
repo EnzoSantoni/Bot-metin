@@ -163,7 +163,7 @@ def test_relanza_al_vencer():
     ts = [t for t, *_ in env.world.skill_log]
     assert ts[0] < 2.0
     gaps = [b - a for a, b in zip(ts, ts[1:])]
-    assert all(21.0 <= g <= 45.0 for g in gaps), gaps       # duracion + animacion (+ esperar a un momento seguro)
+    assert all(21.0 <= g <= 75.0 for g in gaps), gaps       # duracion + animacion (+ esperar a un momento seguro: una vuelta de busqueda dura ~40 s)
     assert all_effective(env) and env.world.mounted
 
 

@@ -768,10 +768,11 @@ class App:
         self.btn_redo_zone = ttk.Button(top, text="Rehacer la zona", command=self.redo_zone)
         self.btn_redo_zone.pack(side="left")
         add_tooltip(self.btn_redo_zone, "Marcá de nuevo las esquinas de la zona de farmeo caminando por el juego (guía paso a paso).")
-        self.btn_calib_pitch = ttk.Button(top, text="Calibrar ángulo vertical", command=self.calibrate_pitch)
+        self.btn_calib_pitch = ttk.Button(top, text="Calibrar cámara (desde el tope)", command=self.calibrate_pitch)
         self.btn_calib_pitch.pack(side="left", padx=GAP)
-        add_tooltip(self.btn_calib_pitch, "Mide el ángulo vertical de la cámara tal como la dejaste y lo guarda como referencia "
-                                          "(camera_pitch.ref_horizon_frac, en el perfil del personaje). El bot la corrige solo.")
+        add_tooltip(self.btn_calib_pitch, "Lleva la cámara al tope (zoom lejos y arriba) y baja de a pasos para medir cuántos px "
+                                          "hay que bajar hasta tu ángulo (camera_pitch.from_limit_px, en el perfil del personaje). "
+                                          "MANDA INPUT REAL al juego (rueda y clic derecho): hacelo en un lugar plano y sin monstruos.")
         btn_refresh = ttk.Button(top, text="Recargar", command=self.refresh_zone)
         btn_refresh.pack(side="left", padx=GAP)
         add_tooltip(btn_refresh, "Vuelve a leer la zona y el mapa de metin.")
@@ -870,12 +871,12 @@ class App:
             lambda rc: (self.refresh_overrides(), self.refresh_zone()))
 
     def calibrate_pitch(self) -> None:
-        """Abre la guia de `calibrate.py camara` (mide el horizonte; guarda en el perfil del personaje)."""
+        """Abre la guia de `calibrate.py camara-tope` (activa: manda rueda y arrastres; guarda en el perfil del personaje)."""
         if self.metin.locked or self._calib is not None:
             return
         self._open_calibrate(
             cr.CAMARA_TITLE, cr.CAMARA_STEPS,
-            lambda _n: cr.build_calibrate_command("camara", servidor=self.vars["servidor"].get(),
+            lambda _n: cr.build_calibrate_command("camara-tope", servidor=self.vars["servidor"].get(),
                                                   personaje=self.vars["personaje"].get(), zona=self.vars["zona"].get(),
                                                   config=self._calib_config()),
             lambda rc: self.refresh_overrides())

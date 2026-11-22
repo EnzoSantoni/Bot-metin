@@ -123,8 +123,7 @@ def test_sin_monstruos_camina_adentro_de_la_zona():
     assert max(abs(w.pos[0] - start[0]), abs(w.pos[1] - start[1])) > 10 or len(env.backend.events) > 40
     assert max(dist) <= tol(env) and left_clicks(env) == []
     assert not {tr.new for tr in env.transitions} & {"BUSCAR", "EXPLORAR", "ATACAR"}
-    # nunca giro la camara (Q/E)
-    assert not any(e[0] == "key_down" and e[1] in ("q", "e") for e in env.backend.events)
+    # (con navigation.keyboard.lateral=false se camina solo con W y se alinea la vista con Q/E: ya no se prohibe girar la camara)
 
 
 def test_habilidades_en_bichos_no_en_recoger():

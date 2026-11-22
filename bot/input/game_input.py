@@ -144,6 +144,11 @@ class GameInput:
             self._delay()
             return True
 
+    def right_click(self, x: int, y: int, mask: ScreenMask | None) -> bool:
+        """Clic DERECHO en (x, y) de cliente: apretar y soltar en el mismo punto, sin mover el mouse (mantenido solo gira la
+        camara). Selecciona lo que hay debajo y muestra su nombre y vida sin atacarlo."""
+        return self.click_at(x, y, mask, "right")
+
     def hover_at(self, x: int, y: int, mask: ScreenMask | None) -> bool:
         """Solo mueve el mouse a (x, y) de cliente (sin clic), con el mismo chequeo de mascara y jitter que `click_at`.
         Sirve para que el juego muestre la etiqueta de lo que hay debajo."""
