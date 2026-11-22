@@ -14,7 +14,8 @@ from bot.vision.death import DeathInfo, find_death
 from bot.vision.far_metin import FarMetin, find_far_metins
 from bot.vision.items import ItemLabel, choose_item, find_items
 from bot.vision.metin import MetinDetection, choose_target, find_metins, player_point
-from bot.vision.monsters import MonsterLabel, count_near, find_monsters
+from bot.vision.game_menu import GameMenu, find_game_menu
+from bot.vision.monsters import MonsterLabel, count_near, find_monsters, find_own_label, monsters_on_me
 from bot.vision.panel import PanelInfo, read_panel
 from bot.vision.screen_mask import ScreenMask, build_screen_mask, find_ui_windows
 
@@ -41,6 +42,9 @@ class Perception:
     far_metins: list[FarMetin] = field(default_factory=list)   # piedras sin etiqueta (parte "far")
     monsters: list[MonsterLabel] = field(default_factory=list)   # etiquetas de monstruos (parte "monsters")
     monsters_near: int = 0                                      # cuantos estan cerca del personaje
+    own_label: Rect | None = None                               # etiqueta del propio personaje (nombre amarillo + Lv verde)
+    monsters_on_me: int = 0                                     # etiquetas de monstruo solapadas o a <= on_me_px de la propia
+    menu: GameMenu | None = None                                # menu de opciones del juego abierto (boton Cancelar)
 
 
 def label_exclusions(metins: list[MetinDetection], cfg: dict) -> list[Rect]:
@@ -89,7 +93,10 @@ def perceive(img: np.ndarray, cfg: dict, *, full_captcha: bool = False,
         far = timed("far", lambda: find_far_metins(img, cfg, mask, label_exclusions(metins, cfg), monsters))
     captcha = timed("captcha", lambda: find_captcha(img, cfg, full=full_captcha))
     death = timed("death", lambda: find_death(img, cfg))
+    own = timed("own", lambda: find_own_label(img, cfg, player)) if "monsters" in wanted else None
+    menu = timed("menu", lambda: find_game_menu(img, cfg))
     timings["total"] = (time.perf_counter() - t0) * 1000
     return Perception(time.monotonic() if t is None else t, tuple(img.shape), mask, windows, metins, target,
                       panel, coords, items, choice, captcha, death, player, timings,
-                      far, monsters, count_near(monsters, player, cfg=cfg))
+                      far, monsters, count_near(monsters, player, cfg=cfg), own, len(monsters_on_me(monsters, own, cfg, player)),
+                      menu)

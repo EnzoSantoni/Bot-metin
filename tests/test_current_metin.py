@@ -180,7 +180,7 @@ def test_seleccion_equivocada_reclickea_al_punto_despejado():
         return p
     h = Harness(script)
     h.run_until(lambda: h.clicks() >= 2, limit=300)
-    assert h.keys("space") >= 1 and h.keys("esc") >= 1
+    assert h.keys("space") >= 1 and h.keys("esc") == 0
     x, y = clicks_xy(h)[-1]
     assert math.hypot(max(mon.x - x, 0, x - mon.right), max(mon.y - y, 0, y - mon.bottom)) > 25
 
@@ -208,8 +208,8 @@ def confirmed_then_lost(view_after, confirmed_cycles=3):
     return script
 
 
-def test_tras_clickear_un_bicho_no_hay_metin_en_curso_y_se_elige_el_mas_cercano(caplog):
-    """Un clic que selecciona un monstruo (panel 'other') no confirma nada: no hay metin en curso y no bloquea la eleccion."""
+def test_tras_clickear_un_bicho_no_hay_metin_en_curso_y_se_reclickea_el_metin_directo(caplog):
+    """Un clic que selecciona un monstruo (panel other) no confirma nada: no hay metin en curso; se hace clic directo en el metin."""
     caplog.set_level(logging.INFO)
     other = metin((950, 560))   # mas cerca del personaje que A
 
@@ -217,7 +217,7 @@ def test_tras_clickear_un_bicho_no_hay_metin_en_curso_y_se_elige_el_mas_cercano(
         return [metin(A_POINT)] if h.clicks() == 0 else [other, metin(A_POINT)]
     h = Harness(wrong_then_view(view))
     h.run_until(lambda: h.clicks() >= 2, limit=300)
-    assert clicks_xy(h) == [AIM, (950, 536)]
+    assert clicks_xy(h) == [AIM, AIM]   # sin Escape: el clic directo en el metin (el mismo, con etiqueta) cambia la seleccion
     assert h.bot._cur is None
     assert not any("Retomo el metin en curso" in m for m in messages(caplog))
 

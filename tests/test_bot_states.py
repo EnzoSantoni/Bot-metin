@@ -72,6 +72,11 @@ def make_cfg(**over):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
     cfg["spawns"]["enabled"] = False
+    # los tests de fondo no prueban la regla de zona de los metin (Fase 6i): sin limite de piso/margen y con la tolerancia entera;
+    # los de esa regla (tests/test_metin_zona.py) usan `strict_zone=True`
+    if not over.pop("strict_zone", False):
+        cfg["approach"].update(blind_near_floor=1000.0, blind_inside_margin=-1000.0,
+                               metin_outside_u=float(cfg["farm_zone"]["outside_tolerance"]))
     cfg["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0], click_jitter_px=0)
     cfg["safety"].update(hard_kill_after_s=5.0, countdown_s=0)
     cfg["explore"].update(camera_steps=2, camera_step_s=0.01)
@@ -196,7 +201,7 @@ def test_ciclo_completo_buscar_atacar_roto_recoger_explorar():
     assert all("panel" in c[1] for c in h.calls if c[0] is State.ATACAR)
 
 
-def test_seleccion_equivocada_manda_escape():
+def test_seleccion_equivocada_sin_escape():
     def script(h, n):
         if h.bot.state is State.ATACAR:
             return perc(panel=PanelInfo(present=True, kind="other", name="se_rang"))
@@ -204,7 +209,7 @@ def test_seleccion_equivocada_manda_escape():
 
     h = Harness(script)
     h.run_until(lambda: h.states()[-1:] == [State.BUSCAR] and State.ATACAR in h.states())
-    assert h.keys("esc") == 1
+    assert h.keys("esc") == 0
     assert h.states()[:2] == [State.ATACAR, State.BUSCAR]
 
 
@@ -222,7 +227,7 @@ def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
     h.run_until(lambda: State.EXPLORAR in h.states())
     assert h.states()[:3] == [State.ATACAR, State.BUSCAR, State.EXPLORAR]
     assert h.clicks() == 3            # clic inicial + 2 reclics
-    assert h.keys("esc") == 1 and len(h.bot.discarded) == 1
+    assert h.keys("esc") == 0 and len(h.bot.discarded) == 1
     assert h.states().count(State.ATACAR) == 1   # no se vuelve a elegir
     # pasado el tiempo de descarte vuelve a ser candidato
     h.clock.t += h.cfg["attack"]["discard_minutes"] * 60 + 1
@@ -411,7 +416,7 @@ def test_atacando_afuera_abandona_y_vuelve():
     h = Harness(script)
     h.train_camera()
     h.run_until(lambda: State.VOLVER in h.states())
-    assert h.states()[:2] == [State.ATACAR, State.VOLVER] and h.keys("esc") == 1
+    assert h.states()[:2] == [State.ATACAR, State.VOLVER] and h.keys("esc") == 0
 
 
 def test_trabado_destraba_y_vuelve_al_estado_anterior():

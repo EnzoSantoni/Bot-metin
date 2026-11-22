@@ -23,7 +23,8 @@ WITH_PANEL = {
 }
 NO_PANEL = ["explorando_zona", "items_en_piso", "metin_cerca_sin_seleccionar", "metin_muy_lejos",
             "metin_oscuridad_a_distancia", "muerte", "real_metin_negro_inventario_mapa",
-            "real_inventario_abierto", "real_rodeado", "real_metin_lejos_1", "real_tres_metin_hover"]
+            "real_inventario_abierto", "real_rodeado", "real_metin_lejos_1", "real_tres_metin_hover",
+            "cam_01_plano_normal", "cam_02_plano_tope_horizontal", "cam_03_plano_tope_arriba", "cam_04_plano_normal_otra_vez", "cam_08_montana_camara_subida", "cam_09_montana_despues_de_alejarse", "cam_10_plano_zoom_tope_lejos"]
 
 
 @pytest.fixture(autouse=True)
@@ -33,10 +34,22 @@ def _fresh_warnings():
     reset_warnings()
 
 
+# Capturas con un MONSTRUO seleccionado (panel "otra cosa", con su vida): (vida actual, maxima)
+OTHER_PANEL = {"cam_05_subida_normal": (490, 490), "cam_06_subida_tope_horizontal": (490, 490),
+               "cam_07_subida_tope_arriba": (490, 490), "cam_11_plano_zoom_tope_cerca": (1129, 1129)}
+
+
 def test_every_sample_is_classified():
     import pathlib
     names = {p.stem for p in (pathlib.Path(__file__).parent.parent / "samples").glob("*.png")}
-    assert names == set(WITH_PANEL) | set(NO_PANEL)
+    assert names == set(WITH_PANEL) | set(NO_PANEL) | set(OTHER_PANEL)
+
+
+@pytest.mark.parametrize("name", sorted(OTHER_PANEL))
+def test_monster_panel_on_samples(load_sample, name):
+    p = read_panel(load_sample(name + ".png"), CFG)
+    assert p.present and p.kind == "other" and p.name is None
+    assert (p.hp_current, p.hp_max) == OTHER_PANEL[name]
 
 
 @pytest.mark.parametrize("name", sorted(WITH_PANEL))

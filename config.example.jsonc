@@ -81,7 +81,11 @@
     "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
     "camera_left": "q", "camera_right": "e",
     "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
-    "deselect": "esc"
+    //  deselect: SIN USO. El bot ya no aprieta Escape (con nada seleccionado abre el menu de opciones del juego); para dejar
+    //  a un monstruo se hace clic directo en el metin. Queda por compatibilidad.
+    //  close_menu: SOLO si el menu de opciones del juego esta abierto y el clic en su boton Cancelar no lo cerro tras
+    //  vision.game_menu.close_clicks intentos (con el menu abierto, Escape si lo cierra).
+    "deselect": "esc", "close_menu": "esc"
   },
 
   // Seguridad (bot/control.py). Si el juego corre como administrador, ejecuta el bot como administrador:
@@ -201,7 +205,8 @@
   //  Regla B (ESTIMADOS): blocked_s = confirmado, la vida no baja por tanto tiempo y el personaje esta quieto o gira en
   //  circulo (recorrido en la ventana > circle_ratio x desplazamiento neto, con al menos circle_min_path unidades) ->
   //  ESPACIO (stuck.space_s) y reclic en el metin (cuenta como reclic). Seleccion equivocada de un monstruo (panel "other")
-  //  con >= wrong_monsters_min monstruos cerca -> ESPACIO, Escape y reclic (sigue contando para max_wrong_selections).
+  //  con >= wrong_monsters_min monstruos cerca (o bichos encima, ver vision.monsters.on_me_px) -> ESPACIO y clic directo en
+  //  el metin (SIN Escape); sin bichos, clic directo en el metin (sigue contando para max_wrong_selections).
   //  blocked_window_frac: fraccion de blocked_s que tiene que cubrir el recorrido para juzgar si esta bloqueado.
   //  Si el personaje sale de la zona atacando un metin cuya posicion queda afuera (o no se conoce), esa posicion se descarta.
   //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
@@ -256,7 +261,15 @@
              //  corrida. NUNCA hace clic en otro metin hasta romper el actual y recoger. Lo encontrado se recuerda next_keep_s
              //  segundos: al terminar RECOGER gira esos pasos y va directo a el (a <= relocate_px del punto recordado).
              "scan_enabled": true, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
-             "scan_hp_margin_s": 2.0},
+             "scan_hp_margin_s": 2.0,
+             //  BICHOS ENCIMA (nombres rojos solapados o a <= vision.monsters.on_me_px del nombre amarillo del personaje): panel
+             //  perdido / seleccion equivocada / trabado -> ESPACIO (on_me_space_s en la deseleccion) antes del reclic.
+             //  PIEDRA TAPADA: dos panel perdidos seguidos con vida alta (lost_swap_after) -> el reclic va a otro punto candidato
+             //  de la parte visible de la piedra (vision.click_point), no al mismo.
+             //  TRAS UN CAPTCHA: se retoma el metin que se atacaba (su punto de pantalla y su posicion en el mapa; si el personaje
+             //  seguia caminando hacia el, la etiqueta mas cercana que ya esta tan cerca o mas que al hacer el clic) y durante
+             //  after_captcha_keep_s no se lo suelta por "hay otro objetivo a la vista" (solo por target_keep_s).
+             "on_me_space_s": 1.0, "lost_swap_after": 2, "after_captcha_keep_s": 20.0},
 
   // RECOGER. Al romperse el metin se mira hasta look_s segundos si hay objetos validos en el piso (no yang, no reservados
   //  para otro). Sin objetos: sigue directo a BUSCAR (no se baja). Con objetos: se baja del caballo (si dismount) y, para
@@ -361,6 +374,10 @@
   "approach": {"max_seconds": 40.0, "ignore_minutes": 10.0, "ignore_radius": 10.0, "lost_cycles": 6,
                "label_match_px": 100, "match_px": 200, "label_exclude_down_px": 100,
                "blind_player_radius": 25.0, "max_tries_per_spot": 3,
+               //  Regla de zona de los metin: con posicion conocida solo se va a los que quedan a <= metin_outside_u afuera
+               //  del borde (menos que outside_tolerance). Sin posicion (camara no lista): solo si estan a distancia de piso
+               //  <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde.
+               "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                "far_monsters_n": 2, "far_monsters_px": 200,
                "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
                //  ELECCION: una etiqueta objetivo va antes que una piedra sin etiqueta, salvo que la distancia de piso de la
@@ -577,8 +594,33 @@
       "max_gap_px": 10, "word_gap_px": 8,             // separacion maxima verde->rojo; hueco maximo entre palabras
       "max_label_w": 260,                             // ancho maximo de la etiqueta (verde + nombre)
       "max_zone_overlap": 0.5,
-      "near_radius_px": 120                           // "cerca del personaje" (px, centro de etiqueta a player_point)
+      "near_radius_px": 120,                          // "cerca del personaje" (px, centro de etiqueta a player_point)
+      "on_me_px": 30,                                 // etiqueta de monstruo solapada o a <= on_me_px de la del personaje = bicho encima
+      "on_me_body_px": 90                             // o con la etiqueta a <= on_me_body_px del personaje (montado: la propia queda ~50 px mas arriba)
     },
+
+    // Etiqueta del propio personaje: "Lv NN" verde + nombre en AMARILLO plano (distinto de los monstruos: nivel verde y nombre
+    // rojo). Con bichos pegados o encima de ella (monsters_on_me) casi seguro lo estan bloqueando.
+    // search = [dx0, dy0, dx1, dy1] respecto del punto del personaje (montado la etiqueta queda ~130 px arriba).
+    "own_label": { "name_bgr": [76, 215, 255], "search": [-170, -230, 170, -20] },
+
+    // Menu de opciones del juego (lo abre Escape sin nada seleccionado). Se reconoce por el boton "Cancelar" (plantilla recortada
+    // de una captura real: score 1.0 en 5 capturas con menu, < 0.45 en 73 sin menu). search = fracciones [x0, y0, x1, y1].
+    // Se cierra con un clic en Cancelar cada close_retry_s; tras close_clicks clics sin cerrarlo, controls.close_menu.
+    "game_menu": { "enabled": true, "template": "templates/ui/menu_cancelar.png", "min_score": 0.8,
+                   "search": [0.3, 0.45, 0.7, 0.85], "close_retry_s": 1.0, "close_clicks": 3 },
+
+    // Punto de clic sobre la parte VISIBLE de la piedra (bot/vision/click_point.py). Candidatos = grid (fracciones [fx, fy] del
+    // rect del cuerpo, medido con el nucleo de color de far_metin), descartados si caen en la columna bajo una etiqueta de
+    // monstruo (la silueta mide body_h_k * distancia al horizonte [min body_h_min_px], se extiende body_h_mult veces ese alto
+    // hacia abajo, ancho body_w_frac de el + col_margin_px) o sobre la etiqueta del personaje (own_margin_px), o si el parche
+    // de radio patch_r tiene < min_stone_frac de pixeles de color de piedra (calido, saturacion >= stone_s_min: un tronco o la
+    // nieve son grises). stone_search = [medio ancho, arriba, abajo] px donde se busca el cuerpo cerca del punto de clic.
+    "click_point": { "grid": [[0.5, 0.5], [0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5], [0.3, 0.3], [0.7, 0.3],
+                              [0.3, 0.7], [0.7, 0.7]],
+                     "body_h_k": 0.33, "body_h_min_px": 40, "body_h_mult": 1.3, "body_w_frac": 0.3, "col_margin_px": 8,
+                     "patch_r": 4, "min_stone_frac": 0.25, "stone_s_min": 60, "stone_search": [60, 60, 25],
+                     "own_margin_px": 6 },
 
     // Objetos en el piso (bot/vision/items.py). El recuadro tiene borde negro exacto de 1 px, fondo oscuro
     // translucido y texto blanco sin antialiasing; una linea (alto 15 px) o dos (30 px) si tiene dueno, con el
