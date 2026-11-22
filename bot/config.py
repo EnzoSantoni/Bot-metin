@@ -40,6 +40,8 @@ DEFAULTS: dict[str, Any] = {
     "controls": {
         "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
         "camera_left": "q", "camera_right": "e",
+        # camera_top (G): sube el plano de la camara (vista desde arriba); camera_flat (T): lo baja (perspectiva mas plana).
+        "camera_top": "g", "camera_flat": "t",
         "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
         # deselect: SIN USO (el bot ya no aprieta Escape: abre el menu de opciones si no hay nada seleccionado). close_menu:
         # solo si el menu de opciones esta abierto y el clic en su boton Cancelar no lo cerro tras close_clicks intentos.
@@ -168,14 +170,12 @@ DEFAULTS: dict[str, Any] = {
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
                # este esta a menos de esta fraccion de su distancia (histeresis).
                "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
-    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
-    # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
+    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio con teclas (rueda lejos, G g_hold_s, t_taps toques de T,
+    # rueda); enabled false = no toca la camara. t_taps se calibra con `calibrate.py camara`. Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "limit": "horizontal", "to_limit_px": 700, "from_limit_px": 60,
-                     "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
-                     "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
-                     "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
-                     "min_confidence": 0.5,
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "t_taps": 4, "t_tap_ms": 120,
+                     "t_gap_ms": 200, "step_pause_s": 0.3, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                     "side_offset_frac": 0.14, "side_half_frac": 0.06, "min_confidence": 0.5,
                      "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                      "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
                      "min_valid_px": 20, "min_floor_rows": 40},
@@ -557,7 +557,12 @@ OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("appr
                  # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
                  ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
                  ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
-                 ("camera_pitch", "gain_ema"), ("camera_pitch", "min_gain_move_frac"))
+                 ("camera_pitch", "gain_ema"), ("camera_pitch", "min_gain_move_frac"),
+                 # metodo de topes con arrastre del mouse (reemplazado por G/T: el arrastre contra el tope acerca la camara)
+                 ("camera_pitch", "limit"), ("camera_pitch", "to_limit_px"), ("camera_pitch", "from_limit_px"),
+                 ("camera_pitch", "max_drag_px"), ("camera_pitch", "min_drag_px"), ("camera_pitch", "drag_s"),
+                 ("camera_pitch", "drag_steps"), ("camera_pitch", "drag_pause_s"), ("camera_pitch", "drag_clear_px"),
+                 ("camera_pitch", "step_px"), ("camera_pitch", "calib_max_px"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -980,28 +985,24 @@ def _validate_controls_safety_input(cfg: dict) -> None:
 
 
 def _validate_camera_pitch(cfg: dict) -> None:
-    """camera_pitch: reinicio de la camara desde el tope (zoom, arrastres) + parametros del detector de "mira el piso"."""
+    """camera_pitch: reinicio de la camara con teclas (rueda, G, toques de T) + parametros del detector de "mira el piso"."""
     c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
     if not isinstance(c.get("enabled"), bool):
         raise ConfigError("camera_pitch.enabled debe ser true o false")
-    positive = ("to_limit_px", "from_limit_px", "max_drag_px", "min_drag_px", "every_s", "drag_steps",
-                "drag_clear_px", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac", "step_px", "calib_max_px",
+    positive = ("g_hold_s", "t_tap_ms", "every_s", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac",
                 "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val", "row_floor_frac", "run_rows", "min_valid_px")
-    nonneg = ("zoom_out_clicks", "drag_s", "drag_pause_s", "min_confidence", "sample_top_px", "min_sat", "min_floor_rows")
+    nonneg = ("zoom_out_clicks", "t_taps", "t_gap_ms", "step_pause_s", "min_confidence", "sample_top_px", "min_sat",
+              "min_floor_rows")
     for k in positive + nonneg:
         v = c.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
             raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
     if c.get("zoom_out_sign") not in (-1, 1) or isinstance(c.get("zoom_out_sign"), bool):
         raise ConfigError("camera_pitch.zoom_out_sign debe ser -1 o 1 (sentido de la rueda que ALEJA la camara)")
-    if c.get("limit") not in ("horizontal", "arriba"):
-        raise ConfigError("camera_pitch.limit debe ser \"horizontal\" o \"arriba\"")
-    if c["min_drag_px"] < 20:
-        raise ConfigError("camera_pitch.min_drag_px debe ser >= 20 (un arrastre que casi no mueve el mouse puede seleccionar un monstruo)")
-    if c["max_drag_px"] < 2 * c["min_drag_px"]:
-        raise ConfigError("camera_pitch.max_drag_px debe ser >= 2 * min_drag_px")
-    if c["to_limit_px"] < c["min_drag_px"]:
-        raise ConfigError("camera_pitch.to_limit_px debe ser >= min_drag_px")
+    if not isinstance(c.get("t_taps"), int) or isinstance(c.get("t_taps"), bool):
+        raise ConfigError("camera_pitch.t_taps debe ser un entero >= 0 (toques cortos de T)")
+    if c["t_tap_ms"] > 600:
+        raise ConfigError("camera_pitch.t_tap_ms debe ser <= 600 (toques CORTOS: T mantenida llega a plano y acerca la camara)")
     if not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5 or not 0 < c["side_half_frac"] <= 0.5:
         raise ConfigError("camera_pitch.row_floor_frac debe estar en (0, 1] y strip_half_frac / side_half_frac en (0, 0.5]")
     if c["sample_top_px"] >= c["sample_bottom_px"]:

@@ -80,6 +80,8 @@
   "controls": {
     "attack_forward": "space", "pickup": "z", "mount": "ctrl+g", "buff": "f1",
     "camera_left": "q", "camera_right": "e",
+    "camera_top": "g",           // sube el plano de la camara (vista desde arriba)
+    "camera_flat": "t",          // baja el plano (perspectiva mas plana); mantenida llega a plano y ACERCA la camara
     "move_up": "w", "move_left": "a", "move_down": "s", "move_right": "d",
     //  deselect: SIN USO. El bot ya no aprieta Escape (con nada seleccionado abre el menu de opciones del juego); para dejar
     //  a un monstruo se hace clic directo en el metin. Queda por compatibilidad.
@@ -349,35 +351,23 @@
   //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
   //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
-  // Angulo vertical de la camara. NO se mide el angulo (la fila del horizonte depende del terreno): se REINICIA desde el tope.
-  //  reset = (1) clic derecho arrastrando to_limit_px (en arrastres de <= max_drag_px) hasta el tope `limit`: "horizontal" =
-  //  hacia ARRIBA (camara baja, se ve el horizonte); "arriba" = hacia ABAJO (camara desde arriba). Seguir arrastrando contra el
-  //  tope horizontal ACERCA la camara al personaje (comprobado en el juego), por eso (2) DESPUES la rueda hacia "lejos"
-  //  zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: 1 = hacia adelante, medido en Guabina; se prueba con
-  //  test_input.py --solo camara) recupera la distancia normal; (3) recien ahi se aleja del tope
-  //  from_limit_px (de ahi sale tu angulo normal). from_limit_px es una ESTIMACION (comparando samples/cam_01 y cam_02: el
-  //  horizonte pasa de la fila ~415 a ~100, unos 9-13 grados, con una ganancia supuesta de 0.15-0.25 grados por px): calibralo con
-  //  `calibrate.py camara-tope` (parado en terreno PLANO; manda input real: baja de a step_px hasta calib_max_px y propone el paso
-  //  que se parece a tu angulo normal; lo guarda aca).
+  // Angulo vertical de la camara (bot/camera_pitch.py). Con enabled false el bot NO toca la camara (ni al arrancar ni despues de
+  //  cada metin): para farmear con la camara acomodada a mano. Reinicio con TECLAS (sin arrastres del mouse ni medir el angulo):
+  //  (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: 1 = hacia adelante, medido en
+  //  Guabina; se prueba con test_input.py --solo camara); (b) mantener G (controls.camera_top) g_hold_s hasta el tope de la vista
+  //  desde arriba; (c) t_taps toques CORTOS de T (controls.camera_flat, t_tap_ms cada uno, t_gap_ms entre toques) hasta el
+  //  angulo de farmeo: nunca T mantenida (llega a plano y la camara se ACERCA al personaje; ese zoom solo se saca con la rueda);
+  //  (d) rueda hacia "lejos" otra vez, por seguridad. step_pause_s: pausa entre pasos. t_taps se calibra con
+  //  `calibrate.py camara` (guiado: toca T de a uno y pregunta).
   //  Cuando: al arrancar, despues de cada metin roto, al empezar una vuelta de busqueda si pasaron mas de every_s desde el ultimo
   //  reinicio, y cuando la camara mira el piso (floor_frames capturas seguidas sin horizonte mientras se busca; minimo min_gap_s
   //  entre reinicios, que se multiplica si el reinicio no saco la vista del piso). Nunca mientras ataca, recoge o hay captcha.
-  //  Seguridad: un arrastre siempre mueve el mouse >= min_drag_px (un clic derecho SIN mover sobre un monstruo lo selecciona) y su
-  //  inicio, medio y final estan a >= drag_clear_px de etiquetas, monstruos, objetos, piedras y personaje y fuera de la interfaz;
-  //  drag_s / drag_steps: duracion y pasos de cada arrastre; drag_pause_s: pausa entre arrastres; al final explore.settle_s.
-  //  Detector "mira el piso" (bot/vision/pitch.py como detector, no como medida): franja central de +-strip_half_frac del ancho;
-  //  el color del piso sale de una muestra a sample_top_px..sample_bottom_px debajo del personaje; un pixel es piso si su tono
-  //  difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila es piso con >= row_floor_frac de pixeles piso
-  //  (descartando UI y el rectangulo del personaje player_box_px = [medio ancho, arriba, abajo]); piso hasta el borde de arriba
-  //  = todo piso. Si la central no es medible (ladera de dos tonos), cuentan las dos franjas de +-side_half_frac centradas a
-  //  +-side_offset_frac del ancho. min_valid_px: pixeles utiles minimos por fila; min_floor_rows: menos filas que eso = dudoso.
-  //  (Medidos sobre samples/cam_*.png y debug/run_20261121_230828, ver PROGRESS.md.) step_px / calib_max_px: paso y tope de
-  //  `calibrate.py camara-tope`. (ref_horizon_frac, tolerance, gain_px_per_frac, max_steps, gain_ema, min_gain_move_frac,
-  //  calib_samples, calib_pause_s: de la correccion por horizonte, ya no se usan.)
-  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "limit": "horizontal", "to_limit_px": 700, "from_limit_px": 60,
-                   "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
-                   "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
-                   "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
+  //  Detector de "mira el piso" (bot/vision/pitch.py, solo como detector): min_confidence, strip_half_frac, sample_*,
+  //  player_box_px, tol_*, min_sat, row_floor_frac, run_rows, min_valid_px, min_floor_rows, side_offset_frac, side_half_frac.
+  //  (limit, to_limit_px, from_limit_px, *drag*, step_px, calib_max_px: del metodo de topes con arrastre, ya no se usan.)
+  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "t_taps": 4, "t_tap_ms": 120,
+                   "t_gap_ms": 200, "step_pause_s": 0.3, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                   "side_offset_frac": 0.14, "side_half_frac": 0.06,
                    "min_confidence": 0.5,
                    "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                    "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,

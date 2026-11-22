@@ -1,12 +1,18 @@
-"""Angulo vertical de la camara: reinicio desde el TOPE (no se mide el horizonte para saber el angulo: depende del terreno).
+"""Angulo vertical de la camara: reinicio con TECLAS (sin arrastres del mouse ni medir el horizonte para saber el angulo).
 
-`reset()` lleva el zoom al tope "lejos" (rueda), la camara al tope horizontal (clic derecho arrastrando hacia ARRIBA mas de lo
-que hace falta) y desde ahi baja una cantidad FIJA de pixeles (`from_limit_px`) hasta el angulo normal. El juego sube la camara
-solo al acercarse a bordes o montanas y NO la devuelve: por eso se reinicia al arrancar, tras cada metin roto, cada `every_s` y
-cuando se detecta que la camara mira el piso (`looks_at_floor`, con bot/vision/pitch.py solo como detector de "todo piso").
+Datos comprobados por Enzo en el juego:
+- G sube el plano de la camara (vista desde arriba, se ve el piso); T lo baja (perspectiva mas plana).
+- Si se mantiene T mucho, llega a plano y la camara se ACERCA al personaje (el mismo zoom que hacia el arrastre del mouse
+  contra el tope horizontal). Ese zoom NO se va al volver con G: solo se saca con la rueda hacia "lejos".
 
-Un arrastre siempre mueve el mouse (>= `min_drag_px`) y no empieza ni termina sobre un monstruo, una etiqueta, un metin, un
-objeto ni la interfaz: un clic derecho SIN mover sobre un monstruo lo selecciona. Config: `camera_pitch`.
+`reset()`: (a) rueda hacia "lejos" hasta el tope (`zoom_out_sign` x `zoom_out_clicks`); (b) mantener G `g_hold_s` (hasta el tope
+de la vista desde arriba, con margen); (c) `t_taps` toques cortos de T (`t_tap_ms` cada uno, `t_gap_ms` entre toques) para bajar
+al angulo de farmeo, NUNCA T mantenida hasta abajo; (d) rueda hacia "lejos" otra vez, por seguridad. `t_taps` se calibra con
+`calibrate.py camara`.
+
+Con `camera_pitch.enabled` false el bot no toca la camara para nada. El juego sube la camara solo al acercarse a bordes o
+montanas y no la devuelve: por eso se reinicia al arrancar, tras cada metin roto, cada `every_s` y cuando la camara mira el piso
+(`looks_at_floor`: bot/vision/pitch.py solo como detector de "todo piso", no como medida del angulo).
 """
 from __future__ import annotations
 
@@ -20,24 +26,9 @@ from bot.vision.pitch import measure_horizon
 
 logger = logging.getLogger(__name__)
 
-DRAG_BUTTON = "right"
+TOP_ACTION = "camera_top"     # controls: G, vista desde arriba
+FLAT_ACTION = "camera_flat"   # controls: T, perspectiva mas plana
 BACKOFF_MAX = 8   # tope del multiplo de `min_gap_s` tras reinicios por piso que no arreglaron nada
-# Filas (fraccion del alto) y columnas (fraccion del ancho) donde se prueba el punto inicial del arrastre.
-FREE_ROWS = (0.72, 0.64, 0.80, 0.56, 0.88, 0.48, 0.40, 0.32)
-FREE_COLS = (0.35, 0.65, 0.25, 0.75, 0.5, 0.15, 0.85)
-PATH_SAMPLES = (0.0, 0.5, 1.0)   # puntos del recorrido (fraccion de dy) que tienen que estar permitidos y libres
-
-
-def _gap(pt: tuple[int, int], rect: Any) -> float:
-    """Distancia de un punto a un rectangulo (0 si esta adentro)."""
-    return math.hypot(max(rect.x - pt[0], 0, pt[0] - rect.right), max(rect.y - pt[1], 0, pt[1] - rect.bottom))
-
-
-def split_px(total: int, max_px: int) -> list[int]:
-    """Parte `total` px en la menor cantidad de arrastres parejos de a lo sumo `max_px` (suman exactamente `total`)."""
-    n = max(1, math.ceil(total / max_px))
-    base, extra = divmod(int(total), n)
-    return [base + (1 if i < extra else 0) for i in range(n)]
 
 
 def looks_at_floor(img: Any, cfg: dict, mask: Any = None, player_xy: tuple[int, int] | None = None) -> bool:
@@ -64,7 +55,7 @@ def looks_at_floor(img: Any, cfg: dict, mask: Any = None, player_xy: tuple[int, 
 
 class CameraPitch:
     """Estado y logica del reinicio de la camara. No captura ni manda input por su cuenta: recibe `gi`, una funcion que
-    captura y percibe y una de espera."""
+    captura y percibe (para la mascara de la rueda) y una de espera."""
 
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
@@ -72,7 +63,7 @@ class CameraPitch:
         self.last_reset_t = -math.inf
         self.floor_streak = 0      # capturas seguidas mirando al piso
         self.fruitless = 0         # reinicios por piso seguidos que no sacaron la vista del piso
-        self.drags = 0             # arrastres mandados
+        self.actions = 0           # acciones mandadas (rueda, G, toques de T)
         self.resets = 0            # reinicios completos
 
     # --- cuando ---
@@ -99,105 +90,61 @@ class CameraPitch:
         self.floor_streak += 1
         return self.floor_streak >= int(self.c["floor_frames"]) and t - self.last_reset_t >= self.floor_gap_s()
 
-    # --- punto del arrastre ---
-    def free_point(self, p: Any, dy: int) -> tuple[int, int] | None:
-        """Punto del piso donde empezar un arrastre vertical de `dy` px: el inicio, el medio y el final permitidos por la
-        mascara y a >= `drag_clear_px` de toda etiqueta de metin, monstruo, objeto o piedra lejana y del personaje."""
-        h, w = p.shape[0], p.shape[1]
-        clear = float(self.c["drag_clear_px"])
-        rects = ([d.label_rect for d in p.metins] + [m.rect for m in p.monsters] + [i.rect for i in p.items]
-                 + [f.rect for f in p.far_metins])
-        px, py = p.player_xy
-        for fy in FREE_ROWS:
-            for fx in FREE_COLS:
-                x, y0 = int(w * fx), int(h * fy)
-                pts = [(x, y0 + int(round(dy * f))) for f in PATH_SAMPLES]
-                if not all(0 <= q[1] < h and p.mask.allows(*q) for q in pts):
-                    continue
-                gap = min([_gap(q, r) for q in pts for r in rects] + [math.hypot(q[0] - px, q[1] - py) for q in pts])
-                if gap >= clear:
-                    return (x, y0)
-        return None
-
-    # --- reinicio ---
-    def _drag(self, cur: tuple[Any, Any], perceive: Callable[[], Any], gi: Any, dy: int) -> tuple[Any, Any] | None:
-        """Un arrastre vertical con el clic derecho (`dy` < 0 = hacia arriba) desde un punto libre de la percepcion `cur`
-        (img, p). Devuelve la percepcion nueva (despues del arrastre) o None si no se pudo (se corta el reinicio)."""
-        assert abs(dy) >= int(self.c["min_drag_px"])   # un arrastre sin mover seleccionaria el monstruo de abajo
-        p = cur[1]
-        pt = self.free_point(p, dy)
-        if pt is None:
-            logger.warning("Camara: no hay un punto libre del piso para arrastrar %+d px: se corta el reinicio", dy)
-            return None
-        if not gi.drag(DRAG_BUTTON, pt[0], pt[1], 0, dy, p.mask, float(self.c["drag_s"]), int(self.c["drag_steps"])):
-            return None
-        self.drags += 1
-        return perceive()
-
-    def plan_down(self, px: int) -> list[int]:
-        """Arrastres (dy con signo, + = abajo) que bajan la camara `px` px en neto, cada uno de >= `min_drag_px` (y de <=
-        `max_drag_px`). Menos que `min_drag_px`: baja `px + min_drag_px` y vuelve a subir `min_drag_px` (neto `px`)."""
-        mn = int(self.c["min_drag_px"])
-        if px <= 0:
-            return []
-        return split_px(px, int(self.c["max_drag_px"])) if px >= mn else [px + mn, -mn]
-
-    def move_down(self, cur: tuple[Any, Any], perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None],
-                  px: int, limit: str | None = None) -> tuple[Any, Any] | None:
-        """Aleja la camara `px` px (neto) del tope `limit` hacia el angulo normal: desde el tope horizontal se arrastra hacia
-        ABAJO; desde el tope "arriba", hacia ARRIBA. Devuelve la percepcion final o None si se corto."""
-        sgn = 1 if (limit or self.c["limit"]) == "horizontal" else -1
-        for dy in self.plan_down(px):
-            cur = self._drag(cur, perceive, gi, sgn * dy)
-            if cur is None:
-                return None
-            sleep(float(self.c["drag_pause_s"]))
-        return cur
-
-    def to_top(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str,
-               down_px: int = 0, limit: str | None = None,
-               on_phase: Callable[[str, tuple[Any, Any]], None] | None = None) -> tuple[Any, Any] | None:
-        """Reinicio en 3 pasos: (1) arrastre con el clic derecho hasta el tope `limit` ("horizontal" = hacia ARRIBA;
-        "arriba" = hacia ABAJO, camara desde arriba). Ojo: seguir arrastrando contra el tope horizontal ACERCA la camara al
-        personaje (comprobado por Enzo); por eso (2) DESPUES la rueda hasta el tope "lejos" (`zoom_out_sign`) recupera la
-        distancia normal; (3) recien ahi se aleja `down_px` del tope hacia el angulo normal. `on_phase(nombre, (img, p))`
-        recibe la captura despues de "tope" y de "rueda" (calibracion). Devuelve la ultima percepcion o None si se corto."""
-        c = self.c
-        lim = limit or c["limit"]
-        self.last_reset_t, self.floor_streak = t, 0
-        sgn = -1 if lim == "horizontal" else 1   # dy < 0 = arrastre hacia arriba
-        drags = [sgn * d for d in split_px(int(c["to_limit_px"]), int(c["max_drag_px"]))]
-        clicks = int(c["zoom_out_clicks"])
-        wheel = int(c["zoom_out_sign"]) * clicks
-        logger.info("Camara: reinicio desde el tope %s (arrastre %s %d px, despues rueda %+d para alejar "
-                    "[zoom_out_sign = %d], despues %d px hacia el angulo normal) [%s]", lim,
-                    "hacia arriba" if sgn < 0 else "hacia abajo", int(c["to_limit_px"]), wheel, int(c["zoom_out_sign"]),
-                    down_px, why)
+    # --- pasos del reinicio ---
+    def wheel_out(self, perceive: Callable[[], Any], gi: Any) -> bool:
+        """Rueda hacia "lejos" hasta el tope (`zoom_out_sign` x `zoom_out_clicks`) sobre el personaje. False si se corto."""
+        clicks = int(self.c["zoom_out_clicks"])
+        if clicks <= 0:
+            return True
         cur = perceive()
         if cur is None:
-            return None
-        for dy in drags:
-            cur = self._drag(cur, perceive, gi, dy)
-            if cur is None:
-                return None
-            sleep(float(c["drag_pause_s"]))
-        if on_phase is not None:
-            on_phase("tope", cur)
-        if clicks > 0:
-            if not gi.zoom(wheel, cur[1].mask):
-                logger.warning("Camara: no se pudo girar la rueda (zoom lejos); sigo")
-            sleep(float(c["drag_pause_s"]))
-            cur = perceive()   # el zoom movio todo en pantalla: se vuelven a ubicar monstruos y etiquetas
-            if cur is None:
-                return None
-        if on_phase is not None:
-            on_phase("rueda", cur)
-        return self.move_down(cur, perceive, gi, sleep, down_px, lim)
+            return False
+        wheel = int(self.c["zoom_out_sign"]) * clicks
+        if not gi.zoom(wheel, cur[1].mask):
+            logger.warning("Camara: no se pudo girar la rueda (zoom lejos)")
+            return False
+        self.actions += 1
+        return True
+
+    def top(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None]) -> bool:
+        """Pasos (a) y (b): rueda lejos y G mantenida `g_hold_s` hasta el tope de la vista desde arriba. False si se corto."""
+        if not self.wheel_out(perceive, gi):
+            return False
+        sleep(float(self.c["step_pause_s"]))
+        if not gi.hold(TOP_ACTION, float(self.c["g_hold_s"])):
+            return False
+        self.actions += 1
+        sleep(float(self.c["step_pause_s"]))
+        return True
+
+    def tap_down(self, gi: Any, sleep: Callable[[float], None], n: int) -> bool:
+        """Paso (c): `n` toques cortos de T (`t_tap_ms`, `t_gap_ms` entre toques). Nunca T mantenida. False si se corto."""
+        for _ in range(max(0, int(n))):
+            if not gi.hold(FLAT_ACTION, float(self.c["t_tap_ms"]) / 1000):
+                return False
+            self.actions += 1
+            sleep(float(self.c["t_gap_ms"]) / 1000)
+        return True
+
+    def run(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], taps: int | None = None) -> bool:
+        """Reinicio completo (a-d) con `taps` toques de T (default `t_taps`). True si llego hasta el final."""
+        n = int(self.c["t_taps"]) if taps is None else int(taps)
+        if not self.top(perceive, gi, sleep) or not self.tap_down(gi, sleep, n):
+            return False
+        sleep(float(self.c["step_pause_s"]))
+        return self.wheel_out(perceive, gi)   # (d) por seguridad: un toque de T de mas acerca la camara
 
     def reset(self, perceive: Callable[[], Any], gi: Any, sleep: Callable[[float], None], t: float, why: str) -> bool:
-        """Reinicio desde el tope (`to_top`: arrastre al tope `limit`, rueda lejos, `from_limit_px` hacia el angulo normal). `perceive()` captura y devuelve
-        (img, Perception) o None (ventana minimizada, captcha: se corta). True si llego hasta el final."""
-        if self.to_top(perceive, gi, sleep, t, why, int(self.c["from_limit_px"])) is None:
+        """Reinicio de la camara (`run`). `perceive()` captura y devuelve (img, Perception) o None (ventana minimizada, captcha:
+        se corta). True si llego hasta el final."""
+        if not self.enabled:
+            return False
+        self.last_reset_t, self.floor_streak = t, 0
+        c = self.c
+        logger.info("Camara: reinicio (rueda %+d, G %.1f s, T x%d de %d ms, rueda %+d) [%s]",
+                    int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"]), float(c["g_hold_s"]), int(c["t_taps"]),
+                    int(c["t_tap_ms"]), int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"]), why)
+        if not self.run(perceive, gi, sleep):
             return False
         sleep(float(self.cfg["explore"]["settle_s"]))
         self.resets += 1

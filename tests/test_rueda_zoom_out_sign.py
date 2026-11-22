@@ -66,13 +66,14 @@ def test_el_test_de_guardia_detecta_un_sentido_fijo():
 
 class _GI:
     def __init__(self):
-        self.wheel = []
+        self.wheel, self.held = [], []
 
     def zoom(self, clicks, mask):
         self.wheel.append(clicks)
         return True
 
-    def drag(self, *a, **k):
+    def hold(self, action, seconds):
+        self.held.append((action, seconds))
         return True
 
 
@@ -92,8 +93,7 @@ def test_calibrate_y_bot_usan_el_zoom_out_sign_de_config_json(tmp_path, sign):
     cfg = load_config(p)
     gi = _GI()
     cp = CameraPitch(cfg)
-    cp._drag = lambda cur, perceive, gi_, dy: cur   # los arrastres al tope no importan aca: solo la rueda de despues
     perc = (None, type("P", (), {"mask": _Mask()})())
-    calls = iter([perc, perc, None])
-    cp.to_top(lambda: next(calls), gi, lambda s: None, 0.0, "test")
-    assert gi.wheel == [sign * int(DEFAULTS["camera_pitch"]["zoom_out_clicks"])]
+    assert cp.reset(lambda: perc, gi, lambda s: None, 0.0, "test") is True   # rueda, G, toques de T, rueda
+    n = sign * int(DEFAULTS["camera_pitch"]["zoom_out_clicks"])
+    assert gi.wheel == [n, n] and gi.held[0] == ("camera_top", cfg["camera_pitch"]["g_hold_s"])

@@ -453,7 +453,7 @@ class Bot(ApproachKeysMixin):
         self._frames = 0                   # percepciones completas hechas (para la compuerta de giros de busqueda)
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
         self._turn_frame = -10**9          # valor de `_frames` en ese giro (el primero no espera)
-        self.pitch = CameraPitch(cfg)      # angulo vertical de la camara (referencia + correccion con clic derecho)
+        self.pitch = CameraPitch(cfg)      # angulo vertical de la camara (reinicio con rueda, G y toques de T)
         self._scan: _Scan | None = None    # barrido de busqueda en curso mientras se ataca
         self._scan_off = False             # girar la camara cortaba el ataque: no se busca mas mientras se ataca
         self._scan_t = -math.inf           # hora en que empezo el ultimo barrido
@@ -1836,15 +1836,15 @@ class Bot(ApproachKeysMixin):
         return img, self._perceive(img, self.cfg, parts=PARTS[State.BUSCAR])
 
     def _pitch_reset(self, why: str) -> bool:
-        """Reinicia el angulo vertical de la camara desde el tope (zoom lejos, arriba, abajo; ver bot/camera_pitch.py). Solo se
-        llama buscando/explorando, al arrancar o al terminar de recoger: nunca atacando, recogiendo ni con captcha. True si
-        mando algun arrastre; entonces marca la compuerta de giros (la imagen cambio: hay que analizarla antes de seguir)."""
+        """Reinicia el angulo vertical de la camara (rueda lejos, G, toques de T, rueda; ver bot/camera_pitch.py). Solo se
+        llama buscando/explorando, al arrancar o al terminar de recoger: nunca atacando, recogiendo ni con captcha. Con
+        `camera_pitch.enabled` false no hace nada. True si mando algo; entonces marca la compuerta de giros (la imagen cambio)."""
         cp = self.pitch
         if not cp.enabled or self.state in (State.ATACAR, State.RECOGER, State.CAPTCHA, State.MUERTO, State.FIN):
             return False
-        before = cp.drags
+        before = cp.actions
         cp.reset(self._pitch_perceive, self.gi, self._sleep, self.clock(), why)
-        moved = cp.drags > before
+        moved = cp.actions > before
         if moved:
             self._turn_t, self._turn_frame = self.clock(), self._frames
         return moved
