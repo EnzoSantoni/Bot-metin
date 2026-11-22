@@ -441,14 +441,17 @@ def test_destrabe_agota_intentos_y_va_al_centro():
     assert h.keys("s") >= 1                                                  # uno de los intentos fue ATRAS
 
 
-def test_atacar_sin_confirmar_reclickea_y_trabado_destraba():
+def test_atacar_sin_confirmar_reclickea_quieto_y_a_los_max_clicks_elige_otro():
+    """Sin panel y sin avanzar: clics quietos separados por `attack.min_click_gap_s`, tope `approach.max_clicks` y despues se
+    aparta el metin unos segundos (no se lo descarta 10 minutos) y se elige otro."""
     def script(h, n):
         return perc(metins=[metin()])
 
     h = Harness(script, attack={"confirm_timeout_s": 1.0})
     h.train_camera()
-    h.run_until(lambda: State.DESTRABAR in h.states())
-    assert h.states()[:2] == [State.ATACAR, State.DESTRABAR] and h.clicks() >= 2
+    h.run_until(lambda: any(w.startswith("sin confirmar:") for _, w in h.seen))
+    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and h.clicks() == int(h.cfg["approach"]["max_clicks"])
+    assert all(s.expiry - h.clock.t <= 31 for s in h.bot.discarded)
 
 
 NEAR_EDGE_XY = (442, 170)   # adentro del poligono a +4.6 u del borde (menos que explore_margin)

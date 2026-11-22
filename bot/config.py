@@ -129,9 +129,16 @@ DEFAULTS: dict[str, Any] = {
                # (no se juzga trabado por estar quieto).
                "sidestep_s": 0.6, "max_unstick": 4, "arrive_px": 120,
                # Punto de clic: el de la etiqueta (click_dy debajo de ella) se corre hacia arriba label_click_up_frac * click_dy
-               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_check_s del clic sin panel
+               # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_wait_s del clic sin panel
                # de metin, reclic mejor apuntado (hasta quick_reclicks; si cae en el mismo punto, quick_up_px mas arriba).
-               "label_click_up_frac": 0.37, "confirm_check_s": 0.5, "quick_reclicks": 2, "quick_up_px": 10,
+               "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+               # RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
+               # movimiento (coordenadas cambiando). name_gap_px: el clic nunca cae a menos de tantos px debajo del nombre.
+               # PANEL AUSENTE (error del juego: a veces atacando un metin no aparece la barra de vida): si el personaje esta
+               # quieto y pegado y hay un monstruo cerca, panel_recover hace UN clic derecho (apretar y soltar, sin mover) sobre
+               # el cuerpo del monstruo por episodio; si el panel vuelve al metin sigue atacando, si no en recover_wait_s hay un
+               # clic izquierdo al metin. La senal por animacion del arma NO se implemento (no es confiable sin secuencias).
+               "min_click_gap_s": 1.5, "name_gap_px": 20, "panel_recover": True, "recover_wait_s": 1.5,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
                "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
@@ -220,6 +227,16 @@ DEFAULTS: dict[str, Any] = {
                  "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                  "far_monsters_n": 2, "far_monsters_px": 200,
                  "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,
+                 # ACERCARSE con teclado: a mas de click_floor (distancia de piso) se alinea la vista con Q/E hasta que la piedra
+                 # quede a <= center_tol_px del centro horizontal, se camina con W en tramos de walk_chunk_s (re-detectando la
+                 # piedra) y se FRENA al llegar a click_floor; quieto (quiet_reads lecturas iguales y settle_s sin tecla) un
+                 # clic en el cuerpo. Sin confirmar, otro clic quieto y a los max_clicks se elige otro (sin descartar: la
+                 # posicion se ignora retry_ignore_s). align_turns_max giros seguidos sin centrar -> se camina igual.
+                 # Tramos de W sin avanzar (keynav: stuck): con bichos ESPACIO, si no se cancela el acercamiento (o se hace el clic si
+                 # esta a <= stuck_click_floor).
+                 "keys_enabled": True, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
+                 "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
+                 "stuck_click_floor": 4.0,
                  "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
     # CENTRO: llega al centro del poligono a <= arrive_dist unidades (el tope de tiempo es volver.max_seconds).
     "center": {"arrive_dist": 8.0},
@@ -518,6 +535,7 @@ OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("appr
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
                  ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
+                 ("attack", "confirm_check_s"),
                  # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
                  ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
                  ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
@@ -998,9 +1016,14 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                       "label_exclude_down_px", "blind_player_radius", "max_tries_per_spot",
                       "blind_near_floor", "metin_outside_u",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
-                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s"),
+                      "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s", "click_floor",
+                      "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
+                      "align_turns_max", "stuck_click_floor"),
          ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
-          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries"))
+          "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries", "click_floor",
+          "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
+    if not isinstance(cfg["approach"].get("keys_enabled"), bool):
+        raise ConfigError("approach.keys_enabled debe ser true o false")
     nums("center", ("arrive_dist",), ("arrive_dist",))
     nums("loop", ("cycle_ms", "captcha_full_search_every", "hold_chunk_s"), ("captcha_full_search_every", "hold_chunk_s"))
     nums("attack", ("confirm_timeout_s", "hp_stall_s", "max_reclicks", "max_seconds", "broken_confirm_cycles",
@@ -1010,14 +1033,16 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "max_deselect_reclicks", "reclick_wait_s", "hp_progress_s", "reclick_stall_s", "monster_clear_px",
                     "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
-                    "confirm_check_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
-                    "lost_swap_after"),
+                    "confirm_wait_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
+                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
           "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s", "confirm_check_s", "lost_swap_after"))
+          "next_keep_s", "keep_with_others_s", "confirm_wait_s", "lost_swap_after", "min_click_gap_s", "recover_wait_s"))
     a = cfg["attack"]
+    if not isinstance(a.get("panel_recover"), bool):
+        raise ConfigError("attack.panel_recover debe ser true o false")
     if not isinstance(a.get("scan_enabled"), bool):
         raise ConfigError("attack.scan_enabled debe ser true o false")
     if not 0 <= a["label_click_up_frac"] < 1:

@@ -200,8 +200,8 @@ def test_i2_tope_de_aproximaciones_por_posicion():
     h.bot.tracker.update(Coords(550, 150, 1.0), h.clock())
     c = _FarCand(p.far_metins[0], (580.0, 150.0))
     n = int(h.cfg["approach"]["max_tries_per_spot"])
-    assert all(h.bot._register_approach(c, p, 0.0) is not None for _ in range(n))
-    assert h.bot._register_approach(c, p, 0.0) is None and h.bot.ignored
+    assert all(h.bot._register_approach(c.gp, c.far.center, p, 0.0) is not None for _ in range(n))
+    assert h.bot._register_approach(c.gp, c.far.center, p, 0.0) is None and h.bot.ignored
 
 
 # ---------------------------------------------------------------- I3 / I4
