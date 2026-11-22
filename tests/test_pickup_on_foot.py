@@ -196,14 +196,14 @@ def test_z_se_repite_hasta_que_desaparece_la_etiqueta_y_recien_ahi_el_siguiente(
     assert "Z (4) esperando que desaparezca" in caplog.text and "recogido(s)" in caplog.text
 
 
-def test_se_reacomoda_tras_2_z_y_sigue_con_z(caplog):
+def test_se_reacomoda_tras_el_primer_z_y_sigue_con_z(caplog):
     caplog.set_level(logging.INFO)
-    h = floor_harness([DOWN], floor_kw={"misplaced_until": 2})     # las primeras 2 Z no juntan: mal ubicado
+    h = floor_harness([DOWN], floor_kw={"misplaced_until": 3})     # las primeras 3 Z no juntan: mal ubicado
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
-    assert "reacomodo sobre el objeto (" in caplog.text and "tras 2 Z" in caplog.text
+    assert caplog.text.count("reacomodo sobre el objeto (") == 1 and "tras 1 Z" in caplog.text
     assert "salteo" not in caplog.text and "me rindo" not in caplog.text
-    assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 3
+    assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 4   # la cuarta Z lo junta: no se saltea
 
 
 def test_saltea_tras_4_z_con_reacomodo_y_pasa_al_siguiente(caplog):

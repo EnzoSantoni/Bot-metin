@@ -256,6 +256,7 @@ class _Cur:
     z: int = 0                                      # Z apretadas sobre el
     z_t: float = -math.inf                          # instante del ultimo Z
     repo_done: bool = False                         # ya se reacomodo sobre el (una vez, tras pickup.reposition_after_z Z)
+    items_n: int = 0                                # objetos pendientes al primer Z (si bajan, los Z juntaron otro)
     gone: int = 0                                   # capturas seguidas sin verlo
     moved: bool = False                             # el ciclo anterior camino: la etiqueta pudo correrse en pantalla
 
@@ -593,8 +594,10 @@ class Bot(ApproachKeysMixin):
             self._update_episode(t)
         if self.state in (State.ATACAR, State.RECOGER, State.ACERCARSE):
             self._no_target_t = t      # atacando o yendo a una piedra: hay objetivo
-        if self._early_down and self._cur is None and self.state not in (State.ATACAR, State.RECOGER):
-            self._early_down = False   # se bajo con la vida baja y el metin ya no esta en curso (no se rompio): se sube
+        if self._early_down and self._cur is None and self.state is State.BUSCAR:
+            # se bajo con la vida baja y el metin ya no esta en curso (no se rompio): se sube en BUSCAR (quieto; en VOLVER la
+            # espera de Ctrl+G con el personaje todavia caminando lo sacaba de la zona)
+            self._early_down = False
             logger.info("Me habia bajado con la vida del metin baja y ya no hay metin en curso: me subo al caballo")
             if not self._remount():
                 return
@@ -1608,12 +1611,13 @@ class Bot(ApproachKeysMixin):
 
     def _early_dismount(self, a: _Attack, hp: float | None) -> bool:
         """Vida del metin por debajo de `pickup.dismount_hp` en 2 lecturas seguidas: Ctrl+G ya, para estar a pie cuando se
-        rompe (si no se rompe se sigue atacando a pie). Solo con `pickup.dismount`. False si un captcha corto la espera."""
+        rompe (si no se rompe se sigue atacando a pie). Solo con `pickup.dismount` y con el personaje QUIETO pegandole (la
+        espera de Ctrl+G caminando lo podia sacar de la zona). False si un captcha corto la espera."""
         lim = float(self.pk["dismount_hp"])
         if lim <= 0 or not self.pk["dismount"] or self._dismounted or hp is None:
             return True
         a.low_reads = a.low_reads + 1 if 0 < hp < lim else 0
-        if a.low_reads < 2:
+        if a.low_reads < 2 or a.walking or self._is_moving():
             return True
         logger.info("Vida del metin %.0f%% (menos de %.0f%%): me bajo del caballo ya (a pie cuando se rompa)", hp * 100,
                     lim * 100)
@@ -2336,6 +2340,8 @@ class Bot(ApproachKeysMixin):
         cur.moved = False
         if t - cur.z_t < float(self.pk["z_interval_s"]):
             return   # esperando que el ultimo Z haga efecto
+        if cur.z >= int(self.pk["max_z_per_item"]) and len(pending) < cur.items_n:
+            cur.z, cur.items_n = 0, len(pending)   # esos Z juntaron OTRO objeto (el juego junta el mas cercano): no cuentan
         if cur.z >= int(self.pk["max_z_per_item"]):   # el ultimo Z ya tuvo su tiempo y el objeto sigue ahi
             logger.info("Recoger: salteo el objeto (%d, %d): no desaparecio tras %d Z (con reacomodo); sigo con los demas",
                         cur.point[0], cur.point[1], cur.z)
@@ -2348,6 +2354,8 @@ class Bot(ApproachKeysMixin):
                 cur.moved = True
                 self._pickup_walk(p, pt, d)
                 return
+        if cur.z == 0:
+            cur.items_n = len(pending)
         cur.z += 1
         cur.z_t = k.z_t = t
         k.presses += 1

@@ -309,7 +309,7 @@
   "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
              "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-             "gone_cycles": 2, "reposition_after_z": 2, "reposition_frac": 0.5, "item_max_s": 15.0,
+             "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
              "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
              //  dismount_hp: atacando, cuando la vida del metin baja de esta fraccion (2 lecturas seguidas del panel) se baja
              //  del caballo ya (Ctrl+G), para estar a pie cuando se rompe; si no se rompe sigue atacando a pie. Si el metin deja
