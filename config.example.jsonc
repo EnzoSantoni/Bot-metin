@@ -350,8 +350,8 @@
   //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
   // Angulo vertical de la camara. NO se mide el angulo (la fila del horizonte depende del terreno): se REINICIA desde el tope.
-  //  reset = (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: -1 = hacia atras; si en el
-  //  juego aprieta el zoom en vez de alejar, ponelo en 1; se prueba con test_input.py --solo camara); (b) clic derecho
+  //  reset = (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: 1 = hacia adelante, medido en Guabina
+  //  (con -1 la camara se acercaba); si en otro juego acerca en vez de alejar, ponelo en -1; se prueba con test_input.py --solo camara); (b) clic derecho
   //  arrastrando hacia ARRIBA to_limit_px en total (tope horizontal; en arrastres de <= max_drag_px); (c) arrastre hacia ABAJO
   //  from_limit_px (de ahi sale tu angulo normal). from_limit_px es una ESTIMACION (comparando samples/cam_01 y cam_02: el
   //  horizonte pasa de la fila ~415 a ~100, unos 9-13 grados, con una ganancia supuesta de 0.15-0.25 grados por px): calibralo con
@@ -372,7 +372,7 @@
   //  (Medidos sobre samples/cam_*.png y debug/run_20261121_230828, ver PROGRESS.md.) step_px / calib_max_px: paso y tope de
   //  `calibrate.py camara-tope`. (ref_horizon_frac, tolerance, gain_px_per_frac, max_steps, gain_ema, min_gain_move_frac,
   //  calib_samples, calib_pause_s: de la correccion por horizonte, ya no se usan.)
-  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "to_limit_px": 700, "from_limit_px": 60,
                    "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
                    "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
                    "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,

@@ -1,3 +1,4 @@
+import ctypes
 """Angulo vertical de la camara: detector de "mira el piso" (bot/vision/pitch.py + bot/camera_pitch.py), reinicio desde el tope
 (rueda + arrastres del clic derecho), cuando lo hace el bot, GameInput.drag y `calibrate.py camara-tope`. Todo simulado (nada de
 input real)."""
@@ -120,7 +121,7 @@ def test_config_camera_pitch_por_defecto_y_validacion():
     c = cfg()
     validate_config(c)
     p = c["camera_pitch"]
-    assert p["enabled"] is True and p["zoom_out_clicks"] == 20 and p["zoom_out_sign"] == -1
+    assert p["enabled"] is True and p["zoom_out_clicks"] == 20 and p["zoom_out_sign"] == 1
     assert (p["to_limit_px"], p["from_limit_px"], p["max_drag_px"], p["min_drag_px"]) == (700, 60, 200, 20)
     assert (p["every_s"], p["floor_frames"], p["min_gap_s"], p["step_px"], p["calib_max_px"]) == (60.0, 2, 8.0, 15, 300)
     for old in ("ref_horizon_frac", "tolerance", "gain_px_per_frac", "max_steps", "gain_ema"):
@@ -226,7 +227,7 @@ def test_reset_secuencia_rueda_arriba_y_abajo():
     cp = CameraPitch(c)
     sleeps = []
     assert cp.reset(one(), g, sleeps.append, 100.0, "prueba") is True
-    assert be.events[0][0] == "move_to" and be.events[1] == ("scroll", -20)   # primero la rueda (zoom lejos, sentido -1)
+    assert be.events[0][0] == "move_to" and be.events[1] == ("scroll", 20)   # primero la rueda (zoom lejos, sentido 1)
     d = drags_of(be)
     ups, downs = [dy for _, dy in d if dy < 0], [dy for _, dy in d if dy > 0]
     assert sum(ups) == -700 and all(dy <= -20 and abs(dy) <= 200 for dy in ups)
@@ -352,7 +353,7 @@ def test_reinicia_al_arrancar_despues_de_la_cuenta_regresiva():
     h = Harness(lambda h, n: perc(), cfg=pitch_cfg())
     with_cam(h, SimCam())
     h.bot.run(max_minutes=0.001)   # corre y termina enseguida por tiempo
-    assert scrolls(h)[0] == ("scroll", -20)
+    assert scrolls(h)[0] == ("scroll", 20)
     assert h.drag_states and h.drag_states[0][0] is State.BUSCAR
     assert h.bot.pitch.resets == 1 and h.be.pressed == ([], [])
 
@@ -385,7 +386,7 @@ def test_reinicia_despues_de_romper_y_recoger_y_nunca_atacando_ni_recogiendo(cap
     h.bot.pitch.last_reset_t = h.clock.t   # ya reinicio al arrancar: aqui solo interesa el de despues de recoger
     h.run_until(lambda: h.bot.stats.metins == 1 and right_drags(h) >= 1)
     assert State.RECOGER in h.states() and ("mouse_down", "left") in h.be.events and h.be.pressed == ([], [])
-    assert scrolls(h) == [("scroll", -20)]
+    assert scrolls(h) == [("scroll", 20)]
     assert any("[metin roto y recogido]" in r.getMessage() for r in caplog.records)
     assert all(s not in (State.ATACAR, State.RECOGER, State.CAPTCHA) for s, _, _ in h.drag_states)
 
@@ -504,7 +505,7 @@ def test_camara_tope_pasos_capturas_propuesta_y_guardado_con_bak(tmp_cfg, tmp_pa
     assert tmp_cfg.with_name("config.json.bak").read_text(encoding="utf-8") == original
     assert s.ticks == [1] and any("propuesto: 255 px" in line for line in s.out)
     ev = s.be.events
-    assert [e for e in ev if e[0] == "scroll"][0] == ("scroll", -20)   # primero la rueda
+    assert [e for e in ev if e[0] == "scroll"][0] == ("scroll", 20)   # primero la rueda
     assert ("mouse_down", "left") not in ev and s.be.pressed == ([], [])
     assert ev.count(("mouse_down", "right")) == ev.count(("mouse_up", "right")) > 20
     assert all(abs(dy) >= 20 for _, dy in drags_of(s.be))              # siempre moviendo el mouse
@@ -588,3 +589,23 @@ def test_drag_respeta_la_mascara_en_inicio_y_fin(caplog):
     with pytest.raises(ValueError):
         g.drag("right", 900, 700, 0, 100, None, 0.3)
     assert g.drag("right", 900, 700, 0, 5000, open_mask(), 0.3) is False   # el final cae fuera del cliente
+
+
+# ---------------------------------------------------------------- sentido de la rueda (Guabina: hacia adelante aleja)
+def test_send_wheel_positivo_es_hacia_adelante(monkeypatch):
+    """La cadena real: gi.zoom(+N) -> backend.scroll(+N) -> send_wheel(+N) = N eventos con delta +WHEEL_DELTA (adelante)."""
+    import bot.input.pydirect as pd
+    sent = []
+
+    class _U32:
+        def SendInput(self, n, ref, size):
+            inp = ref._obj
+            sent.append(ctypes.c_int32(inp.mi.mouseData).value)
+            return 1
+
+    monkeypatch.setattr(pd, "_user32", lambda: _U32())
+    pd.send_wheel(3)
+    assert sent == [pd.WHEEL_DELTA] * 3
+    sent.clear()
+    pd.send_wheel(-2)
+    assert sent == [-pd.WHEEL_DELTA] * 2

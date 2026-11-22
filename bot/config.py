@@ -171,7 +171,7 @@ DEFAULTS: dict[str, Any] = {
     # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
     # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "to_limit_px": 700, "from_limit_px": 60,
                      "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
                      "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
                      "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
