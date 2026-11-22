@@ -46,14 +46,16 @@ def laps(caplog):
 def test_una_sola_vuelta_elige_el_mas_cercano_y_gira_directo(caplog):
     caplog.set_level(logging.INFO)
     env = env_for(FACING_WEST)
-    near = env.world.add_metin((650.0, 150.0), name=OSC)     # 90 u al este (mas lejos que explore.sweep_attack_u)
+    near = env.world.add_metin((650.0, 150.0), name=OSC)     # 90 u al este (piso ~7: mas lejos que approach.near_floor)
     env.world.add_metin((680.0, 175.0), name=OSC)            # 125 u
     env.world.add_metin((700.0, 130.0), name=NEG)            # 145 u
     assert env.run_until(lambda: env.world.clicks_on_metin, max_s=200) == "cond"
     assert env.world.clicks_on_metin[0][1] is near
     ms = msgs(caplog)
     lap = [m for m in ms if m.startswith("Vuelta de busqueda: ") and "candidatos (mejor" in m]
-    assert len(lap) == 1 and "3 candidatos" in lap[0] and "metin_de_oscuridad en (650," in lap[0]
+    # las piedras lejanas (> near_floor) no se confirman con hover durante la vuelta: quedan como piedras sin confirmar
+    assert len(lap) == 1 and "3 candidatos" in lap[0] and "en (650, 150) del mapa" in lap[0]
+    assert not any("hover para leer el nombre" in m for m in ms)
     assert laps(caplog) == 1   # una vuelta, no mas
     assert count(caplog, "Giro hacia el candidato en (650, 150) del mapa") == 1
     assert not any("sin nueva vuelta" in m for m in ms)

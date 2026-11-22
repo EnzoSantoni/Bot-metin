@@ -328,22 +328,22 @@
               "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0,
               "sweep_deg": 325.0, "sweep_max_factor": 1.5,
               //  Paso de la vuelta: sweep_step_deg grados por giro (campo de vision horizontal estimado ~70 grados: 30 grados deja
-              //  ~57% de superposicion); se analiza en cada paso. Metin con nombre objetivo a <= sweep_attack_u del personaje (o a
-              //  <= sweep_cut_floor de piso): se ataca ya. Piedras: hover para confirmar el nombre (hasta sweep_max_hovers por vuelta).
-              "sweep_step_deg": 30.0, "sweep_attack_u": 60.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+              //  ~57% de superposicion); se analiza en cada paso. Metin con nombre objetivo "cerca" (approach.near_floor de piso o
+              //  menos): se ataca ya, sin terminar la vuelta. Solo las piedras cerca se confirman con hover (hasta sweep_max_hovers
+              //  por vuelta); las lejanas quedan en la lista sin confirmar.
+              "sweep_step_deg": 30.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
               "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
-              "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
+              "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0,
               "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
               "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
   //  UNA VUELTA (con el rumbo de la camara leido del cono del minimapa, vision.minimap): el barrido gira en pasos hasta sweep_deg
   //  grados acumulados (tope: camera_steps * sweep_max_factor pasos) y arma la LISTA de candidatos con su posicion en el MAPA
   //  (coordenadas del juego: jugador + ground_scale_u x vector de piso girado al rumbo de la camara). Al terminar elige el
-  //  mejor: etiquetas antes que piedras, el mas cercano y, a igual distancia (candidate_tie_u), el mas cerca del centro de la
-  //  zona; solo dentro de la zona o la tolerancia. Gira directo hacia el (aim_tol_deg, hasta aim_max_turns giros, mide el rumbo
+  //  mas cercano (etiqueta o piedra) y, a igual distancia (candidate_tie_u), el mas cerca del centro de la zona; solo dentro de la zona o la tolerancia. Gira directo hacia el (aim_tol_deg, hasta aim_max_turns giros, mide el rumbo
   //  logrado con el minimapa), espera la compuerta y va al candidato de pantalla mas cercano a la posicion esperada; si no
   //  aparece camina candidate_walk_u hacia el (candidate_walk_tries veces) y vuelve a mirar. No hay otra vuelta mientras la lista
-  //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Una
-  //  etiqueta objetivo a menos de sweep_cut_floor de piso (muy pegada) corta la vuelta y se ataca. Vuelta sin nada: va al
+  //  tenga candidatos (candidate_keep_s de vigencia; se borran los que caen a candidate_broken_u de un metin roto). Un metin
+  //  objetivo con nombre a approach.near_floor de piso o menos corta la vuelta (o el giro hacia un candidato) y se ataca ya. Vuelta sin nada: va al
   //  punto listo del mapa de metin (hora desconocida = lista) o, si no hay, al centro (si esta a mas de center_return_u); se camina
   //  hasta llegar (arrive_u / navigation.arrive_dist) y recien ahi se busca. Ya en el centro y sin nada: otra vuelta alli, hasta
   //  center_laps seguidas; despues, un tramo al azar. Sin cono legible se usa el rumbo estimado por el movimiento.
@@ -407,6 +407,9 @@
                //  se ignora retry_ignore_s, no se descarta). align_turns_max giros seguidos sin centrar: se camina igual.
                //  Tramos de W sin avanzar: con bichos ESPACIO; sin bichos se cancela el acercamiento (o clic si ya
                //  esta a <= stuck_click_floor). keys_enabled=false vuelve al clic que camina solo.
+               //  near_floor: metin objetivo "cerca" (distancia de piso). Durante la vuelta de busqueda o al girar hacia un
+               //  candidato, uno con nombre a esta distancia o menos se ataca en ese momento, aunque haya otros o falte vuelta.
+               "near_floor": 4.0,
                "keys_enabled": true, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
                "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
                "stuck_click_floor": 4.0,

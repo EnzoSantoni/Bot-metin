@@ -199,7 +199,7 @@ DEFAULTS: dict[str, Any] = {
                 # aim_max_turns giros) y, si no aparece, se camina candidate_walk_u hacia el (hasta candidate_walk_tries veces).
                 # candidate_keep_s: vigencia; candidate_merge_u: fusion de los que caen cerca; candidate_tie_u: empate de distancia
                 # (gana el mas cerca del centro); candidate_max_u: mas lejos no se guarda; candidate_broken_u: radio que se borra
-                # alrededor de un metin roto; sweep_cut_floor: etiqueta objetivo a menos de esta distancia de piso corta la vuelta;
+                # alrededor de un metin roto; un metin objetivo "cerca" (approach.near_floor) corta la vuelta y se ataca ya;
                 # center_return_u: sin metin y sin punto del mapa listo -> centro si esta a mas de esto (se camina hasta llegar);
                 # center_laps: vueltas de busqueda seguidas en el centro sin nada antes de permitir un tramo al azar.
                 # ground_scale_u: escala inicial (unidades del juego por unidad de piso), se aprende (ground_scale_ema) acotada a
@@ -207,11 +207,12 @@ DEFAULTS: dict[str, Any] = {
                 "sweep_deg": 325.0, "sweep_max_factor": 1.5,
                 # Paso de la vuelta: sweep_step_deg grados por giro (campo de vision horizontal estimado ~70 grados con
                 # vision.ground.focal_frac 0.7: 30 grados deja ~57% de superposicion). En cada paso se analiza; un metin con
-                # nombre objetivo a <= sweep_attack_u del personaje (o a <= sweep_cut_floor de piso) se ataca ya, sin terminar
-                # la vuelta; una piedra se confirma con hover (hasta sweep_max_hovers por vuelta) y se guarda en la lista.
-                "sweep_step_deg": 30.0, "sweep_attack_u": 60.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
+                # nombre objetivo a <= approach.near_floor de piso se ataca ya, sin terminar la vuelta (lo mismo al girar hacia un
+                # candidato); solo las piedras cerca (<= near_floor) se confirman con hover (hasta sweep_max_hovers por vuelta):
+                # las lejanas quedan en la lista sin confirmar (sin frenar ~1 s en cada una).
+                "sweep_step_deg": 30.0, "sweep_max_hovers": 6, "aim_tol_deg": 12.0, "aim_max_turns": 4,
                 "candidate_keep_s": 180.0, "candidate_merge_u": 12.0, "candidate_tie_u": 4.0, "candidate_max_u": 200.0,
-                "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0, "sweep_cut_floor": 2.0,
+                "candidate_walk_u": 30.0, "candidate_walk_tries": 2, "candidate_broken_u": 20.0,
                 "center_return_u": 25.0, "center_laps": 2, "ground_scale_u": 13.0, "ground_scale_ema": 0.3,
                 "ground_scale_bounds": [0.4, 2.5], "ground_reach_u": 4.0},
     # ACERCARSE (piedra lejana sin etiqueta): max_seconds de la caminata; ignore_minutes / ignore_radius: posicion que
@@ -244,6 +245,9 @@ DEFAULTS: dict[str, Any] = {
                  # posicion se ignora retry_ignore_s). align_turns_max giros seguidos sin centrar -> se camina igual.
                  # Tramos de W sin avanzar (keynav: stuck): con bichos ESPACIO, si no se cancela el acercamiento (o se hace el clic si
                  # esta a <= stuck_click_floor).
+                 # near_floor: metin objetivo "cerca" (distancia de piso): durante la vuelta de busqueda o al girar hacia un
+                 # candidato, uno con nombre a esta distancia o menos se ataca en ese momento (no se termina la vuelta).
+                 "near_floor": 4.0,
                  "keys_enabled": True, "click_floor": 2.0, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
                  "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
                  "stuck_click_floor": 4.0,
@@ -554,6 +558,8 @@ OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("appr
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
                  ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
                  ("attack", "confirm_check_s"),
+                 # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
+                 ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"),
                  # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
                  ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
                  ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
@@ -1047,11 +1053,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                       "blind_near_floor", "metin_outside_u",
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
                       "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s", "click_floor",
-                      "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
+                      "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
                       "align_turns_max", "stuck_click_floor"),
          ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
           "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries", "click_floor",
-          "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
+          "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
     if not isinstance(cfg["approach"].get("keys_enabled"), bool):
         raise ConfigError("approach.keys_enabled debe ser true o false")
     nums("center", ("arrive_dist",), ("arrive_dist",))
@@ -1098,8 +1104,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
          ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
     ex = cfg["explore"]
     for k in ("sweep_deg", "sweep_max_factor", "aim_tol_deg", "aim_max_turns", "candidate_keep_s", "candidate_merge_u",
-              "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u", "sweep_cut_floor",
-              "sweep_step_deg", "sweep_attack_u", "sweep_max_hovers", "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
+              "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u",
+              "sweep_step_deg", "sweep_max_hovers", "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):
         v = ex.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"explore.{k} debe ser un numero > 0")

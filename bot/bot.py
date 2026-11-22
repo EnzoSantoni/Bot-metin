@@ -466,8 +466,9 @@ class Bot(ApproachKeysMixin):
         self._hoff = self._hoff0           # lo anterior, afinado con tramos de W (acotado a +-offset_max_deg)
         self._heading_warn_t = -math.inf
         self._center_laps = 0              # vueltas seguidas hechas en el centro sin punto del mapa ni candidatos
+        # fin de la vuelta: el mas cercano de la lista, etiqueta o piedra (stone_ratio 1: la eficiencia antes que el mejor)
         self.cands = CandidateMap(float(ex["candidate_keep_s"]), float(ex["candidate_merge_u"]),
-                                  float(ex["candidate_tie_u"]), float(cfg["approach"]["unlabeled_closer_ratio"]))
+                                  float(ex["candidate_tie_u"]), 1.0)
         self.kscale = ScaleEstimator(float(ex["ground_scale_u"]), float(ex["ground_scale_ema"]),
                                      (float(ex["ground_scale_bounds"][0]), float(ex["ground_scale_bounds"][1])))
         self._new_sweep()
@@ -2524,14 +2525,9 @@ class Bot(ApproachKeysMixin):
         x.sw_prev = h
         ranked, worlds = self._harvest(p, t, h, pos)
         self._resolve_hover(p, t, x)
-        if self._cur is None:
-            cut, near_u = float(self.ex["sweep_cut_floor"]), float(self.ex["sweep_attack_u"])
-            for i, ((g, d), w) in enumerate(zip(ranked, worlds)):
-                if g.kind == "etiqueta" and (d <= cut or math.dist(w, pos) <= near_u):   # con nombre y cerca: directo a atacarlo
-                    out = self._take_goal(ranked, i, p, t, "metin muy cercano durante la vuelta")
-                    if out is not None:
-                        self.cands.remove_near(w, float(self.ex["candidate_merge_u"]))
-                        return out
+        out = self._near_cut(p, t, ranked, worlds, "metin cerca durante la vuelta")
+        if out is not None:
+            return out
         if self._sweep_hover(p, t, x, ranked, worlds):
             return None
         cap = math.ceil(self._lap_steps() * float(self.ex["sweep_max_factor"]))
@@ -2542,6 +2538,23 @@ class Bot(ApproachKeysMixin):
             return None
         return self._finish_lap(x, t, pos)
 
+    def _near_cut(self, p: Perception, t: float, ranked: list, worlds: list, why: str) -> Transition:
+        """Metin objetivo CON NOMBRE a <= `approach.near_floor` de piso en la vista (el mas cercano de esos): se ataca en este
+        momento, aunque haya otros mas lejos o falte vuelta (la eficiencia antes que el mejor). None si no hay (o hay un metin
+        en curso, que se retoma por su lado)."""
+        if self._cur is not None:
+            return None
+        near = float(self.apr["near_floor"])
+        for i, ((g, d), w) in enumerate(zip(ranked, worlds)):
+            if g.kind != "etiqueta" or d > near:
+                continue
+            out = self._take_goal(ranked, i, p, t, why)
+            if out is not None:
+                logger.info("Metin objetivo cerca (piso %.1f <= %.1f): corto la vuelta y voy ya", d, near)
+                self.cands.remove_near(w, float(self.ex["candidate_merge_u"]))
+                return out
+        return None
+
     def _lap_steps(self) -> int:
         """Pasos de una vuelta completa (360 grados) con `explore.sweep_step_deg` por paso."""
         return math.ceil(360.0 / float(self.ex["sweep_step_deg"]))
@@ -2551,13 +2564,14 @@ class Bot(ApproachKeysMixin):
         return math.radians(float(self.ex["sweep_step_deg"])) / self.keynav.rate
 
     def _sweep_hover(self, p: Perception, t: float, x: _Explore, ranked: list, worlds: list) -> bool:
-        """Frena en la primera piedra sin confirmar de la vista (ni lejana a otra ya confirmada): hover sobre su cuerpo para que
-        el juego muestre el nombre; el proximo ciclo (compuerta de giro) lo resuelve. True si hizo el hover."""
+        """Frena en la primera piedra sin confirmar de la vista que este CERCA (<= `approach.near_floor` de piso; las lejanas
+        quedan en la lista sin confirmar, sin frenar): hover sobre su cuerpo para que el juego muestre el nombre; el proximo
+        ciclo (compuerta de giro) lo resuelve y, si es objetivo, se ataca ya (`_near_cut`). True si hizo el hover."""
         if len(x.hovered) >= int(self.ex["sweep_max_hovers"]):
             return False
-        merge = float(self.ex["candidate_merge_u"])
-        for (g, _), w in zip(ranked, worlds):
-            if g.kind != "piedra" or any(math.dist(w, hw) <= merge for hw in x.hovered):
+        merge, near = float(self.ex["candidate_merge_u"]), float(self.apr["near_floor"])
+        for (g, d), w in zip(ranked, worlds):
+            if g.kind != "piedra" or d > near or any(math.dist(w, hw) <= merge for hw in x.hovered):
                 continue
             pt = g.ref.far.rect.center
             if not self.gi.hover_at(*pt, p.mask):
@@ -2610,12 +2624,18 @@ class Bot(ApproachKeysMixin):
             if not self._start_aim(x, t, pos, "Lista de candidatos"):
                 self._new_sweep()
             return None
+        ready = self._turn_ready()
+        seen = self._harvest(p, t, h, pos) if ready else None
+        if seen is not None:   # girando hacia el candidato: un metin objetivo cerca se ataca ya
+            out = self._near_cut(p, t, seen[0], seen[1], "metin cerca al girar hacia un candidato")
+            if out is not None:
+                return out
         dist = math.dist(c.xy, pos)
         bearing = math.atan2(c.xy[1] - pos[1], c.xy[0] - pos[0])
         err = _wrap(bearing - h)
         tol = math.radians(float(self.ex["aim_tol_deg"]))
         if abs(err) > tol and dist >= float(self.nav["arrive_dist"]) and x.aim_turns < int(self.ex["aim_max_turns"]):
-            if not self._turn_ready():
+            if not ready:
                 return None
             key, secs = self.keynav.plan_turn(err)
             if x.aim_turns == 0:
@@ -2624,11 +2644,11 @@ class Bot(ApproachKeysMixin):
             self._search_turn(key, secs)
             x.aim_turns += 1
             return None
-        if not self._turn_ready():
+        if seen is None:
             return None
         if abs(err) > tol:
             logger.info("No logre poner al frente al candidato (error %.0f grados): miro igual", math.degrees(err))
-        ranked, worlds = self._harvest(p, t, h, pos)
+        ranked, worlds = seen
         for i in sorted(range(len(ranked)), key=lambda i: math.dist(worlds[i], c.xy)):
             out = self._take_goal(ranked, i, p, t, "metin de la lista de candidatos")
             if out is not None:
