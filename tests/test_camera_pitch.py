@@ -1,6 +1,8 @@
-"""Angulo vertical de la camara: medicion del horizonte (bot/vision/pitch.py), calibrate.py camara, GameInput.drag, aprendizaje
-del sentido y la ganancia del arrastre (bot/camera_pitch.py) y cuando corrige el bot. Todo simulado (nada de input real)."""
+"""Angulo vertical de la camara: detector de "mira el piso" (bot/vision/pitch.py + bot/camera_pitch.py), reinicio desde el tope
+(rueda + arrastres del clic derecho), cuando lo hace el bot, GameInput.drag y `calibrate.py camara-tope`. Todo simulado (nada de
+input real)."""
 import copy
+import json
 import logging
 from pathlib import Path
 
@@ -9,19 +11,24 @@ import numpy as np
 import pytest
 
 import bot.input.base as base
-from bot.bot import State
-from bot.camera_pitch import CameraPitch
-from bot.config import DEFAULTS, ConfigError, validate_config
-from bot.control import PanicStop
+from bot import calibration as cal
+from bot.bot import State, _Explore
+from bot.camera_pitch import CameraPitch, looks_at_floor, split_px
+from bot.config import DEFAULTS, OBSOLETE_KEYS, ConfigError, load_config, validate_config
+from bot.control import BotControl, PanicStop
 from bot.geometry import Rect
-from bot.vision.metin import MetinDetection
+from bot.input.fake import FakeBackend
+from bot.input.game_input import GameInput
+from bot.vision.monsters import MonsterLabel
 from bot.vision.pitch import draw_horizon, measure_horizon
 from bot.vision.screen_mask import ScreenMask
 from test_bot_states import H, OPEN, PLAYER, W, Harness, make_cfg, metin, perc
-from test_calibration import make_session, raw, tmp_cfg  # noqa: F401  (tmp_cfg es una fixture)
-from test_game_input import make, moves, open_mask
+from test_calibration import ScriptedWindow, raw, tmp_cfg  # noqa: F401  (tmp_cfg es una fixture)
+from test_game_input import FakeKeyboard, make, open_mask
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
+DATA = Path(__file__).resolve().parent / "data"
+ORIGIN = (8, 31)   # esquina del cliente en pantalla (FakeWindow)
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +93,7 @@ def test_ignora_personaje_etiquetas_y_ui():
     assert abs(r.horizon_frac - 0.25) < 0.01 and r.confidence >= 0.9
 
 
-def test_dibuja_la_linea_del_horizonte(tmp_path):
+def test_dibuja_la_linea_del_horizonte():
     img = synth(0.2)
     out = draw_horizon(img, measure_horizon(img, cfg(), OPEN, PLAYER), 0.2, 0.04)
     assert out.shape == img.shape and (out != img).any()
@@ -112,56 +119,433 @@ def test_capturas_reales_dan_valores_razonables(name, lo, hi):
 def test_config_camera_pitch_por_defecto_y_validacion():
     c = cfg()
     validate_config(c)
-    assert c["camera_pitch"]["ref_horizon_frac"] is None and c["camera_pitch"]["enabled"] is True
-    assert c["camera_pitch"]["tolerance"] == 0.04 and c["camera_pitch"]["max_drag_px"] == 150
-    assert c["camera_pitch"]["max_steps"] == 3 and c["camera_pitch"]["every_s"] == 30
-    assert (c["attack"]["scan_after_s"], c["attack"]["scan_steps"], c["attack"]["next_keep_s"]) == (5.0, 12, 60.0)
-    assert c["attack"]["scan_enabled"] is True
-    for path, bad in ((("camera_pitch", "ref_horizon_frac"), 1.5), (("camera_pitch", "tolerance"), 0),
-                      (("camera_pitch", "enabled"), "si"), (("attack", "scan_steps"), 0),
-                      (("attack", "scan_enabled"), 1)):
+    p = c["camera_pitch"]
+    assert p["enabled"] is True and p["zoom_out_clicks"] == 20 and p["zoom_out_sign"] == -1
+    assert (p["to_limit_px"], p["from_limit_px"], p["max_drag_px"], p["min_drag_px"]) == (700, 60, 200, 20)
+    assert (p["every_s"], p["floor_frames"], p["min_gap_s"], p["step_px"], p["calib_max_px"]) == (60.0, 2, 8.0, 15, 300)
+    for old in ("ref_horizon_frac", "tolerance", "gain_px_per_frac", "max_steps", "gain_ema"):
+        assert old not in p and ("camera_pitch", old) in OBSOLETE_KEYS
+    for key, bad in (("enabled", "si"), ("zoom_out_sign", 0), ("zoom_out_sign", 2), ("to_limit_px", 0), ("from_limit_px", 0),
+                     ("min_drag_px", 10), ("max_drag_px", 30), ("to_limit_px", 10), ("floor_frames", 0), ("every_s", -1),
+                     ("side_half_frac", 0.9)):
         c = cfg()
-        c[path[0]][path[1]] = bad
+        c["camera_pitch"][key] = bad
         with pytest.raises(ConfigError):
             validate_config(c)
 
 
-# ------------------------------------------------------------------ calibrate.py camara
-def test_calibrar_camara_promedia_guarda_con_bak_e_imagen(tmp_cfg):
+def test_config_vieja_con_claves_obsoletas_se_ignora_con_aviso(tmp_path, caplog):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"camera_pitch": {"ref_horizon_frac": 0.2, "tolerance": 0.04, "from_limit_px": 80}}),
+                    encoding="utf-8")
+    caplog.set_level(logging.WARNING)
+    c = load_config(path)
+    assert c["camera_pitch"]["from_limit_px"] == 80 and "ref_horizon_frac" not in c["camera_pitch"]
+    assert any("camera_pitch.ref_horizon_frac esta obsoleta" in r.getMessage() for r in caplog.records)
+
+
+def test_split_px_parejo_y_exacto():
+    assert split_px(700, 200) == [175, 175, 175, 175]
+    assert split_px(60, 200) == [60]
+    assert sum(split_px(451, 200)) == 451 and max(split_px(451, 200)) <= 200
+
+
+# ------------------------------------------------------------------ detector de "mira el piso" (capturas reales)
+def real(name):
+    path = DATA / name
+    assert path.exists(), f"falta {path}"
+    return cv2.imread(str(path))
+
+
+@pytest.mark.parametrize("name", ["cam_08_montana_camara_subida.png", "cam_09_montana_despues_de_alejarse.png",
+                                  "camara_mira_piso_0048.png"])
+def test_detector_marca_piso_en_las_capturas_reales(name):
+    assert looks_at_floor(real(name), cfg()) is True
+
+
+@pytest.mark.parametrize("name", ["cam_01_plano_normal.png", "cam_02_plano_tope_horizontal.png",
+                                  "cam_04_plano_normal_otra_vez.png", "cam_10_plano_zoom_tope_lejos.png"])
+def test_detector_no_marca_piso_con_horizonte_a_la_vista(name):
+    assert looks_at_floor(real(name), cfg()) is False
+
+
+def test_detector_sintetico():
+    assert looks_at_floor(synth(0.0), cfg(), OPEN, PLAYER) is True
+    assert looks_at_floor(synth(0.3), cfg(), OPEN, PLAYER) is False
+    assert looks_at_floor(np.zeros((H, W, 3), np.uint8), cfg(), OPEN, PLAYER) is False   # nada medible: no se toca
+
+
+def test_observe_pide_dos_capturas_seguidas_y_respeta_el_minimo_entre_reinicios():
+    cp = CameraPitch(cfg())
+    p = perc()
+    floor, ok = synth(0.0), synth(0.3)
+    assert [cp.observe(img, p, 100.0) for img in (floor, ok, floor, ok, floor)] == [False] * 5   # nunca dos seguidas
+    assert cp.observe(floor, p, 100.0) is True                                                    # dos seguidas: reinicia
+    cp.last_reset_t = 100.0
+    assert cp.observe(floor, p, 105.0) is False and cp.observe(floor, p, 107.9) is False   # antes de min_gap_s (8)
+    assert cp.observe(floor, p, 108.0) is True
+    cp.fruitless = 1   # el reinicio anterior no arreglo nada: espera el doble
+    assert cp.observe(floor, p, 115.0) is False and cp.observe(floor, p, 116.0) is True
+    cp.c["enabled"] = False
+    assert cp.observe(floor, p, 1e6) is False
+
+
+# ------------------------------------------------------------------ reinicio (secuencia de eventos)
+def drags_of(be):
+    """Arrastres con el clic derecho: [(inicio cliente, dy)] en orden."""
+    out, start, last, down = [], None, None, False
+    for e in be.events:
+        if e[0] == "move_to":
+            last = (e[1] - ORIGIN[0], e[2] - ORIGIN[1])
+            if not down:
+                start = last
+        elif e[0] == "mouse_down":
+            assert e[1] == "right"
+            down = True
+        elif e[0] == "mouse_up":
+            out.append((start, last[1] - start[1]))
+            down = False
+    return out
+
+
+def one(img=None, p=None):
+    """perceive() falso: siempre la misma percepcion (con una captura negra)."""
+    p = p or perc()
+    return lambda: (np.zeros((H, W, 3), np.uint8) if img is None else img, p)
+
+
+def fast_cfg(**over):
+    c = cfg()
+    c["camera_pitch"].update(drag_s=0.0, **over)
+    return c
+
+
+def test_reset_secuencia_rueda_arriba_y_abajo():
+    g, be, _, _ = make()
+    c = fast_cfg()
+    cp = CameraPitch(c)
+    sleeps = []
+    assert cp.reset(one(), g, sleeps.append, 100.0, "prueba") is True
+    assert be.events[0][0] == "move_to" and be.events[1] == ("scroll", -20)   # primero la rueda (zoom lejos, sentido -1)
+    d = drags_of(be)
+    ups, downs = [dy for _, dy in d if dy < 0], [dy for _, dy in d if dy > 0]
+    assert sum(ups) == -700 and all(dy <= -20 and abs(dy) <= 200 for dy in ups)
+    assert downs == [60]
+    assert [dy < 0 for _, dy in d] == [True] * len(ups) + [False]   # primero todo hacia arriba, al final hacia abajo
+    assert all(abs(dy) >= 20 for _, dy in d)                         # nunca un clic derecho sin mover
+    assert be.pressed == ([], []) and cp.resets == 1 and cp.last_reset_t == 100.0
+    assert sleeps[-1] == c["explore"]["settle_s"]                    # pausa corta al final
+
+
+def test_reset_log(caplog):
+    caplog.set_level(logging.INFO)
+    g, _, _, _ = make()
+    CameraPitch(fast_cfg()).reset(one(), g, lambda s: None, 0.0, "arranque")
+    assert any("Camara: reinicio desde el tope (zoom lejos, arriba 700 px, abajo 60 px)" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_reset_abajo_menor_al_minimo_baja_mas_y_sube_neto_igual():
+    g, be, _, _ = make()
+    CameraPitch(fast_cfg(from_limit_px=15)).reset(one(), g, lambda s: None, 0.0, "x")
+    d = [dy for _, dy in drags_of(be)]
+    assert d[-2:] == [35, -20] and sum(d) == -700 + 15 and all(abs(x) >= 20 for x in d)
+
+
+def test_reset_puntos_libres_de_monstruos_etiquetas_y_ui():
+    cp = CameraPitch(fast_cfg())
+    first = cp.free_point(perc(), -175)
+    assert first is not None
+    # una etiqueta de metin y un monstruo cerca de los lugares probables, y la barra de abajo prohibida
+    p = perc(metins=[metin((first[0], first[1] - 60))])
+    p.monsters = [MonsterLabel(Rect(first[0] - 40, first[1] - 200, 80, 12), (first[0], first[1] - 194))]
+    mask = np.zeros((H, W), np.uint8)
+    mask[880:1057] = 255
+    p.mask = ScreenMask([], mask)
+    g, be, _, _ = make()
+    assert cp.reset(one(p=p), g, lambda s: None, 0.0, "x") is True
+    rects = [d.label_rect for d in p.metins] + [m.rect for m in p.monsters]
+    for (x, y), dy in drags_of(be):
+        for k in (0.0, 0.5, 1.0):
+            q = (x, y + int(round(dy * k)))
+            gaps = [max(r.x - q[0], 0, q[0] - r.right) ** 2 + max(r.y - q[1], 0, q[1] - r.bottom) ** 2 for r in rects]
+            assert p.mask.allows(*q) and min(gaps) >= 140 ** 2, (q, dy)
+
+
+def test_reset_sin_punto_libre_se_corta_sin_mandar_arrastres(caplog):
+    caplog.set_level(logging.WARNING)
+    cp = CameraPitch(fast_cfg())
+    p = perc()
+    p.mask = ScreenMask([], np.full((H, W), 255, np.uint8))   # todo prohibido
+    g, be, _, _ = make()
+    assert cp.reset(one(p=p), g, lambda s: None, 0.0, "x") is False
+    assert not any(e[0] == "mouse_down" for e in be.events) and cp.drags == 0
+    assert any("no hay un punto libre" in r.getMessage() for r in caplog.records)
+
+
+def test_reset_se_corta_si_perceive_da_none():
+    g, be, _, _ = make()
+    assert CameraPitch(fast_cfg()).reset(lambda: None, g, lambda s: None, 0.0, "x") is False and be.events == []
+
+
+def test_reset_suelta_el_boton_si_se_corta_a_mitad():
+    g, be, ctl, _ = make()
+    cp = CameraPitch(fast_cfg())
+    orig, n = ctl.check, {"v": 0}
+
+    def check():
+        n["v"] += 1
+        if any(e == ("mouse_down", "right") for e in be.events) and n["v"] > 14:
+            raise PanicStop()
+        orig()
+    ctl.check = check
+    with pytest.raises(PanicStop):
+        cp.reset(one(), g, lambda s: None, 0.0, "x")
+    assert be.events.count(("mouse_up", "right")) == be.events.count(("mouse_down", "right")) >= 1
+    assert be.pressed == ([], [])
+
+
+# ------------------------------------------------------------------ cuando reinicia el bot
+class SimCam:
+    """Camara simulada: `floor` = mira el piso. Un arrastre hacia abajo (el final del reinicio) la arregla salvo `keep_floor`."""
+
+    def __init__(self, floor_at_start=False):
+        self.floor, self.keep_floor = floor_at_start, False
+
+    def image(self):
+        return synth(0.0) if self.floor else synth(0.3)
+
+
+def with_cam(h, cam):
+    """Ventana que captura la camara simulada y registra (estado del bot, hora, dy) de cada arrastre."""
+    def capture(region=None):
+        h.win.last_capture_rect = h.win.client_rect_on_screen()
+        return cam.image()
+    h.win.capture = capture
+    real_drag = h.gi.drag
+    h.drag_states = []
+
+    def drag(button, x, y, dx, dy, mask, seconds, steps=6):
+        h.drag_states.append((h.bot.state, h.clock.t, dy))
+        ok = real_drag(button, x, y, dx, dy, mask, seconds, steps)
+        if ok and dy > 0 and not cam.keep_floor:
+            cam.floor = False
+        return ok
+    h.gi.drag = drag
+
+
+def pitch_cfg(**over):
+    cfg_ = make_cfg(**over)
+    cfg_["camera_pitch"].update(enabled=True, drag_s=0.0)
+    return cfg_
+
+
+def right_drags(h):
+    return sum(1 for e in h.be.events if e == ("mouse_down", "right"))
+
+
+def scrolls(h):
+    return [e for e in h.be.events if e[0] == "scroll"]
+
+
+def test_reinicia_al_arrancar_despues_de_la_cuenta_regresiva():
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg())
+    with_cam(h, SimCam())
+    h.bot.run(max_minutes=0.001)   # corre y termina enseguida por tiempo
+    assert scrolls(h)[0] == ("scroll", -20)
+    assert h.drag_states and h.drag_states[0][0] is State.BUSCAR
+    assert h.bot.pitch.resets == 1 and h.be.pressed == ([], [])
+
+
+def test_no_reinicia_con_camera_pitch_apagada():
+    h = Harness(lambda h, n: perc(), cfg=make_cfg())
+    with_cam(h, SimCam())
+    h.bot.run(max_minutes=0.001)
+    for _ in range(40):
+        h.bot.step()
+    assert right_drags(h) == 0 and scrolls(h) == []
+
+
+def break_script(h, n):
+    """BUSCAR ve un metin; en ATACAR la vida baja y despues el panel desaparece (roto)."""
+    from test_bot_states import target_panel
+    if h.bot.state is State.ATACAR:
+        h.clock.t += 20.0 if h.bot.stats.metins == 0 and getattr(h, "broke", 0) == 0 and n > 3 else 0.0
+        h.broke = getattr(h, "broke", 0) + (1 if n > 3 else 0)
+        return perc(panel=target_panel(0.03) if h.broke <= 3 else None)
+    if h.bot.state is State.BUSCAR and h.bot.stats.metins == 0:
+        return perc(metins=[metin()])
+    return perc()
+
+
+def test_reinicia_despues_de_romper_y_recoger_y_nunca_atacando_ni_recogiendo(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(break_script, cfg=pitch_cfg(camera_pitch={"every_s": 1e9}))
+    with_cam(h, SimCam())
+    h.bot.pitch.last_reset_t = h.clock.t   # ya reinicio al arrancar: aqui solo interesa el de despues de recoger
+    h.run_until(lambda: h.bot.stats.metins == 1 and right_drags(h) >= 1)
+    assert State.RECOGER in h.states() and ("mouse_down", "left") in h.be.events and h.be.pressed == ([], [])
+    assert scrolls(h) == [("scroll", -20)]
+    assert any("[metin roto y recogido]" in r.getMessage() for r in caplog.records)
+    assert all(s not in (State.ATACAR, State.RECOGER, State.CAPTCHA) for s, _, _ in h.drag_states)
+
+
+def test_mirar_el_piso_reinicia_y_respeta_el_minimo_entre_reinicios():
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+    cam = SimCam(floor_at_start=True)
+    with_cam(h, cam)
+    h.bot.pitch.last_reset_t = h.clock.t - 1000   # sin reinicios recientes
+    h.run_until(lambda: right_drags(h) >= 1)
+    t1, n1 = h.drag_states[0][1], right_drags(h)
+    assert h.bot.pitch.resets == 1
+    cam.floor = True   # el juego volvio a subir la camara enseguida: no se reinicia antes de min_gap_s
+    while h.clock.t - t1 < 7.5:
+        h.bot.step()
+    assert right_drags(h) == n1
+    h.run_until(lambda: right_drags(h) > n1, limit=3000)
+    assert h.drag_states[-1][1] - t1 >= 8.0
+    assert all(s is State.EXPLORAR for s, _, _ in h.drag_states)   # solo mientras se busca
+
+
+def test_reinicio_por_piso_que_no_arregla_nada_espera_mas():
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+    cam = SimCam(floor_at_start=True)
+    cam.keep_floor = True   # terreno alto: tras reiniciar sigue todo piso
+    with_cam(h, cam)
+    h.bot.pitch.last_reset_t = h.clock.t - 1000
+    h.run_until(lambda: h.bot.pitch.resets >= 1)
+    assert h.bot.pitch.fruitless == 1 and h.bot.pitch.floor_gap_s() == 16.0
+
+
+def test_periodico_solo_al_empezar_una_vuelta_y_tras_every_s():
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg())
+    cam = SimCam()
+    with_cam(h, cam)
+    h.win.capture()
+    bot, p = h.bot, perc()
+    bot._img = cam.image()
+    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is True     # nunca reinicio: toca
+    n = right_drags(h)
+    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is False    # recien reiniciado
+    h.clock.t += 61
+    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left", steps=1)) is False   # a mitad de vuelta no
+    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is True
+    assert right_drags(h) > n
+
+
+# ------------------------------------------------------------------ calibrate.py camara-tope
+class SimGameWindow(ScriptedWindow):
+    """Ventana cuya captura sale de la camara simulada: los px netos de arrastre (con tope en 0, el tope horizontal) bajan el
+    horizonte de 0.4 a razon de 0.0012 por px."""
+
+    def __init__(self, be, top_frac=0.4, per_px=0.0012):
+        super().__init__([np.zeros((10, 10, 3), np.uint8)])
+        self.be, self.top_frac, self.per_px = be, top_frac, per_px
+
+    def pos(self):
+        pos, start, last, down = 0.0, None, None, False
+        for e in self.be.events:
+            if e[0] == "move_to":
+                last = e[2]
+                if not down:
+                    start = e[2]
+            elif e[0] == "mouse_down":
+                down = True
+            elif e[0] == "mouse_up":
+                pos = max(0.0, pos + last - start)
+                down = False
+        return pos
+
+    def capture(self, region=None):
+        self.last_capture_rect = self.client_rect_on_screen()
+        return synth(max(0.0, self.top_frac - self.per_px * self.pos()))
+
+
+def tope_session(tmp_cfg, tmp_path, monkeypatch, answers=("s",), yes=False, ref_frac=0.1):
+    out, answers = [], list(answers)
+
+    def ask(prompt):
+        out.append(prompt)
+        return answers.pop(0) if answers else "n"
+    cfg_ = load_config(tmp_cfg)
+    cfg_["input"].update(delay_ms=[0, 0], key_hold_ms=[0, 0], move_settle_ms=[0, 0])
+    cfg_["camera_pitch"]["drag_s"] = 0.0
+    be = FakeBackend()
+    win = SimGameWindow(be)
+    ctl = BotControl(cfg_, keyboard=FakeKeyboard(), cursor_pos=lambda: (9999, 9999), exit_fn=lambda c: None)
+    ticks = []
+    s = cal.Session(cfg=cfg_, config_path=str(tmp_cfg), yes=yes, window=win, say=out.append, ask=ask, sleep=lambda x: None,
+                    gi=GameInput(win, be, ctl, cfg_), countdown=lambda: ticks.append(1))
+    s.out, s.be, s.ticks = out, be, ticks
+    ref = tmp_path / "ref.png"
+    cv2.imwrite(str(ref), synth(ref_frac))
+    s.ref = str(ref)
+    monkeypatch.setattr(cal, "perceive", lambda img, c, parts=None: perc())
+    return s
+
+
+def test_propone_el_paso_cuyo_horizonte_se_parece_a_la_referencia():
+    rows = [(0, 0.40), (15, 0.30), (30, 0.21), (45, 0.12), (60, 0.05), (75, None)]
+    assert cal.propose_step(rows, 0.11) == 45
+    assert cal.propose_step(rows, 0.45) == 0
+    assert cal.propose_step([(0, None)], 0.1) is None
+
+
+def test_camara_tope_pasos_capturas_propuesta_y_guardado_con_bak(tmp_cfg, tmp_path, monkeypatch):
     original = tmp_cfg.read_text(encoding="utf-8")
-    imgs = [synth(f, 1057, 1858) for f in (0.19, 0.20, 0.21)]
-    from bot import calibration as cal
-    s = make_session(tmp_cfg, imgs, answers=["s"], sleep=lambda x: None)
-    s.cfg["camera_pitch"]["calib_samples"] = 3
-    assert cal.cmd_camara(s) == 0
-    saved = raw(tmp_cfg)
-    assert abs(saved["camera_pitch"]["ref_horizon_frac"] - 0.2) < 0.01
-    assert saved["mi_clave_extra"] == {"a": 1}
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "", "s"])   # empiezo, Enter = el propuesto, guardar
+    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 0
+    files = sorted((tmp_path / "debug" / "calibrate_camara_tope").glob("paso_*.png"))
+    assert [f.name for f in files][:3] == ["paso_00_000px.png", "paso_01_015px.png", "paso_02_030px.png"]
+    assert files[-1].name == "paso_20_300px.png" and len(files) == 21
+    # horizonte = 0.4 - 0.0012 * px; referencia 0.1 -> 250 px; de a 15: 255 (0.094) esta mas cerca que 240 (0.112)
+    assert raw(tmp_cfg)["camera_pitch"]["from_limit_px"] == 255
+    assert raw(tmp_cfg)["mi_clave_extra"] == {"a": 1}
     assert tmp_cfg.with_name("config.json.bak").read_text(encoding="utf-8") == original
-    assert (tmp_cfg.parent / "debug" / "calibrate_camara.png").exists()
-    assert any("Horizonte medido" in line for line in s.out)
+    assert s.ticks == [1] and any("propuesto: 255 px" in line for line in s.out)
+    ev = s.be.events
+    assert [e for e in ev if e[0] == "scroll"][0] == ("scroll", -20)   # primero la rueda
+    assert ("mouse_down", "left") not in ev and s.be.pressed == ([], [])
+    assert ev.count(("mouse_down", "right")) == ev.count(("mouse_up", "right")) > 20
+    assert all(abs(dy) >= 20 for _, dy in drags_of(s.be))              # siempre moviendo el mouse
+    assert s.window.pos() == pytest.approx(255, abs=1)                # al final deja la camara en el angulo elegido
 
 
-def test_calibrar_camara_responder_n_no_guarda(tmp_cfg):
+def test_camara_tope_eleccion_manual_y_valor_invalido(tmp_cfg, tmp_path, monkeypatch):
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "120", "s"])
+    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 0
+    assert raw(tmp_cfg)["camera_pitch"]["from_limit_px"] == 120
     original = tmp_cfg.read_text(encoding="utf-8")
-    from bot import calibration as cal
-    s = make_session(tmp_cfg, [synth(0.2, 1057, 1858)], answers=["n"], sleep=lambda x: None)
-    assert cal.cmd_camara(s) == 1
-    assert tmp_cfg.read_text(encoding="utf-8") == original and not tmp_cfg.with_name("config.json.bak").exists()
-
-
-def test_calibrar_camara_sin_piso_no_guarda(tmp_cfg):
-    original = tmp_cfg.read_text(encoding="utf-8")
-    from bot import calibration as cal
-    s = make_session(tmp_cfg, [np.zeros((1057, 1858, 3), np.uint8)], yes=True, sleep=lambda x: None)
-    assert cal.cmd_camara(s) == 1
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["s", "77", "s"])   # 77 no es uno de los pasos
+    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 1
     assert tmp_cfg.read_text(encoding="utf-8") == original
 
 
-def test_calibrate_py_tiene_el_subcomando_camara():
+def test_camara_tope_no_manda_nada_si_se_rechaza(tmp_cfg, tmp_path, monkeypatch):
+    original = tmp_cfg.read_text(encoding="utf-8")
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, answers=["n"])
+    assert cal.cmd_camara_tope(s, referencia=[s.ref]) == 1
+    assert s.be.events == [] and s.ticks == [] and tmp_cfg.read_text(encoding="utf-8") == original
+
+
+def test_camara_tope_sin_referencia_medible_no_manda_nada(tmp_cfg, tmp_path, monkeypatch):
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch)
+    assert cal.cmd_camara_tope(s, referencia=[str(tmp_path / "no_existe.png")]) == 1 and s.be.events == []
+
+
+def test_camara_tope_con_si_no_pregunta(tmp_cfg, tmp_path, monkeypatch):
+    s = tope_session(tmp_cfg, tmp_path, monkeypatch, yes=True)
+    assert cal.cmd_camara_tope(s, step_px=30, referencia=[s.ref]) == 0
+    assert raw(tmp_cfg)["camera_pitch"]["from_limit_px"] == 240 and not s.out[-1].startswith("Cuantos")
+
+
+def test_calibrate_py_tiene_el_subcomando_camara_tope():
     import calibrate
-    args = calibrate.build_parser().parse_args(["camara", "--si"])
-    assert args.cmd == "camara" and "camara" in calibrate.NEEDS_GAME
+    args = calibrate.build_parser().parse_args(["camara-tope", "--si", "--paso", "10", "--referencia", "a.png", "b.png"])
+    assert args.cmd == "camara-tope" and args.paso == 10 and args.referencia == ["a.png", "b.png"]
+    assert "camara-tope" in calibrate.NEEDS_GAME
+    with pytest.raises(SystemExit):
+        calibrate.build_parser().parse_args(["camara"])   # el subcomando viejo ya no existe
 
 
 # ------------------------------------------------------------------ GameInput.drag
@@ -204,221 +588,3 @@ def test_drag_respeta_la_mascara_en_inicio_y_fin(caplog):
     with pytest.raises(ValueError):
         g.drag("right", 900, 700, 0, 100, None, 0.3)
     assert g.drag("right", 900, 700, 0, 5000, open_mask(), 0.3) is False   # el final cae fuera del cliente
-
-
-# ------------------------------------------------------------------ CameraPitch (aprendizaje y correccion)
-class SimCam:
-    """Camara simulada: `h` = horizon_frac; un arrastre de dy px lo mueve `s * dy` (s con signo, desconocido para el bot)."""
-
-    def __init__(self, h, s):
-        self.h, self.s, self.drags = h, s, []
-
-    def capture(self):
-        return synth(self.h)
-
-    def drag(self, button, x, y, dx, dy, mask, seconds, steps=6):
-        self.drags.append((button, x, y, dx, dy))
-        self.h = max(0.0, self.h + self.s * dy)
-        return True
-
-
-def make_cp(ref=0.2, **over):
-    c = cfg()
-    c["camera_pitch"].update(ref_horizon_frac=ref, **over)
-    return CameraPitch(c), c
-
-
-def run_correct(cp, cam, p=None, max_steps=None):
-    p = p or perc()
-    return cp.correct(p, cam.capture(), cam, lambda: cam.capture(), lambda: None, "prueba", max_steps)
-
-
-def test_sin_referencia_no_hace_nada_y_avisa_una_vez(caplog):
-    caplog.set_level(logging.INFO)
-    cp, _ = make_cp(ref=None)
-    assert cp.active is False and cp.active is False
-    msgs = [r.getMessage() for r in caplog.records if "sin calibrar" in r.getMessage()]
-    assert msgs == ["Angulo vertical sin calibrar: corre calibrate.py camara"]
-
-
-def test_corrige_dentro_de_un_arrastre_con_el_signo_inicial():
-    cp, _ = make_cp(ref=0.2)
-    cam = SimCam(0.30, s=-0.0016)   # error +0.10 -> dy = +60 -> baja el horizonte 0.096
-    assert run_correct(cp, cam) is True
-    assert len(cam.drags) == 1
-    button, x, y, dx, dy = cam.drags[0]
-    assert button == "right" and dx == 0 and dy == 60
-    assert abs(cam.h - 0.2) <= 0.04
-
-
-def test_aprende_el_signo_y_la_ganancia_si_el_arrastre_va_al_reves():
-    cp, _ = make_cp(ref=0.2)
-    cam = SimCam(0.30, s=+0.0016)   # el signo inicial esta al reves
-    assert run_correct(cp, cam) is True
-    assert cp.gain < 0 and 400 < abs(cp.gain) < 800   # aprendio el signo (y una magnitud parecida a 1/0.0016)
-    assert 1 < len(cam.drags) <= 3
-    assert abs(cam.h - 0.2) <= 0.04
-
-
-def test_ganancia_ema_hacia_la_observada():
-    cp, _ = make_cp(ref=0.2, gain_px_per_frac=300.0, gain_ema=0.5)
-    from bot.vision.pitch import PitchResult
-    a, b = PitchResult(300, 0.30, 1.0), PitchResult(200, 0.20, 1.0)
-    assert cp.learn(a, b, 60) is True   # efecto -0.00167 frac/px -> ganancia observada 600
-    assert cp.gain == pytest.approx(450.0)
-
-
-def test_no_aprende_con_mediciones_saturadas_ni_sin_movimiento():
-    cp, _ = make_cp(ref=0.2)
-    from bot.vision.pitch import PitchResult
-    sat, ok, near = PitchResult(0, 0.0, 0.5, saturated=True), PitchResult(200, 0.2, 1.0), PitchResult(201, 0.2005, 1.0)
-    assert cp.learn(sat, ok, 60) is False and cp.learn(ok, sat, 60) is False and cp.learn(ok, near, 60) is False
-    assert cp.gain == 600.0
-
-
-def test_dentro_de_la_tolerancia_no_corrige():
-    cp, _ = make_cp(ref=0.2)
-    cam = SimCam(0.23, s=-0.0016)
-    assert run_correct(cp, cam) is True and cam.drags == []
-
-
-def test_tope_de_arrastre_y_de_pasos():
-    cp, _ = make_cp(ref=0.1)
-    cam = SimCam(0.45, s=0.0)       # el arrastre no mueve nada
-    assert run_correct(cp, cam) is False
-    assert len(cam.drags) == 3 and all(abs(d[4]) == 150 for d in cam.drags)   # max_steps y max_drag_px
-    cp, _ = make_cp(ref=0.1, max_steps=3)
-    cam = SimCam(0.45, s=0.0)
-    run_correct(cp, cam, max_steps=1)
-    assert len(cam.drags) == 1
-
-
-def test_confianza_baja_no_corrige():
-    cp, _ = make_cp(ref=0.2)
-    cam = SimCam(0.6, s=-0.0016)
-    cam.capture = lambda: np.zeros((H, W, 3), np.uint8)
-    assert run_correct(cp, cam) is True and cam.drags == []   # no se puede medir: no se toca
-
-
-def test_todo_piso_sin_cambio_da_vuelta_el_sentido(caplog):
-    caplog.set_level(logging.WARNING)
-    cp, _ = make_cp(ref=0.2)
-    cam = SimCam(0.0, s=0.0)    # mirando el piso y el arrastre no cambia nada medible
-    assert run_correct(cp, cam) is False
-    assert cp.gain < 0   # la proxima correccion arrastra al reves
-    assert any("doy vuelta el sentido" in r.getMessage() for r in caplog.records)
-
-
-def test_punto_libre_evita_etiquetas_y_respeta_la_mascara():
-    cp, _ = make_cp()
-    p = perc()
-    first = cp.free_point(p)
-    assert first is not None and OPEN.allows(*first)
-    p2 = perc(metins=[metin(first)])   # una etiqueta justo ahi
-    second = cp.free_point(p2)
-    assert second is not None and second != first
-    assert abs(second[0] - first[0]) + abs(second[1] - first[1]) > 100
-    cp.c["drag_clear_px"] = 5000   # ningun punto queda tan lejos de todo: no hay punto libre
-    assert cp.free_point(p) is None
-    cam = SimCam(0.4, s=-0.0016)
-    assert cp.correct(p, cam.capture(), cam, cam.capture, lambda: None, "x") is False and cam.drags == []
-    cp.c["drag_clear_px"] = 140
-    walled = perc()
-    walled.mask = ScreenMask([], np.full((H, W), 255, np.uint8))   # todo prohibido
-    assert cp.free_point(walled) is None
-
-
-# ------------------------------------------------------------------ cuando corrige el bot
-def pitch_cfg(ref=0.2, **over):
-    cfg_ = make_cfg(**over)
-    cfg_["camera_pitch"].update(ref_horizon_frac=ref)
-    return cfg_
-
-
-def with_cam(h, cam):
-    """Ventana que captura la camara simulada y arrastres reales de GameInput que la mueven."""
-    def capture(region=None):
-        h.win.last_capture_rect = h.win.client_rect_on_screen()
-        return cam.capture()
-    h.win.capture = capture
-    real = h.gi.drag
-
-    def drag(button, x, y, dx, dy, mask, seconds, steps=6):
-        ok = real(button, x, y, dx, dy, mask, seconds, steps)
-        if ok:
-            cam.drag(button, x, y, dx, dy, mask, seconds)
-        return ok
-    h.gi.drag = drag
-
-
-def right_drags(h):
-    return sum(1 for e in h.be.events if e == ("mouse_down", "right"))
-
-
-def break_script(h, n):
-    """BUSCAR ve un metin; en ATACAR la vida baja y despues el panel desaparece (roto)."""
-    from test_bot_states import target_panel
-    if h.bot.state is State.ATACAR:
-        h.clock.t += 20.0 if h.bot.stats.metins == 0 and getattr(h, "broke", 0) == 0 and n > 3 else 0.0
-        h.broke = getattr(h, "broke", 0) + (1 if n > 3 else 0)
-        return perc(panel=target_panel(0.03) if h.broke <= 3 else None)
-    if h.bot.state is State.BUSCAR and h.bot.stats.metins == 0:
-        return perc(metins=[metin()])
-    return perc()
-
-
-def test_corrige_despues_de_romper_y_recoger():
-    h = Harness(break_script, cfg=pitch_cfg(0.2))
-    cam = SimCam(0.34, s=-0.0016)
-    with_cam(h, cam)
-    h.run_until(lambda: h.bot.stats.metins == 1 and right_drags(h) >= 1)
-    assert State.RECOGER in h.states()
-    assert abs(cam.h - 0.2) <= 0.04
-    assert ("mouse_down", "left") in h.be.events and h.be.pressed == ([], [])
-
-
-def test_no_corrige_sin_referencia():
-    h = Harness(break_script, cfg=pitch_cfg(None))
-    cam = SimCam(0.34, s=-0.0016)
-    with_cam(h, cam)
-    h.run_until(lambda: h.bot.stats.metins == 1)
-    for _ in range(60):
-        h.bot.step()
-    assert right_drags(h) == 0 and cam.drags == []
-
-
-def test_no_corrige_con_confianza_baja_en_el_bot():
-    h = Harness(break_script, cfg=pitch_cfg(0.2))
-    cam = SimCam(0.34, s=-0.0016)
-    with_cam(h, cam)
-    cam.capture = lambda: np.zeros((H, W, 3), np.uint8)
-    h.run_until(lambda: h.bot.stats.metins == 1)
-    for _ in range(60):
-        h.bot.step()
-    assert right_drags(h) == 0
-
-
-def test_explorando_revisa_cada_every_s():
-    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(0.2, explore={"camera_steps": 100000}))   # el barrido no termina
-    cam = SimCam(0.30, s=-0.0016)
-    with_cam(h, cam)
-    h.run_until(lambda: right_drags(h) >= 1)   # primer chequeo apenas explora (un arrastre alcanza)
-    t0, n0 = h.clock.t, right_drags(h)
-    cam.h = 0.30   # la camara se desvia de nuevo
-    while h.clock.t - t0 < 20:
-        h.bot.step()
-    assert right_drags(h) == n0   # antes de every_s no vuelve a mirar
-    h.run_until(lambda: right_drags(h) > n0, limit=2000)
-    assert h.clock.t - t0 >= 29.0
-
-
-def test_explorando_revisa_al_final_de_cada_barrido(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(0.2, camera_pitch={"every_s": 100000.0}))
-    cam = SimCam(0.30, s=-0.0016)
-    with_cam(h, cam)
-    h.run_until(lambda: right_drags(h) >= 1)   # el primer chequeo siempre toca
-    n0 = right_drags(h)
-    cam.h = 0.30
-    h.run_until(lambda: right_drags(h) > n0, limit=2000)
-    assert any("(fin del barrido)" in r.getMessage() for r in caplog.records)

@@ -273,7 +273,6 @@ class _Explore:
     walk_start: float = 0.0
     spot: Spot | None = None           # punto del mapa de metin al que va este tramo (None = el centro o un tramo al azar)
     center: bool = False               # el tramo va al centro de la zona (se camina hasta llegar, como a un punto del mapa)
-    pitch_checked: bool = False        # el angulo vertical ya se reviso al final de este barrido
     sw_prev: float | None = None       # rumbo de la camara (rad) en el paso anterior de la vuelta (None = vuelta sin empezar)
     sw_acc: float = 0.0                # grados girados en esta vuelta (medidos con el rumbo de la camara)
     aim: Candidate | None = None       # candidato de la lista hacia el que se gira (fase "aim")
@@ -464,6 +463,8 @@ class Bot:
         limit = None if max_minutes is None else float(max_minutes) * 60
         try:
             self._remount_if_marked()
+            if self.pitch.enabled and self.window.ensure_ready(should_stop=lambda: self.control.is_stopped):
+                self._pitch_reset("arranque")
             while self.state is not State.FIN:
                 if (limit is not None and self.state not in _NO_CUT_STATES
                         and self.clock() - self._t_start >= limit):
@@ -646,7 +647,7 @@ class Bot:
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
             if self.state is new:
-                self._fix_pitch(None, self.clock(), "metin roto y recogido")
+                self._pitch_reset("metin roto y recogido")
         if self.state is not new:
             return   # un captcha durante la subida ya cambio el estado: no se ejecuta el bloque de `new`
         self._walk = None
@@ -1749,25 +1750,38 @@ class Bot:
             return None
         return img
 
-    def _fix_pitch(self, p: Perception | None, t: float, why: str, max_steps: int | None = None) -> bool:
-        """Vuelve el angulo vertical de la camara a la referencia (si hay) con arrastres del clic derecho. `p` None = percibe
-        una captura nueva (para tener etiquetas y mascara). True si arrastro algo. Despues de arrastrar marca la compuerta de
-        giros (la imagen cambio: hay que analizarla antes de seguir girando)."""
-        cp = self.pitch
-        if not cp.active:
-            return False
-        img = self._peek()
+    def _pitch_perceive(self) -> tuple[Any, Perception] | None:
+        """Captura y percibe (etiquetas, monstruos y mascara para elegir donde arrastrar). None si no se puede o hay captcha."""
+        img = self._pitch_capture()
         if img is None:
+            return None
+        return img, self._perceive(img, self.cfg, parts=PARTS[State.BUSCAR])
+
+    def _pitch_reset(self, why: str) -> bool:
+        """Reinicia el angulo vertical de la camara desde el tope (zoom lejos, arriba, abajo; ver bot/camera_pitch.py). Solo se
+        llama buscando/explorando, al arrancar o al terminar de recoger: nunca atacando, recogiendo ni con captcha. True si
+        mando algun arrastre; entonces marca la compuerta de giros (la imagen cambio: hay que analizarla antes de seguir)."""
+        cp = self.pitch
+        if not cp.enabled or self.state in (State.ATACAR, State.RECOGER, State.CAPTCHA, State.MUERTO, State.FIN):
             return False
-        if p is None:
-            p = self._perceive(img, self.cfg, parts=PARTS[State.BUSCAR])
-        cp.last_check_t = t
         before = cp.drags
-        cp.correct(p, img, self.gi, self._pitch_capture, lambda: self._sleep(float(self.ex["settle_s"])), why, max_steps)
+        cp.reset(self._pitch_perceive, self.gi, self._sleep, self.clock(), why)
         moved = cp.drags > before
         if moved:
             self._turn_t, self._turn_frame = self.clock(), self._frames
         return moved
+
+    def _pitch_search_check(self, p: Perception, t: float, x: _Explore) -> bool:
+        """Buscando (EXPLORAR, fases de barrido y de giro hacia un candidato): reinicia la camara si mira el piso (capturas
+        seguidas sin horizonte) o, al empezar una vuelta, si pasaron `camera_pitch.every_s`. True si reinicio algo."""
+        cp = self.pitch
+        if not cp.enabled or self._img is None:
+            return False
+        if cp.observe(self._img, p, t):
+            return self._pitch_reset("piso")
+        if x.phase == "sweep" and x.steps == 0 and x.sw_prev is None and cp.periodic_due(t):
+            return self._pitch_reset("periodico")
+        return False
 
     # ------------------------------------------------------------------ buscar el proximo metin mientras se ataca
     def _scan_allowed(self, a: _Attack, t: float) -> bool:
@@ -1811,9 +1825,6 @@ class Bot:
                 logger.info("Mientras ataco: no encontre otro metin en %d pasos", s.steps)
                 s.phase = "back"
             else:
-                if self.pitch.active and self.pitch.out_of_tolerance(self.pitch.measure(self._img, p)) \
-                        and self._fix_pitch(p, t, "mientras ataco", max_steps=1):
-                    return
                 if self._search_turn(s.dir, step_s):
                     s.steps += 1
                 return
@@ -2325,6 +2336,8 @@ class Bot:
             return State.CENTRO, f"sin ningun objetivo en {idle:.0f} s"
         if self.debug.explore_due(t):
             self._dbg("explorar", f"fase {x.phase}")
+        if x.phase in ("sweep", "aim") and self._turn_ready() and self._pitch_search_check(p, t, x):
+            return None   # el reinicio de la camara cambio la imagen: se analiza antes de girar
         if listing and x.phase == "sweep":
             return self._sweep_look(p, t, x, h, pos0)
         if x.phase == "aim":
@@ -2335,16 +2348,10 @@ class Bot:
         if x.phase == "sweep":
             if not self._turn_ready():   # el paso anterior todavia se esta analizando (tiempo y capturas)
                 return None
-            if self.pitch.active and self.pitch.due(t) and self._fix_pitch(p, t, "periodico"):
-                return None   # el arrastre cambio la imagen: se analiza antes de girar
             if x.steps < int(self.ex["camera_steps"]):
                 self._search_turn(x.dir, float(self.ex["camera_step_s"]))
                 x.steps += 1
             else:
-                if self.pitch.active and not x.pitch_checked:
-                    x.pitch_checked = True
-                    if self._fix_pitch(p, t, "fin del barrido"):
-                        return None
                 pos = self.tracker.position
                 if pos is not None and self.zone.signed_distance(pos) < float(self.ex["border_margin"]):
                     self._vl_margin = float(self.ex["border_margin"])   # esta vuelta termina bien adentro, no solo a explore_margin
@@ -2416,15 +2423,9 @@ class Bot:
                         return out
         cap = math.ceil(int(self.ex["camera_steps"]) * float(self.ex["sweep_max_factor"]))
         if x.sw_acc < float(self.ex["sweep_deg"]) and x.steps < cap:
-            if self.pitch.active and self.pitch.due(t) and self._fix_pitch(p, t, "periodico"):
-                return None   # el arrastre cambio la imagen: se analiza antes de girar
             self._search_turn(x.dir, float(self.ex["camera_step_s"]))
             x.steps += 1
             return None
-        if self.pitch.active and not x.pitch_checked:
-            x.pitch_checked = True
-            if self._fix_pitch(p, t, "fin del barrido"):
-                return None
         return self._finish_lap(x, t, pos)
 
     def _finish_lap(self, x: _Explore, t: float, pos: Xy) -> Transition:

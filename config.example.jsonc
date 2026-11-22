@@ -331,25 +331,34 @@
   //  (EMA ground_scale_ema, acotado a ground_scale_bounds x el inicial) con cada clic que lleva al personaje a un metin
   //  (recorrido + ground_reach_u). Sin cono legible el bot vuelve al comportamiento anterior (varias vueltas, "_next").
 
-  // Angulo vertical de la camara. Se mide desde la imagen la fila del horizonte (donde termina el piso, bot/vision/pitch.py):
-  //  horizon_frac = fila / alto (mas chico = camara mas inclinada hacia el piso; 0 = todo piso). ref_horizon_frac = el valor que
-  //  Enzo quiere conservar: null = no corrige (se mide con `calibrate.py camara`, que lo guarda aca). Con referencia, despues de
-  //  romper cada metin (antes de buscar), cada every_s mientras explora y durante la busqueda mientras ataca, si el horizonte
-  //  se fue mas de tolerance, arrastra con el CLIC DERECHO en vertical (drag_s s, drag_steps pasos) desde un punto libre del piso
-  //  (a >= drag_clear_px de etiquetas, piedras y personaje). dy = gain * (medido - ref), tope max_drag_px, hasta max_steps
-  //  arrastres por correccion; gain (px por unidad de horizon_frac; gain_px_per_frac es el inicial) se aprende solo, con signo,
-  //  comparando antes y despues de cada arrastre (promedio gain_ema; se ignora si el horizonte se movio menos de
-  //  min_gain_move_frac). Medicion con confianza < min_confidence: no corrige. calib_samples / calib_pause_s: capturas de
-  //  `calibrate.py camara`.
-  //  Medicion: franja central de +-strip_half_frac del ancho; el color del piso sale de una muestra a sample_top_px..sample_bottom_px
-  //  debajo del personaje; un pixel es piso si su tono difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila
-  //  es piso con >= row_floor_frac de pixeles piso (descartando UI y el rectangulo del personaje player_box_px = [medio ancho,
-  //  arriba, abajo]); el horizonte es la primera fila que deja de serlo run_rows seguidas. min_valid_px: pixeles utiles minimos por
-  //  fila; min_floor_rows: menos filas de piso que eso = medicion dudosa. (Medidos sobre samples/, ver PROGRESS.md.)
-  "camera_pitch": {"enabled": true, "ref_horizon_frac": null, "tolerance": 0.04, "gain_px_per_frac": 600.0,
-                   "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
-                   "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
-                   "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+  // Angulo vertical de la camara. NO se mide el angulo (la fila del horizonte depende del terreno): se REINICIA desde el tope.
+  //  reset = (a) rueda hacia "lejos" zoom_out_clicks (zoom_out_sign = sentido de la rueda que ALEJA: -1 = hacia atras; si en el
+  //  juego aprieta el zoom en vez de alejar, ponelo en 1; se prueba con test_input.py --solo camara); (b) clic derecho
+  //  arrastrando hacia ARRIBA to_limit_px en total (tope horizontal; en arrastres de <= max_drag_px); (c) arrastre hacia ABAJO
+  //  from_limit_px (de ahi sale tu angulo normal). from_limit_px es una ESTIMACION (comparando samples/cam_01 y cam_02: el
+  //  horizonte pasa de la fila ~415 a ~100, unos 9-13 grados, con una ganancia supuesta de 0.15-0.25 grados por px): calibralo con
+  //  `calibrate.py camara-tope` (parado en terreno PLANO; manda input real: baja de a step_px hasta calib_max_px y propone el paso
+  //  que se parece a tu angulo normal; lo guarda aca).
+  //  Cuando: al arrancar, despues de cada metin roto, al empezar una vuelta de busqueda si pasaron mas de every_s desde el ultimo
+  //  reinicio, y cuando la camara mira el piso (floor_frames capturas seguidas sin horizonte mientras se busca; minimo min_gap_s
+  //  entre reinicios, que se multiplica si el reinicio no saco la vista del piso). Nunca mientras ataca, recoge o hay captcha.
+  //  Seguridad: un arrastre siempre mueve el mouse >= min_drag_px (un clic derecho SIN mover sobre un monstruo lo selecciona) y su
+  //  inicio, medio y final estan a >= drag_clear_px de etiquetas, monstruos, objetos, piedras y personaje y fuera de la interfaz;
+  //  drag_s / drag_steps: duracion y pasos de cada arrastre; drag_pause_s: pausa entre arrastres; al final explore.settle_s.
+  //  Detector "mira el piso" (bot/vision/pitch.py como detector, no como medida): franja central de +-strip_half_frac del ancho;
+  //  el color del piso sale de una muestra a sample_top_px..sample_bottom_px debajo del personaje; un pixel es piso si su tono
+  //  difiere <= tol_hue, su brillo <= tol_val y su saturacion >= min_sat; una fila es piso con >= row_floor_frac de pixeles piso
+  //  (descartando UI y el rectangulo del personaje player_box_px = [medio ancho, arriba, abajo]); piso hasta el borde de arriba
+  //  = todo piso. Si la central no es medible (ladera de dos tonos), cuentan las dos franjas de +-side_half_frac centradas a
+  //  +-side_offset_frac del ancho. min_valid_px: pixeles utiles minimos por fila; min_floor_rows: menos filas que eso = dudoso.
+  //  (Medidos sobre samples/cam_*.png y debug/run_20261121_230828, ver PROGRESS.md.) step_px / calib_max_px: paso y tope de
+  //  `calibrate.py camara-tope`. (ref_horizon_frac, tolerance, gain_px_per_frac, max_steps, gain_ema, min_gain_move_frac,
+  //  calib_samples, calib_pause_s: de la correccion por horizonte, ya no se usan.)
+  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+                   "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
+                   "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                   "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
+                   "min_confidence": 0.5,
                    "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                    "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
                    "min_valid_px": 20, "min_floor_rows": 40},

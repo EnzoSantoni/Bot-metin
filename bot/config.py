@@ -156,12 +156,14 @@ DEFAULTS: dict[str, Any] = {
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
                "gone_cycles": 2, "reposition_s": 3.0, "reposition_frac": 0.5, "item_max_s": 15.0},
-    # Angulo vertical de la camara (bot/vision/pitch.py, bot/camera_pitch.py). ref_horizon_frac = null: no corrige (se mide con
-    # `calibrate.py camara`). Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "ref_horizon_frac": None, "tolerance": 0.04, "gain_px_per_frac": 600.0,
-                     "max_drag_px": 150, "max_steps": 3, "every_s": 30.0, "drag_s": 0.3, "drag_steps": 6,
-                     "min_confidence": 0.5, "calib_samples": 5, "calib_pause_s": 0.3, "gain_ema": 0.5,
-                     "min_gain_move_frac": 0.01, "drag_clear_px": 140,
+    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio desde el tope (zoom lejos, arriba to_limit_px, abajo
+    # from_limit_px; from_limit_px es una ESTIMACION: se calibra con `calibrate.py camara-tope`). Detector de "mira el piso":
+    # bot/vision/pitch.py. Ver config.example.jsonc.
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": -1, "to_limit_px": 700, "from_limit_px": 60,
+                     "max_drag_px": 200, "min_drag_px": 20, "drag_s": 0.3, "drag_steps": 6, "drag_pause_s": 0.1,
+                     "drag_clear_px": 140, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                     "side_offset_frac": 0.14, "side_half_frac": 0.06, "step_px": 15, "calib_max_px": 300,
+                     "min_confidence": 0.5,
                      "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                      "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
                      "min_valid_px": 20, "min_floor_rows": 40},
@@ -515,7 +517,11 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"))
+                 ("pickup", "press_interval_ms"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
+                 # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
+                 ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
+                 ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
+                 ("camera_pitch", "gain_ema"), ("camera_pitch", "min_gain_move_frac"))
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -929,23 +935,28 @@ def _validate_controls_safety_input(cfg: dict) -> None:
 
 
 def _validate_camera_pitch(cfg: dict) -> None:
-    """camera_pitch: angulo vertical de la camara (referencia opcional + parametros de la medicion y del arrastre)."""
+    """camera_pitch: reinicio de la camara desde el tope (zoom, arrastres) + parametros del detector de "mira el piso"."""
     c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
     if not isinstance(c.get("enabled"), bool):
         raise ConfigError("camera_pitch.enabled debe ser true o false")
-    ref = c.get("ref_horizon_frac")
-    if ref is not None and (not isinstance(ref, (int, float)) or isinstance(ref, bool) or not 0 <= ref <= 1):
-        raise ConfigError("camera_pitch.ref_horizon_frac debe ser null o un numero entre 0 y 1")
-    positive = ("tolerance", "gain_px_per_frac", "max_drag_px", "max_steps", "every_s", "drag_s", "drag_steps",
-                "calib_samples", "gain_ema", "drag_clear_px", "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val",
-                "row_floor_frac", "run_rows", "min_valid_px")
-    nonneg = ("min_confidence", "calib_pause_s", "min_gain_move_frac", "sample_top_px", "min_sat", "min_floor_rows")
+    positive = ("to_limit_px", "from_limit_px", "max_drag_px", "min_drag_px", "every_s", "drag_steps",
+                "drag_clear_px", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac", "step_px", "calib_max_px",
+                "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val", "row_floor_frac", "run_rows", "min_valid_px")
+    nonneg = ("zoom_out_clicks", "drag_s", "drag_pause_s", "min_confidence", "sample_top_px", "min_sat", "min_floor_rows")
     for k in positive + nonneg:
         v = c.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):
             raise ConfigError(f"camera_pitch.{k} debe ser un numero " + (">" if k in positive else ">=") + " 0")
-    if not 0 < c["gain_ema"] <= 1 or not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5:
-        raise ConfigError("camera_pitch.gain_ema y row_floor_frac deben estar en (0, 1] y strip_half_frac en (0, 0.5]")
+    if c.get("zoom_out_sign") not in (-1, 1) or isinstance(c.get("zoom_out_sign"), bool):
+        raise ConfigError("camera_pitch.zoom_out_sign debe ser -1 o 1 (sentido de la rueda que ALEJA la camara)")
+    if c["min_drag_px"] < 20:
+        raise ConfigError("camera_pitch.min_drag_px debe ser >= 20 (un arrastre que casi no mueve el mouse puede seleccionar un monstruo)")
+    if c["max_drag_px"] < 2 * c["min_drag_px"]:
+        raise ConfigError("camera_pitch.max_drag_px debe ser >= 2 * min_drag_px")
+    if c["to_limit_px"] < c["min_drag_px"]:
+        raise ConfigError("camera_pitch.to_limit_px debe ser >= min_drag_px")
+    if not 0 < c["row_floor_frac"] <= 1 or not 0 < c["strip_half_frac"] <= 0.5 or not 0 < c["side_half_frac"] <= 0.5:
+        raise ConfigError("camera_pitch.row_floor_frac debe estar en (0, 1] y strip_half_frac / side_half_frac en (0, 0.5]")
     if c["sample_top_px"] >= c["sample_bottom_px"]:
         raise ConfigError("camera_pitch.sample_top_px debe ser menor que sample_bottom_px")
     _require_numbers(c.get("player_box_px"), "camera_pitch.player_box_px", 3)

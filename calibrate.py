@@ -1,6 +1,6 @@
-"""Herramienta de calibracion (pasiva: lee la pantalla y escucha hotkeys, NUNCA manda teclas ni clics al juego).
+"""Herramienta de calibracion (pasiva: lee la pantalla y escucha hotkeys; solo `camara-tope` manda input: rueda y clic derecho).
 
-Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|tono|zonas|camara|resumen> [opciones]
+Uso: .venv\\Scripts\\python.exe calibrate.py <ventana|zona|velocidad|metin|tono|zonas|camara-tope|resumen> [opciones]
 Los que escriben config.json piden confirmacion (s/n, o --si), hacen config.json.bak y validan antes de guardar.
 F12 o Ctrl+C cancelan sin guardar.
 """
@@ -10,7 +10,7 @@ import sys
 from bot import calibration as cal
 from bot.config import ConfigError, load_config
 
-NEEDS_GAME = {"zona", "velocidad", "metin", "tono", "zonas", "camara"}   # subcomandos que capturan el juego
+NEEDS_GAME = {"zona", "velocidad", "metin", "tono", "zonas", "camara-tope"}   # subcomandos que capturan el juego
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("nombre", help='nombre del metin, ej. "Metin de Oscuridad"')
     p.add_argument("--capturas", type=int, default=3, help="maximo de capturas (default: 3)")
     sub.add_parser("zonas", parents=[common], help="guardar debug/calibrate_zonas.png para revisar las zonas excluidas")
-    sub.add_parser("camara", parents=[common], help="medir el angulo vertical de la camara (horizonte) y guardarlo como referencia")
+    p = sub.add_parser("camara-tope", parents=[common],
+                       help="ACTIVO (manda input): calibrar cuantos px bajar desde el tope de la camara")
+    p.add_argument("--paso", type=int, default=None, help="px de cada paso (default: camera_pitch.step_px)")
+    p.add_argument("--referencia", nargs="+", default=None, metavar="PNG",
+                   help="capturas con tu camara normal en terreno plano (default: samples/cam_01 y cam_04)")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
     return ap
 
@@ -62,9 +66,36 @@ def run(args: argparse.Namespace, s: cal.Session) -> int:
         return cal.cmd_tono(s, args.nombre, args.capturas)
     if args.cmd == "zonas":
         return cal.cmd_zonas(s)
-    if args.cmd == "camara":
-        return cal.cmd_camara(s)
+    if args.cmd == "camara-tope":
+        return _run_camara_tope(args, s)
     return cal.cmd_resumen(s)
+
+
+def _run_camara_tope(args: argparse.Namespace, s: cal.Session) -> int:
+    """Arma el input real (backend, control con panico F12/esquina, GameInput) y corre el subcomando ACTIVO."""
+    from bot.control import BotControl, PanicStop
+    from bot.input.game_input import GameInput, InputBlockedError
+    from bot.input.pydirect import PyDirectInputBackend
+    s.window.find()
+    control, backend = BotControl(s.cfg), PyDirectInputBackend(s.cfg)
+    s.gi = GameInput(s.window, backend, control, s.cfg)
+    try:
+        s.gi.startup_check()
+    except InputBlockedError as e:
+        print(e)
+        return 1
+    control.add_stop_callback(backend.release_all)
+    control.start()
+    s.countdown = lambda: control.countdown(on_tick=lambda n: print(f"Arrancando en {n}... (F12 o la esquina del mouse cortan)"))
+    try:
+        return cal.cmd_camara_tope(s, args.paso, args.referencia)
+    except PanicStop:
+        print("Cortado por panico. No se guardo nada.")
+        return 1
+    finally:
+        control.mark_finished()
+        backend.release_all()
+        control.close()
 
 
 def main(argv: list[str] | None = None) -> int:

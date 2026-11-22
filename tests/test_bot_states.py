@@ -72,6 +72,7 @@ def make_cfg(**over):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["navigation"]["mode"] = "clic"   # los tests de fondo son del modo clic
     cfg["spawns"]["enabled"] = False
+    cfg["camera_pitch"].update(enabled=False, drag_s=0.0)   # el reinicio de la camara lo prueba tests/test_camera_pitch.py
     # los tests de fondo no prueban la regla de zona de los metin (Fase 6i): sin limite de piso/margen y con la tolerancia entera;
     # los de esa regla (tests/test_metin_zona.py) usan `strict_zone=True`
     if not over.pop("strict_zone", False):
