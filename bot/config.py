@@ -196,6 +196,10 @@ DEFAULTS: dict[str, Any] = {
                # personaje que no se salteo pasa a RECOGER antes que cualquier otra cosa. Los salteados se recuerdan
                # skip_keep_s (no se vuelven a intentar).
                "priority_px": 450, "skip_keep_s": 300.0,
+               # Un objeto salteado no vuelve a disparar RECOGER por skip_retrigger_s, aunque el personaje se mueva y el objeto
+               # cambie de lugar en pantalla: se lo reconoce por el texto blanco de su recuadro (>= skip_sig_min_px px, IoU >=
+               # skip_sig_iou) ademas de por su posicion.
+               "skip_retrigger_s": 60.0, "skip_sig_min_px": 15, "skip_sig_iou": 0.7,
                # idle_max_s: recogiendo sin que desaparezca ningun objeto por tanto tiempo -> termina (los que quedan cuentan como
                # intentados); priority_retry_s: tras una recogida cortada (sin progreso, tope de Z o de tiempo, fuera de la zona)
                # "objetos primero" espera esto antes de volver a entrar.
@@ -1153,7 +1157,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
                     "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s", "max_z_per_item",
                     "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio",
-                    "priority_px", "skip_keep_s", "idle_max_s", "priority_retry_s"),
+                    "priority_px", "skip_keep_s", "idle_max_s", "priority_retry_s", "skip_retrigger_s", "skip_sig_min_px",
+                    "skip_sig_iou"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s",
           "max_z_per_item", "skip_match_u",

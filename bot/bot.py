@@ -35,6 +35,7 @@ from bot.vision.captcha import find_captcha
 from bot.vision.click_point import click_candidates, monster_column, point_is_free, stone_rect_near
 from bot.vision.coords import read_coords
 from bot.vision.far_metin import FarMetin
+from bot.vision.items import label_signature, same_label
 from bot.vision.minimap import camera_heading
 from bot.vision.metin import MetinDetection, target_slugs
 from bot.zone import FarmZone, ZoneStatus
@@ -299,6 +300,9 @@ class _Skip:
     point: tuple[int, int]                          # punto de pantalla al saltearlo
     pos: tuple[int, int] | None                     # posicion del jugador en ese momento (el punto de pantalla vale cerca)
     world: Xy | None                                # posicion en el mapa (con el rumbo de la camara); None si no se conocia
+    t: float = -math.inf                            # hora en que se lo salteo
+    sig: Any = None                                 # firma del texto del recuadro (`label_signature`): lo reconoce aunque
+                                                    # se corra en pantalla
 
 
 @dataclass
@@ -2403,14 +2407,28 @@ class Bot(ApproachKeysMixin):
             return False
         lim = float(self.pk["priority_px"])
         near = [i for i in self._valid_items(p) if math.dist(i.click_point, p.player_xy) <= lim]
-        if near and t - self._skipped_t <= float(self.pk["skip_keep_s"]):
-            near = self._not_skipped(self._skipped, p, near)
+        # un objeto salteado no vuelve a disparar RECOGER por pickup.skip_retrigger_s: por su posicion o, aunque el personaje se
+        # haya movido y el objeto este en otro lugar de la pantalla, por el texto de su recuadro
+        recent = [s_ for s_ in self._skipped if t - s_.t <= float(self.pk["skip_retrigger_s"])]
+        if near and recent:
+            near = [i for i in self._not_skipped(recent, p, near) if not self._same_as_skipped(i, recent)]
         if not near:
             return False
         if self.state is State.VOLVER:
             self.pending_return = True   # despues de recoger se sigue volviendo
         self._enter(State.RECOGER, f"{len(near)} objeto(s) valido(s) en el piso: primero los recojo")
         return True
+
+    def _item_sig(self, it: Any) -> Any:
+        """Firma del texto del recuadro del objeto `it` en la captura de este ciclo (None si no se puede)."""
+        return label_signature(self._img, it.rect, int(self.pk["skip_sig_min_px"]))
+
+    def _same_as_skipped(self, it: Any, skipped: list) -> bool:
+        """El objeto `it` tiene el mismo texto que un salteado (lo reconoce aunque se haya corrido en pantalla)."""
+        if not any(s_.sig is not None for s_ in skipped):
+            return False
+        sig = self._item_sig(it)
+        return sig is not None and any(same_label(sig, s_.sig, float(self.pk["skip_sig_iou"])) for s_ in skipped)
 
     def _valid_items(self, p: Perception) -> list:
         return [i for i in p.items if i.kind == "item" and not i.reserved_other and i.allowed]
@@ -2451,7 +2469,8 @@ class Bot(ApproachKeysMixin):
             self._items_retry_t = self.clock() + float(self.pk["priority_retry_s"])
             for it in pending:
                 k.skipped.append(_Skip(it.click_point, pos, self._item_world(it.click_point, p, pos, self._heading()
-                                                                            if pos is not None else None)))
+                                                                            if pos is not None else None),
+                                       self.clock(), self._item_sig(it)))
             return self._end_pickup(*cut)
         self._pickup_step(k, p, t, pos, pending)
         return None
@@ -2504,7 +2523,10 @@ class Bot(ApproachKeysMixin):
         """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo) y guarda en debug un
         recorte de la captura alrededor de su etiqueta (`<run>/recoger/HHMMSS_mmm_salteado_x_y.png`)."""
         h = self._heading() if pos is not None else None
-        k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h)))
+        lab = min(p.items, key=lambda i: math.dist(i.click_point, cur.point), default=None)
+        sig = self._item_sig(lab) if lab is not None and math.dist(lab.click_point, cur.point) <= float(self.pk["same_px"]) \
+            else None
+        k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h), self.clock(), sig))
         k.cur = None
         hw, up, down = (int(v) for v in self.pk["skip_crop_px"])
         x, y = cur.point

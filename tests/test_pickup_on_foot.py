@@ -457,6 +457,52 @@ def test_salteados_no_vuelven_a_disparar_objetos_primero():
     assert State.RECOGER not in [s for s, _ in h.seen[n:]]
 
 
+def _draw_label(img, rect, text):
+    import cv2
+    img[rect.y:rect.bottom, rect.x:rect.right] = (20, 20, 20)
+    cv2.putText(img, text, (rect.x + 3, rect.bottom - 4), cv2.FONT_HERSHEY_PLAIN, 0.9, (255, 255, 255), 1)
+
+
+def test_firma_del_recuadro_reconoce_el_mismo_texto_en_otro_lugar_y_no_otro_texto():
+    import numpy as np
+    from bot.vision.items import label_signature, same_label
+    img = np.zeros((300, 600, 3), np.uint8)
+    a, b, c = Rect(20, 20, 160, 16), Rect(300, 200, 160, 16), Rect(20, 120, 160, 16)
+    _draw_label(img, a, "Piedra de Magia+1")
+    _draw_label(img, b, "Piedra de Magia+1")
+    _draw_label(img, c, "Pocion Morada(M)")
+    sa, sb, sc = (label_signature(img, r) for r in (a, b, c))
+    assert sa is not None and same_label(sa, sb) and not same_label(sa, sc)
+    assert label_signature(np.zeros((300, 600, 3), np.uint8), a) is None   # sin texto blanco no hay firma
+
+
+def test_salteado_no_vuelve_a_disparar_recoger_60_s_aunque_se_corra_en_pantalla():
+    """Corrida de las 02:36 (02:45:07 a 02:45:44): los mismos objetos salteados volvian a disparar RECOGER al moverse el
+    personaje (otro lugar de la pantalla). Ahora se los reconoce por el texto del recuadro durante pickup.skip_retrigger_s."""
+    import numpy as np
+    from bot.bot import _Skip
+    from bot.vision.items import label_signature
+    st = {"pt": DOWN, "xy": (550, 150)}
+    box = {}
+
+    def capture(region=None):
+        r = box["h"].win._rect
+        img = np.zeros((r.h, r.w, 3), np.uint8)
+        _draw_label(img, label(st["pt"]).rect, "Piedra de Magia+1")
+        return img
+    h = box["h"] = Harness(lambda h, n: perc(items=[label(st["pt"])], coords=st["xy"]))
+    h.win.capture = capture
+    sig = label_signature(capture(), label(DOWN).rect)
+    assert sig is not None
+    h.bot._skipped = [_Skip(DOWN, (550, 150), None, h.clock(), sig)]
+    st["pt"], st["xy"] = (PLAYER[0] - 150, 700), (565, 158)   # se movio: el objeto quedo en otro lugar de la pantalla
+    for _ in range(5):
+        h.bot.step()
+    assert State.RECOGER not in h.states()
+    h.clock.t += float(h.cfg["pickup"]["skip_retrigger_s"]) + 1.0
+    h.run_until(lambda: State.RECOGER in h.states(), limit=10)
+
+
 def test_antes_de_subirse_guarda_una_captura_completa_con_la_hora(tmp_path, caplog):
     import re
     caplog.set_level(logging.INFO)

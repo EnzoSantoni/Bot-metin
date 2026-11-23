@@ -210,3 +210,44 @@ def choose_item(items: list[ItemLabel], player_xy: tuple[int, int]) -> ItemLabel
     if not ok:
         return None
     return min(ok, key=lambda i: math.dist(i.click_point, player_xy))
+
+
+def label_signature(img: np.ndarray | None, rect: Rect, min_px: int = 15) -> np.ndarray | None:
+    """Firma de un recuadro de objeto para reconocerlo aunque se corra en pantalla: la mascara de su texto BLANCO (el nombre
+    del objeto; sin el amarillo del dueno, que desaparece cuando vence la reserva) recortada a la caja de ese texto. None si
+    casi no hay texto blanco (imagen negra, recuadro tapado)."""
+    if img is None or img.ndim != 3:
+        return None
+    x0, y0 = max(0, rect.x), max(0, rect.y)
+    x1, y1 = min(img.shape[1], rect.right), min(img.shape[0], rect.bottom)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    roi = img[y0:y1, x0:x1].astype(np.int16)
+    lo, hi = roi.min(axis=2), roi.max(axis=2)
+    m = (lo >= 170) & (hi - lo <= 45)
+    if int(m.sum()) < min_px:
+        return None
+    ys, xs = np.nonzero(m)
+    return m[ys.min():ys.max() + 1, xs.min():xs.max() + 1].copy()
+
+
+def same_label(a: np.ndarray | None, b: np.ndarray | None, min_iou: float = 0.7, shift: int = 2) -> bool:
+    """Dos firmas (`label_signature`) son el mismo texto: tamano parecido (+-`shift` px) y coincidencia (IoU) >= `min_iou`
+    con un corrimiento de hasta `shift` px."""
+    if a is None or b is None:
+        return False
+    if abs(a.shape[0] - b.shape[0]) > shift or abs(a.shape[1] - b.shape[1]) > shift + 1:
+        return False
+    h, w = max(a.shape[0], b.shape[0]) + 2 * shift, max(a.shape[1], b.shape[1]) + 2 * shift
+    pa = np.zeros((h, w), bool)
+    pa[shift:shift + a.shape[0], shift:shift + a.shape[1]] = a
+    best = 0.0
+    for dy in range(0, 2 * shift + 1):
+        for dx in range(0, 2 * shift + 1):
+            pb = np.zeros((h, w), bool)
+            pb[dy:dy + b.shape[0], dx:dx + b.shape[1]] = b
+            union = int((pa | pb).sum())
+            if union:
+                best = max(best, int((pa & pb).sum()) / union)
+    return best >= min_iou
+
