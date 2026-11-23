@@ -743,3 +743,39 @@ def test_max_seconds_keep_hp_invalido():
         cfg["attack"]["max_seconds_keep_hp"] = bad
         with pytest.raises(ConfigError):
             validate_config(cfg)
+
+
+# ---------------------------------------------------------------- panel perdido con vida 100%: truco del clic derecho
+def _lost_panel_script(on_me):
+    import dataclasses
+
+    from bot.vision.monsters import MonsterLabel
+    w = {"atk": 0}
+
+    def script(h, n):
+        h.clock.t += 0.5
+        if h.bot.state is State.BUSCAR:
+            return perc(metins=[metin()])
+        if h.bot.state is not State.ATACAR:
+            return perc()
+        w["atk"] += 1
+        rights = [e for e in h.be.events if e == ("mouse_down", "right")]
+        panel = target_panel(1.0) if w["atk"] == 1 or rights else None   # se pierde con vida 100%; vuelve tras el derecho
+        r = Rect(PLAYER[0] - 150, PLAYER[1] - 60, 100, 12)                 # un monstruo cerca, del lado opuesto a la piedra
+        return dataclasses.replace(perc(metins=[metin()], panel=panel), monsters=[MonsterLabel(r, r.center)],
+                                   monsters_near=1, monsters_on_me=on_me)
+    return script
+
+
+@pytest.mark.parametrize("on_me", [0, 1])
+def test_panel_perdido_con_vida_100_clic_derecho_en_un_monstruo_y_despues_clic_izquierdo(caplog, on_me):
+    caplog.set_level(logging.INFO)
+    h = Harness(_lost_panel_script(on_me))
+    h.run_until(lambda: any("ahora clic izquierdo al metin" in r.getMessage() for r in caplog.records)
+                and h.be.events.count(("mouse_down", "left")) >= 2, limit=200)
+    ev = h.be.events
+    first_right = ev.index(("mouse_down", "right"))
+    assert ("mouse_down", "left") in ev[first_right:], "despues del clic derecho, clic izquierdo al metin"
+    assert ev[:first_right].count(("mouse_down", "left")) == 1, "ningun reclic antes del truco"
+    assert not any(e == ("key_down", "space") for e in ev[:first_right]), "sin ESPACIO antes del truco"
+    assert "Panel perdido con vida 100%" in caplog.text

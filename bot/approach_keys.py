@@ -127,30 +127,58 @@ class ApproachKeysMixin:
             return pt
         return None
 
-    def _try_recover(self, a: Any, p: Any, t: float, why: str) -> bool:
+    def _try_recover(self, a: Any, p: Any, t: float, why: str, lost: bool = False) -> bool:
         """Sin panel con el personaje quieto y pegado al metin: UN clic derecho (por metin) sobre un monstruo cercano para que el
         juego muestre su nombre y vida; si se ataca un metin el panel vuelve a mostrar el del metin (`_recover_check`). True si
-        hizo el clic (el ciclo esta usado)."""
+        hizo el clic (el ciclo esta usado). `lost`: panel PERDIDO con la vida del metin en 100% (error del juego): el truco va
+        antes de cualquier reclic, aunque haya bichos encima o el punto del metin quede a mas de `attack.arrive_px`, hasta
+        `attack.recover_max` veces por metin; despues del clic derecho siempre hay un clic izquierdo al metin."""
         cm = a.cm
-        if (not self.atk["panel_recover"] or cm is None or cm.recovered or p.monsters_on_me > 0
-                or math.dist(a.click, p.player_xy) > float(self.atk["arrive_px"]) or self._click_gate() is not None):
+        if not self.atk["panel_recover"] or cm is None or self._click_gate() is not None:
+            return False
+        if lost:
+            if cm.recovers >= int(self.atk["recover_max"]):
+                return False
+        elif cm.recovered or p.monsters_on_me > 0 or math.dist(a.click, p.player_xy) > float(self.atk["arrive_px"]):
             return False
         pt = self._monster_body_point(a, p)
         if pt is None:
             return False   # sin monstruo cerca no hay a quien seleccionar: sigue el reclic normal
         if not self.gi.right_click(pt[0], pt[1], p.mask):
             return False
-        cm.recovered = True
+        if lost:
+            cm.recovers += 1
+        else:
+            cm.recovered = True
+        a.recover_lost = lost
         a.recover_t = self._last_click_t = self.clock()
         self._planned = pt
-        logger.info("Sin panel (%s) con el personaje quieto y pegado al metin: clic derecho sobre un monstruo en %s para ver si "
-                    "el panel vuelve al metin (espero %.1f s)", why, pt, float(self.atk["recover_wait_s"]))
+        if lost:
+            logger.info("Panel perdido con vida 100%% (error del juego): clic derecho sobre un monstruo en %s (lo selecciona sin "
+                        "atacarlo y el panel vuelve) y despues clic izquierdo al metin (%d/%d)", pt, cm.recovers,
+                        int(self.atk["recover_max"]))
+        else:
+            logger.info("Sin panel (%s) con el personaje quieto y pegado al metin: clic derecho sobre un monstruo en %s para "
+                        "ver si el panel vuelve al metin (espero %.1f s)", why, pt, float(self.atk["recover_wait_s"]))
         self._dbg("recuperar", f"clic derecho en {pt}: {why}")
         return True
 
     def _recover_check(self, a: Any, kind: str | None, p: Any, t: float) -> Any:
         """Espera tras el clic derecho: panel con el metin -> estaba atacando (sigue el ciclo normal); pasado
         `attack.recover_wait_s` sin que vuelva -> no ataca, reclic izquierdo al metin (quieto, con el ritmo de siempre)."""
+        if a.recover_lost:   # panel perdido con vida 100%: tras el clic derecho, clic izquierdo al metin
+            if kind == "target_metin" and a.hp_down_t > a.recover_t:
+                a.recover_t, a.recover_lost = None, False
+                logger.info("El panel volvio a mostrar el metin y la vida baja: sigo")
+                return _NO_RECOVERY
+            if kind != "target_metin" and self.clock() - a.recover_t < float(self.atk["recover_wait_s"]):
+                return None   # el panel todavia muestra al monstruo (o nada)
+            a.recover_t, a.recover_lost = None, False
+            a.missing = a.gone = 0
+            logger.info("Truco del clic derecho: el panel %s; ahora clic izquierdo al metin",
+                        "volvio a mostrar el metin" if kind == "target_metin" else "no volvio al metin")
+            a.pending = ("clic izquierdo tras el clic derecho", False)
+            return None
         if kind == "target_metin":
             a.recover_t = None
             logger.info("El panel volvio a mostrar el metin: estaba atacando, sigo")

@@ -37,7 +37,7 @@ def clicks_xy(h):
 def spy_spawns(h):
     """Anota las llamadas a `_record_spawn` (el mapa de metin solo se guarda con roturas reales)."""
     calls = []
-    h.bot._record_spawn = lambda: calls.append(h.clock.t)
+    h.bot._record_spawn = lambda *a: calls.append(h.clock.t)
     return calls
 
 

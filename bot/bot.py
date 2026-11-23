@@ -171,6 +171,7 @@ class _Attack:
     walking: bool = False                       # el personaje camina hacia el metin (coordenadas cambiando): no se reclickea
     clicks: int = 1                             # clics izquierdos dados a este metin sin confirmar (tope `approach.max_clicks`)
     recover_t: float | None = None              # hora del clic derecho que intenta recuperar el panel (espera `attack.recover_wait_s`)
+    recover_lost: bool = False                  # ese clic derecho fue por panel perdido con vida 100%: despues, clic izquierdo
 
 
 @dataclass
@@ -189,7 +190,8 @@ class _CurrentMetin:
     rounds: int = 0                    # veces que se agotaron los reclics por deseleccion
     unstick_n: int = 0                 # intentos de destrabe yendo al metin (escalera ESPACIO / costado)
     ladders: int = 0                   # veces que se agoto esa escalera (y se paso a DESTRABAR)
-    recovered: bool = False            # ya se intento recuperar el panel con clic derecho (una vez por metin)
+    recovered: bool = False            # ya se intento recuperar el panel con clic derecho (una vez por metin, sin panel)
+    recovers: int = 0                  # clics derechos por panel perdido con vida 100% (tope `attack.recover_max`)
 
 
 @dataclass
@@ -1705,6 +1707,10 @@ class Bot(ApproachKeysMixin):
                             int(self.atk["max_deselect_reclicks"]))
                 self._atk = None
                 return State.BUSCAR, "reclics por deseleccion agotados"
+        if hp is not None and hp >= float(self.atk["recover_hp"]) and self._try_recover(a, p, t, "panel perdido con vida "
+                                                                                            "100%", lost=True):
+            a.missing = a.gone = 0
+            return None   # truco de Enzo: clic derecho sobre un monstruo cercano y despues clic izquierdo al metin
         if announce:
             logger.info("Panel perdido con vida %s: deseleccion, reclic en el mismo metin",
                         "?" if hp is None else f"{hp * 100:.0f}%")
