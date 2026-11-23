@@ -281,6 +281,10 @@
              "no_panel_s": 2.0,
              //  leave_s: con otro metin en el panel (Avaricia), un paso atras (S) de tantos segundos para dejar de pegarle.
              "leave_s": 0.6,
+             //  TRABADO YENDO AL METIN SIN MONSTRUOS: si la piedra sigue en pantalla, primero hasta stuck_reclicks reclics en la
+             //  piedra (esperando stuck_reclick_wait_s cada uno); recien si no se mueve, el paso al costado (y el reclic usa la
+             //  piedra de esa captura sin girar la vista, si sigue a la vista).
+             "stuck_reclicks": 2, "stuck_reclick_wait_s": 3.0,
              //  SELECCION EQUIVOCADA REPETIDA (monstruos encima de la piedra): si wrong_high_after clics seguidos seleccionan un
              //  monstruo, ESPACIO wrong_space_s y clic en OTRA parte de la piedra, mas arriba (de justo debajo del nombre hasta
              //  high_frac del cuerpo; sin piedra medible, high_up_px mas arriba del punto), donde no haya etiquetas de monstruos.

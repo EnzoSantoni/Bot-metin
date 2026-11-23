@@ -152,6 +152,9 @@ DEFAULTS: dict[str, Any] = {
                "no_panel_s": 2.0,
                # leave_s: con otro metin en el panel (Avaricia), paso atras (S) de tanto para que el personaje deje de pegarle.
                "leave_s": 0.6,
+               # TRABADO SIN MONSTRUOS: si la piedra sigue en pantalla, primero hasta stuck_reclicks reclics en ella (esperando
+               # stuck_reclick_wait_s cada uno); recien si no se mueve, el paso al costado.
+               "stuck_reclicks": 2, "stuck_reclick_wait_s": 3.0,
                # PANEL PERDIDO con la vida del metin >= recover_hp (100%, error del juego): antes de seguir haciendo clic, clic
                # derecho sobre un monstruo cercano (lo selecciona sin atacarlo y el panel vuelve) y despues clic izquierdo al
                # metin; hasta recover_max veces por metin.
@@ -1115,6 +1118,7 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
                     "confirm_wait_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
                     "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s", "recover_hp", "recover_max", "no_panel_s", "leave_s",
+                    "stuck_reclicks", "stuck_reclick_wait_s",
                     "wrong_high_after", "wrong_space_s", "high_frac", "high_up_px"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",

@@ -92,7 +92,7 @@ def test_trabado_sin_monstruos_va_al_costado_alternando_y_reclickea_sin_cambiar_
         if h.bot.state is State.ATACAR:   # aparece despues de elegir: cerca del personaje, pero no es el metin en curso
             p.metins = list(p.metins) + [other]
         return p
-    h = Harness(script, attack={"unstick_space_s": 1.5, "blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h = Harness(script, attack={"unstick_space_s": 1.5, "blocked_s": 50.0, "reclick_stall_s": 50.0, "stuck_reclicks": 0})
     h.run_until(lambda: h.clicks() >= 4, limit=600)
     msgs = messages(caplog)
     assert any("paso al costado (A)" in m for m in msgs) and any("paso al costado (D)" in m for m in msgs)
@@ -103,7 +103,7 @@ def test_trabado_sin_monstruos_va_al_costado_alternando_y_reclickea_sin_cambiar_
 
 def test_trabado_agotada_la_escalera_recien_ahi_destrabar(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(_stuck_script(), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h = Harness(_stuck_script(), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0, "stuck_reclicks": 0})
     h.run_until(lambda: State.DESTRABAR in h.states(), limit=2000)
     assert h.clicks() == 1 + int(h.cfg["attack"]["max_unstick"])   # clic inicial + un reclic por intento
     assert h.bot._cur is not None   # el metin en curso no se pierde

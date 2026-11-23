@@ -786,3 +786,44 @@ def test_explorar_frena_en_el_primer_metin_que_aparece_al_girar():
     h.run_until(lambda: State.ATACAR in h.states(), limit=60)
     assert h.bot._ex is None or h.bot._ex.phase == "sweep"
     assert State.ACERCARSE not in h.states()
+
+
+# ---------------------------------------------------------------- trabado sin monstruos: reclic en la piedra antes del paso
+def test_trabado_sin_monstruos_con_la_piedra_a_la_vista_reclic_2_veces_y_recien_despues_paso_al_costado(caplog):
+    """23:49:01: trabado a los 1.9 s con 0 monstruos y paso al costado enseguida. Ahora, con la piedra en pantalla: hasta 2
+    reclics en ella esperando 3 s cada uno; recien si sigue sin moverse, el paso al costado."""
+    caplog.set_level(logging.INFO)
+    far = metin(click=(1300, 500))   # lejos del personaje: no "llego"
+
+    def script(h, n):
+        h.clock.t += 0.25
+        if h.bot.state is State.ATACAR:
+            return perc(metins=[far], panel=target_panel(0.9))   # confirmado, vida quieta, personaje quieto
+        return perc(metins=[far])
+    h = Harness(script)
+    at, real = [], h.bot._reclick
+    h.bot._reclick = lambda a, why, *r, **k: (at.append(h.clock.t) if why.startswith("trabado, reclic") else None)         or real(a, why, *r, **k)
+    side = lambda: sum(1 for e in h.be.events if e[0] == "key_down" and e[1] in ("a", "d"))   # noqa: E731
+    h.run_until(lambda: side() >= 1, limit=400)
+    assert len(at) == 2 and at[1] - at[0] >= 3.0 - 1e-6, at   # espera 3 s entre reclics
+    msgs = [r.getMessage() for r in caplog.records]
+    reclics = [i for i, m in enumerate(msgs) if "la piedra sigue en pantalla: reclic" in m]
+    paso = next(i for i, m in enumerate(msgs) if "paso al costado (" in m)
+    assert len(reclics) == 2 and reclics[-1] < paso, msgs
+    assert h.clicks() >= 3   # clic inicial + 2 reclics antes del paso
+
+
+def test_trabado_sin_monstruos_y_sin_la_piedra_a_la_vista_paso_al_costado_directo(caplog):
+    caplog.set_level(logging.INFO)
+    far = metin(click=(1300, 500))
+    w = {"n": 0}
+
+    def script(h, n):
+        h.clock.t += 0.25
+        if h.bot.state is State.ATACAR:
+            w["n"] += 1
+            return perc(metins=[] if w["n"] > 2 else [far], panel=target_panel(0.9))   # la piedra deja de verse
+        return perc(metins=[far])
+    h = Harness(script)
+    h.run_until(lambda: any("paso al costado (" in r.getMessage() for r in caplog.records), limit=400)
+    assert not any("la piedra sigue en pantalla: reclic" in r.getMessage() for r in caplog.records)

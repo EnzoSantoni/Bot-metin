@@ -175,6 +175,8 @@ class _Attack:
     recover_lost: bool = False                  # ese clic derecho fue por panel perdido con vida 100%: despues, clic izquierdo
     wrong_streak: int = 0                       # clics seguidos que seleccionaron un monstruo (se reinicia con el panel del metin)
     panel_seen: bool = False                    # aparecio algun panel desde el clic (si no en attack.no_panel_s: posicion ignorada)
+    stuck_reclicks: int = 0                     # trabado sin monstruos: reclics a la piedra antes del paso al costado
+    stuck_reclick_t: float = -math.inf          # hora del ultimo de esos reclics (se espera attack.stuck_reclick_wait_s)
     aim_high: bool = False                      # el proximo reclic va a la parte ALTA de la piedra (`_high_point`)
 
 
@@ -1801,6 +1803,22 @@ class Bot(ApproachKeysMixin):
         ESPACIO y reclic en el MISMO metin; sin monstruos un paso al costado (A, D, W+A, W+D, alternando) y reclic; tras
         `attack.max_unstick` intentos, DESTRABAR (sin soltar el metin en curso). Una sola reaccion por episodio: el reclic
         sale en el ciclo siguiente y reinicia el reloj de quieto."""
+        if not self._crowded(p):   # sin monstruos: primero reclic en la piedra (si se ve), recien despues el paso al costado
+            if a.move_t > a.stuck_reclick_t:
+                a.stuck_reclicks = 0   # se movio desde el ultimo: es otra traba
+            if a.stuck_reclicks and t - a.stuck_reclick_t < float(self.atk["stuck_reclick_wait_s"]):
+                return None            # espera a ver si el reclic anterior lo hizo caminar
+            if a.stuck_reclicks < int(self.atk["stuck_reclicks"]) and self._click_gate() is None:
+                point = self._relocate(a, p, self._candidates(p, t, check_discards=False))
+                if point is not None:
+                    a.stuck_reclicks += 1
+                    a.stuck_reclick_t = t
+                    logger.info("Trabado yendo al metin (quieto %.1f s, sin monstruos) y la piedra sigue en pantalla: reclic "
+                                "%d/%d en la piedra (espero %.0f s antes de dar un paso al costado)", quiet, a.stuck_reclicks,
+                                int(self.atk["stuck_reclicks"]), float(self.atk["stuck_reclick_wait_s"]))
+                    out = self._reclick(a, f"trabado, reclic {a.stuck_reclicks} en la piedra", p, t, count=False)
+                    a.stuck_reclick_t = self.clock()
+                    return out
         c = a.cm
         c.unstick_n += 1
         n, mx = c.unstick_n, int(self.atk["max_unstick"])
@@ -1952,6 +1970,10 @@ class Bot(ApproachKeysMixin):
             return min(stones, key=lambda f: math.dist(f.rect.center, a.click)).rect.center
         if cands:
             return self._aim(cands[0].det, p)
+        wide = 2 * lim   # tras un paso al costado la piedra se corre en pantalla: la mas cercana al punto anterior, sin girar
+        stones = [f for f in p.far_metins if f.allowed and math.dist(f.rect.center, a.click) <= wide]
+        if stones:
+            return min(stones, key=lambda f: math.dist(f.rect.center, a.click)).rect.center
         only = [f for f in p.far_metins if f.allowed]   # la camara giro caminando: la unica piedra a la vista es la que se atacaba
         return only[0].rect.center if len(only) == 1 else None
 

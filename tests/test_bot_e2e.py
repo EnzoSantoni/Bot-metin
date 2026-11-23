@@ -14,7 +14,9 @@ from sim_game import Box, Circle, make_a0
 MARGIN = 4.0                      # margen de redondeo/latencia sobre outside_tolerance
 OSC, NEG, AVA = "metin_de_oscuridad", "metin_negro", "metin_de_avaricia"
 INSIDE_METINS = [((500, 160), OSC), ((600, 150), NEG), ((680, 165), OSC), ((470, 180), NEG)]
-LIMITS = {"ATACAR": 125, "RECOGER": 25, "VOLVER": 25, "CENTRO": 25, "ACERCARSE": 45, "DESTRABAR": 25}   # segundos seguidos maximos por estado
+# segundos seguidos maximos por estado. ATACAR: un metin a la vista ya no se descarta (decision simple) y, trabado sin
+# monstruos, primero hay 2 reclics de 3 s antes de cada paso al costado: detras de un obstaculo puede tardar ~3 min en romperlo
+LIMITS = {"ATACAR": 240, "RECOGER": 25, "VOLVER": 25, "CENTRO": 25, "ACERCARSE": 45, "DESTRABAR": 25}
 # En los mundos al azar la camara de modo clic puede seguir sin calibrar cuando el personaje sale a la tolerancia yendo a
 # una piedra lejana (se va con clic sobre ella, sin la guardia de zona de la caminata): el VOLVER a ciegas tarda mas.
 RANDOM_LIMITS = {**LIMITS, "VOLVER": 50}

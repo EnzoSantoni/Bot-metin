@@ -142,7 +142,8 @@ def _first_quiet(caplog):
 
 def test_trabado_sin_monstruos_paso_al_costado_y_reclic_a_los_18_s(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(_stuck_script(), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0})
+    # aca se prueba la escalera (paso al costado); los reclics previos a la piedra se prueban en test_bot_states
+    h = Harness(_stuck_script(), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0, "stuck_reclicks": 0})
     h.run_until(lambda: h.clicks() >= 2, limit=300)
     quiet = _first_quiet(caplog)
     assert quiet is not None and 1.8 <= quiet < 2.6
@@ -295,7 +296,7 @@ def _relook_script(hide):
 
 def test_trabado_sin_la_piedra_tras_el_paso_al_costado_mira_otra_captura_antes_de_buscar(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(_relook_script(hide=2), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0})
+    h = Harness(_relook_script(hide=2), attack={"blocked_s": 50.0, "reclick_stall_s": 50.0, "stuck_reclicks": 0})
     h.run_until(lambda: h.clicks() >= 2, limit=300)
     ms = messages(caplog)
     assert any("Sin la piedra en esta captura tras trabado, intento 1: miro otra" in m for m in ms)
