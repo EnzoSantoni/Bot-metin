@@ -196,7 +196,8 @@ class GameInput:
     def tap(self, action: str, seconds: float) -> bool:
         """Toque CORTO y PRECISO de una tecla (los toques de T de la camara): key_down, espera medida con el reloj de alta
         precision (`bot.input.precise`, sin los saltos de ~15 ms de la espera normal) y key_up. La duracion real queda en
-        `last_tap_s`. False si el juego no estaba listo; siempre suelta la tecla."""
+        `last_tap_s`. Sin la espera al azar de `input.delay_ms` despues: la pausa entre toques la pone el llamador (fija). False
+        si el juego no estaba listo; siempre suelta la tecla."""
         keys = self._key_spec(action)
         if len(keys) != 1:
             raise ValueError(f"tap solo admite una tecla, {action!r} es una combinacion")
@@ -212,7 +213,6 @@ class GameInput:
                     self.backend.key_up(keys[0])
                     self.last_tap_s = precise._clock() - t0
             self.control.check()
-            self._delay()
             return True
 
     def hold_keys(self, actions: list[str], seconds: float) -> bool:

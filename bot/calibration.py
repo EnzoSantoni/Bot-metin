@@ -23,7 +23,7 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-from bot.camera_pitch import CameraPitch
+from bot.camera_pitch import TOP_ACTION, CameraPitch, g_arrival, small_gray
 from bot.perception import perceive
 from bot.config import DEFAULTS, ConfigError, _merge, resolve_path, save_config, validate_config, validate_farm_zone
 from bot.debug_draw import annotate, draw_panel_coords
@@ -621,21 +621,55 @@ def cmd_zonas(s: Session) -> int:
 
 # ----------------------------------------------------------------------------- camara
 
-CAM_PARTS = ("metins",)   # solo hace falta la mascara (la rueda va sobre el personaje)
+CAM_PARTS = ()   # solo hace falta la mascara (la rueda va sobre el personaje)
+G_BASE_FRAMES = 6   # cuadros con la camara quieta antes de apretar G (ruido de la imagen)
+
+
+def measure_g(s: Session, cp: CameraPitch) -> tuple[bool, float | None]:
+    """Mantiene G `g_hold_s` (en otro hilo) mientras captura sin parar, y mide cuanto tardo la imagen en quedarse quieta: lo
+    que tarda G en llevar la camara al tope de la vista desde arriba desde el angulo en que estaba. (ok, segundos o None si no
+    se pudo medir)."""
+    win = s.window
+    if not win.ensure_ready():
+        return False, None
+    base = [small_gray(win.capture()) for _ in range(G_BASE_FRAMES)]
+    res: dict[str, Any] = {}
+
+    def hold() -> None:
+        try:
+            res["ok"] = s.gi.hold(TOP_ACTION, float(cp.c["g_hold_s"]))
+        except BaseException as e:  # noqa: BLE001  (F12 / panico: se relanza en este hilo)
+            res["err"] = e
+    th = threading.Thread(target=hold, daemon=True)
+    t0 = time.perf_counter()
+    th.start()
+    frames = []
+    while th.is_alive():
+        img = win.capture()
+        if img is not None:
+            frames.append((time.perf_counter() - t0, small_gray(img)))
+    th.join()
+    if "err" in res:
+        raise res["err"]
+    if not res.get("ok"):
+        return False, None
+    cp.actions += 1
+    return True, g_arrival(base, frames)
 CAM_PROMPT = "Asi? (Enter = un toque mas de T, b = uno menos, s = listo): "
 
 
 def cmd_camara(s: Session, repeats: int = 3) -> int:
-    """ACTIVO (manda input real al juego), guiado por Enzo: (a) rueda hacia "lejos" y (b) G mantenida hasta la vista desde
-    arriba; despues toca T de a UN toque y pregunta en la consola si quedo bien (Enter = un toque mas, b = uno menos: rehace
-    a-b y toca uno menos, s = listo). Guarda camera_pitch.t_taps (config.json, con .bak). Al final repite el reinicio completo
-    (rueda, G, toques de T, rueda) `repeats` veces con una captura de cada uno en debug/calibrate_camara/ para comprobar que
+    """ACTIVO (manda input real al juego), guiado por Enzo: G mantenida hasta la vista desde arriba MIDIENDO cuanto tarda
+    (desde el angulo de farmeo en que se dejo la camara: la imagen deja de cambiar); despues toca T de a UN toque y pregunta en
+    la consola si quedo bien (Enter = un toque mas, b = uno menos: rehace G y toca uno menos, s = listo). Guarda
+    camera_pitch.t_taps y g_hold_s = lo medido + g_margin_s (config.json, con .bak). Al final repite el reinicio completo (G,
+    toques de T, rueda) `repeats` veces, con el tiempo de cada uno y una captura en debug/calibrate_camara/ para comprobar que
     queda siempre igual. No mide el horizonte."""
     c = s.cfg["camera_pitch"]
-    s.say("Esto MANDA INPUT REAL al juego: la rueda del mouse y las teclas G y T (F12 o la esquina del mouse cortan).\n"
-          "Parate en un lugar despejado y deja el juego a la vista (mejor con la consola al costado, en otra pantalla).\n"
-          f"Va a alejar la camara con la rueda, mantener G {float(c['g_hold_s']):.1f} s (vista desde arriba) y despues tocar T "
-          "de a uno: despues de cada toque te pregunta en esta consola si ya es tu angulo de farmeo.")
+    s.say("Esto MANDA INPUT REAL al juego: las teclas G y T y la rueda del mouse (F12 o la esquina del mouse cortan).\n"
+          "Parate en un lugar despejado, con la camara en tu angulo de farmeo y el juego a la vista (mejor con la consola al\n"
+          f"costado, en otra pantalla). Va a mantener G {float(c['g_hold_s']):.2f} s (vista desde arriba) midiendo cuanto tarda en "
+          "llegar, y despues tocar T de a uno: despues de cada toque te pregunta en esta consola si ya es tu angulo de farmeo.")
     if not s.confirm("Empiezo"):
         s.say("Cancelado: no se mando nada.")
         return 1
@@ -647,9 +681,21 @@ def cmd_camara(s: Session, repeats: int = 3) -> int:
         img = s.grab()
         return img, perceive(img, s.cfg, parts=CAM_PARTS)
 
-    if not cp.top(look, s.gi, s.sleep):
-        s.say("No se pudo mandar la rueda o la G (ventana minimizada o captcha). No se guardo nada.")
+    ok, g_s = measure_g(s, cp)
+    if not ok:
+        s.say("No se pudo mandar la G (ventana minimizada o captcha). No se guardo nada.")
         return 1
+    s.sleep(float(c["step_pause_s"]))
+    changes: list[Change] = []
+    if g_s is None:
+        s.say(f"No pude medir cuanto tarda G (no se vio la camara moverse y quedarse quieta): dejo g_hold_s en "
+              f"{float(c['g_hold_s']):.2f} s.")
+    else:
+        g_new = round(g_s + float(c["g_margin_s"]), 2)
+        s.say(f"G tarda {g_s:.2f} s en llegar a la vista desde arriba desde tu angulo: g_hold_s {float(c['g_hold_s']):.2f} -> "
+              f"{g_new:.2f} s ({float(c['g_margin_s']):.2f} s de margen).")
+        if abs(g_new - float(c["g_hold_s"])) >= 0.01:
+            changes.append(Change(("camera_pitch", "g_hold_s"), g_new))
     taps = 0
     s.say("Camara arriba (vista desde arriba). Ahora T de a un toque.")
     while True:
@@ -661,7 +707,7 @@ def cmd_camara(s: Session, repeats: int = 3) -> int:
                 s.say("Ya estas en 0 toques.")
                 continue
             taps -= 1
-            if not cp.top(look, s.gi, s.sleep) or not cp.tap_down(s.gi, s.sleep, taps):
+            if not cp.top(s.gi, s.sleep) or not cp.tap_down(s.gi, s.sleep, taps):
                 s.say("Se corto. No se guardo nada.")
                 return 1
             continue
@@ -676,21 +722,26 @@ def cmd_camara(s: Session, repeats: int = 3) -> int:
         s.say("No se pudo girar la rueda al final. No se guardo nada.")
         return 1
     s.say(f"Elegiste {taps} toques de T ({int(c['t_tap_ms'])} ms cada uno).")
-    if not apply_changes(s, [Change(("camera_pitch", "t_taps"), taps)]):
+    if not apply_changes(s, [Change(("camera_pitch", "t_taps"), taps)] + changes):
         return 1
     out_dir = _debug_path(s, "calibrate_camara/x").parent
     for old in out_dir.glob("reinicio_*.png"):
         old.unlink()
     check = CameraPitch(s.cfg)
-    s.say(f"Compruebo el reinicio completo {repeats} veces (rueda, G, {taps} toques de T, rueda):")
+    s.say(f"Compruebo el reinicio completo {repeats} veces (G {float(check.c['g_hold_s']):.2f} s, {taps} toques de T, rueda):")
+    took = []
     for i in range(1, repeats + 1):
+        t0 = time.perf_counter()
         if not check.run(look, s.gi, s.sleep):
             s.say(f"  reinicio {i}: se corto")
             return 1
+        took.append(time.perf_counter() - t0)
         s.sleep(float(s.cfg["explore"]["settle_s"]))
         path = out_dir / f"reinicio_{i}.png"
         cv2.imwrite(str(path), s.grab())
-        s.say(f"  reinicio {i}: captura en {path}")
+        s.say(f"  reinicio {i}: {took[-1]:.1f} s, captura en {path}")
+    s.say(f"El reinicio tarda {statistics.mean(took):.1f} s (mas {float(s.cfg['explore']['settle_s']):.1f} s de espera para que "
+          "la imagen quede quieta).")
     s.say("Mira las capturas: las tres tienen que verse iguales, con el personaje entero y tu angulo de farmeo.")
     return 0
 

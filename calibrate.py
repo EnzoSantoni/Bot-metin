@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--capturas", type=int, default=3, help="maximo de capturas (default: 3)")
     sub.add_parser("zonas", parents=[common], help="guardar debug/calibrate_zonas.png para revisar las zonas excluidas")
     sub.add_parser("camara", parents=[common],
-                   help="ACTIVO (manda input): calibrar cuantos toques de T bajar desde la vista de arriba (G), guiado")
+                   help="ACTIVO (manda input): medir cuanto tarda G y calibrar cuantos toques de T bajar desde la vista de arriba, guiado")
     sub.add_parser("resumen", parents=[common], help="valores que siguen siendo estimaciones y como medirlos")
     return ap
 

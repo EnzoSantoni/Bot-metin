@@ -221,11 +221,11 @@ DEFAULTS: dict[str, Any] = {
                # rescue_side_deg del costado del personaje y W/A/S/D y Z de nuevo. Recien despues se lo saltea.
                "rescue": True, "rescue_items": 3, "rescue_monster_px": 250, "rescue_click_s": 4.0, "rescue_side_deg": 30.0,
                "rescue_turns": 3},
-    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio con teclas (rueda lejos, G g_hold_s, t_taps toques de T,
-    # rueda); enabled false = no toca la camara. t_taps se calibra con `calibrate.py camara`. Detector de "mira el piso":
-    # bot/vision/pitch.py. Ver config.example.jsonc.
-    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "t_taps": 4, "t_tap_ms": 120,
-                     "t_gap_ms": 200, "step_pause_s": 0.3, "floor_frames": 2, "min_gap_s": 60.0,
+    # Angulo vertical de la camara (bot/camera_pitch.py): reinicio con teclas (G g_hold_s, t_taps toques de T, una rueda al
+    # final); enabled false = no toca la camara. t_taps y g_hold_s (lo que tarda G medido + g_margin_s) se calibran con
+    # `calibrate.py camara`. Detector de "mira el piso": bot/vision/pitch.py. Ver config.example.jsonc.
+    "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "g_margin_s": 0.25,
+                     "t_taps": 4, "t_tap_ms": 120, "t_gap_ms": 150, "step_pause_s": 0.15, "floor_frames": 2, "min_gap_s": 60.0,
                      "side_offset_frac": 0.14, "side_half_frac": 0.06, "min_confidence": 0.5,
                      "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                      "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
@@ -1053,14 +1053,14 @@ def _validate_controls_safety_input(cfg: dict) -> None:
 
 
 def _validate_camera_pitch(cfg: dict) -> None:
-    """camera_pitch: reinicio de la camara con teclas (rueda, G, toques de T) + parametros del detector de "mira el piso"."""
+    """camera_pitch: reinicio de la camara con teclas (G, toques de T, rueda) + parametros del detector de "mira el piso"."""
     c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
     if not isinstance(c.get("enabled"), bool):
         raise ConfigError("camera_pitch.enabled debe ser true o false")
     positive = ("g_hold_s", "t_tap_ms", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac",
                 "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val", "row_floor_frac", "run_rows", "min_valid_px")
     nonneg = ("zoom_out_clicks", "t_taps", "t_gap_ms", "step_pause_s", "min_confidence", "sample_top_px", "min_sat",
-              "min_floor_rows")
+              "min_floor_rows", "g_margin_s")
     for k in positive + nonneg:
         v = c.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 or (k in positive and v <= 0):

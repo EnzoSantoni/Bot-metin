@@ -98,6 +98,6 @@ def test_calibrate_y_bot_usan_el_zoom_out_sign_de_config_json(tmp_path, sign):
     gi = _GI()
     cp = CameraPitch(cfg)
     perc = (None, type("P", (), {"mask": _Mask()})())
-    assert cp.reset(lambda: perc, gi, lambda s: None, 0.0, "test") is True   # rueda, G, toques de T, rueda
+    assert cp.reset(lambda: perc, gi, lambda s: None, 0.0, "test") is True   # G, toques de T, rueda
     n = sign * int(DEFAULTS["camera_pitch"]["zoom_out_clicks"])
-    assert gi.wheel == [n, n] and gi.held[0] == ("camera_top", cfg["camera_pitch"]["g_hold_s"])
+    assert gi.wheel == [n] and gi.held[0] == ("camera_top", cfg["camera_pitch"]["g_hold_s"])

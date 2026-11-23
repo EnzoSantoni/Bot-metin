@@ -2,6 +2,26 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## Objetos que no salen y reinicio de cámara más rápido (2026-11-23) — valen sobre lo de abajo
+**Nada probado en el juego.**
+1. **Objeto que no sale** (`0ed7cda`): con la cámara casi horizontal el personaje se ubica mal sobre los objetos de adelante
+   o atrás. Cuando quedan pocos (`pickup.rescue_items`, 3, contando ese) y uno no sale tras las Z y el reacomodo (o a los
+   `item_max_s`): **sin monstruos** a `rescue_monster_px` del personaje ni del objeto, **un clic izquierdo sobre su etiqueta**
+   (único clic de RECOGER; camina hasta él y lo levanta) y tiene que desaparecer en `rescue_click_s`; **con monstruos**, Q/E
+   hasta que quede al costado del personaje en pantalla (`rescue_side_deg`, hasta `rescue_turns` giros) y otra vez W/A/S/D y Z.
+   Recién después se lo saltea. Con más objetos pendientes queda **para el final** y se lo rescata cuando no quedan otros.
+   `pickup.rescue` false = como antes.
+2. **Reinicio de cámara**: G → toques de T → **una sola rueda al final** (la del principio sobraba: el ángulo no depende de la
+   distancia). `calibrate.py camara` **mide cuánto tarda G** desde el ángulo de farmeo (captura sin parar mientras mantiene G
+   y ve cuándo la imagen queda quieta) y guarda `g_hold_s` = eso + `g_margin_s` (0.25 s) junto con `t_taps`; los 3 reinicios
+   de comprobación dicen cuánto tardan. Pausas más cortas y fijas (`step_pause_s` 0.15, `t_gap_ms` 150, sin la espera al
+   azar después de cada toque) y la rueda usa una percepción mínima (antes, la completa: ~0,5 s cada una). El log dice
+   "Camara: reinicio listo en X s". Antes ~8 s; ahora ≈ `g_hold_s` + 2,3 s (con 6 toques): menos de 4 s si G tarda menos de ~1,4 s.
+   **Hasta correr `calibrate.py camara` sigue G 3 s** (≈ 5,3 s): Claude no puede mandarle teclas al juego para medirla.
+- **A probar por Enzo:** `calibrate.py camara` desde su ángulo de farmeo: anotar cuánto tarda G y el reinicio, y comparar las
+  3 capturas (iguales entre sí y a las de antes). En la corrida, "no hay monstruos cerca: clic izquierdo", "giro la camara",
+  "desaparecio tras el clic" y "lo dejo para el final".
+
 ## Cambios tras la corrida de las 02:36 (2026-11-23; 6 metin en 15 min) — valen sobre lo de abajo
 Un commit por punto (`338bd04` + `063ce40`, `e36c3f3`, `31c289c`, `dc16831`). **Nada probado en el juego.**
 1. **Metin que le estoy pegando** (panel confirmado y la vida bajando en los últimos `attack.hp_progress_s`, o pegado a la

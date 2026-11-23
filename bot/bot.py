@@ -518,7 +518,7 @@ class Bot(ApproachKeysMixin):
         self._frames = 0                   # percepciones completas hechas (para la compuerta de giros de busqueda)
         self._turn_t = -math.inf           # hora del ultimo giro de busqueda de la camara
         self._turn_frame = -10**9          # valor de `_frames` en ese giro (el primero no espera)
-        self.pitch = CameraPitch(cfg)      # angulo vertical de la camara (reinicio con rueda, G y toques de T)
+        self.pitch = CameraPitch(cfg)      # angulo vertical de la camara (reinicio con G, toques de T y rueda)
         self._scan: _Scan | None = None    # barrido de busqueda en curso mientras se ataca
         self._scan_off = False             # girar la camara cortaba el ataque: no se busca mas mientras se ataca
         self._scan_t = -math.inf           # hora en que empezo el ultimo barrido
@@ -2143,14 +2143,15 @@ class Bot(ApproachKeysMixin):
         return img
 
     def _pitch_perceive(self) -> tuple[Any, Perception] | None:
-        """Captura y percibe (etiquetas, monstruos y mascara para elegir donde arrastrar). None si no se puede o hay captcha."""
+        """Captura y percibe lo minimo (mascara y punto del personaje: la rueda va sobre el personaje y el chequeo de "mira el
+        piso" despues del reinicio no necesita mas). None si no se puede o hay captcha."""
         img = self._pitch_capture()
         if img is None:
             return None
-        return img, self._perceive(img, self.cfg, parts=PARTS[State.BUSCAR])
+        return img, self._perceive(img, self.cfg, parts=())
 
     def _pitch_reset(self, why: str) -> bool:
-        """Reinicia el angulo vertical de la camara (rueda lejos, G, toques de T, rueda; ver bot/camera_pitch.py). Solo se
+        """Reinicia el angulo vertical de la camara (G, toques de T, rueda; ver bot/camera_pitch.py). Solo se
         llama buscando/explorando, al arrancar o al terminar de recoger: nunca atacando, recogiendo ni con captcha. Con
         `camera_pitch.enabled` false no hace nada. True si mando algo; entonces marca la compuerta de giros (la imagen cambio)."""
         cp = self.pitch
