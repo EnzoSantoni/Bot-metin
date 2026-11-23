@@ -253,9 +253,8 @@ Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo regis
 - **Una sola cuenta de montado:**
   - `Bot._set_dismounted` es el único lugar que cambia `_dismounted`. `_dismount` y `_remount` nunca repiten el Ctrl+G.
   - Las esperas de la animación miran si aparece el captcha. Si el captcha sale estando a pie, al irse el panel se sube antes de seguir.
-- **F12 a pie:**
-  - Mientras está a pie existe `logs/a_pie.flag`. `run_bot.py` pasa `mount_marker` (salvo con `--observar`).
-  - La corrida siguiente ve la marca, se sube primero y la borra. Si Enzo se sube a mano después de un F12, tiene que borrar el archivo.
+- **F12 a pie:** (cambiado el 2026-11-22) ya no existe la marca `logs/a_pie.flag`. Regla fija: al arrancar el bot el personaje
+  siempre está montado y no se aprieta Ctrl+G al arrancar.
 - **`pickup.dismount` (true por defecto) = recoger a pie**; false = recoge montado con el mismo flujo de clic + Z. Claves nuevas: `look_s`, `monster_gap_px`, `arrive_px`, `track_px`, `still_s`, `walk_timeout_s`, `tries_per_item` y `same_spot_u`. `presses_before_click` se eliminó: si una config vieja lo trae, se ignora.
 
 **Antes (2026-11-19, noche): Fase 6c** (correcciones tras la prueba de la 6b de las 22:43) en `main`, con 980 tests.

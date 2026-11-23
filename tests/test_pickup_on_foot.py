@@ -7,7 +7,6 @@ import math
 import pytest
 
 from bot.bot import State
-from bot.control import PanicStop
 from bot.geometry import Rect
 from bot.ground import feet_of
 from bot.vision.items import ItemLabel
@@ -346,41 +345,22 @@ def test_las_teclas_siempre_se_sueltan_todas():
     assert len(downs) == len(ups) and h.be.pressed == ([], [])
 
 
-def test_marca_a_pie_se_escribe_al_bajar_y_se_borra_al_subir(tmp_path):
-    marker = tmp_path / "a_pie.flag"
-    h = floor_harness([DOWN], bot_kwargs={"mount_marker": marker})
-    start(h)
-    assert not marker.exists()
-    h.run_until(lambda: h.bot._dismounted)
-    assert marker.exists() and marker.read_text(encoding="utf-8").strip()
-    h.run_until(lambda: h.bot.state is State.BUSCAR)
-    assert not marker.exists() and h.keys("g") == 2
-
-
-def test_sin_marker_no_se_escribe_nada(tmp_path):
+def test_baja_para_recoger_y_sube_al_terminar(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     h = floor_harness([DOWN])
     start(h)
-    h.run_until(lambda: h.bot.state is State.BUSCAR)
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_panico_a_pie_deja_la_marca_y_la_corrida_nueva_se_sube_primero(tmp_path):
-    marker = tmp_path / "a_pie.flag"
-    h = floor_harness([DOWN], bot_kwargs={"mount_marker": marker})
-    start(h)
     h.run_until(lambda: h.bot._dismounted)
+    assert h.keys("g") == 1
+    h.run_until(lambda: h.bot.state is State.BUSCAR)
+    assert h.keys("g") == 2 and not h.bot._dismounted
+    assert list(tmp_path.iterdir()) == []   # no se escribe ningun archivo de "a pie"
 
-    def boom(h, n):
-        raise PanicStop("F12")
-    h.script = boom
-    with pytest.raises(PanicStop):
-        h.bot.step()
-    assert marker.exists() and h.keys("g") == 1
 
-    h2 = Harness(lambda h, n: perc(), bot_kwargs={"mount_marker": marker})
-    h2.bot.run(max_minutes=0.01)
-    assert h2.be.events[:2] == [("key_down", "ctrl"), ("key_down", "g")]
-    assert h2.keys("g") == 1 and not marker.exists() and not h2.bot._dismounted
+def test_al_arrancar_siempre_esta_montado_y_no_aprieta_ctrl_g():
+    """Regla fija: al arrancar el bot el personaje esta montado (no hay marca de "a pie" entre corridas)."""
+    h = Harness(lambda h, n: perc())
+    h.bot.run(max_minutes=0.01)
+    assert h.keys("g") == 0 and not h.bot._dismounted
 
 
 def test_tope_de_tiempo_de_run_a_pie_se_sube():

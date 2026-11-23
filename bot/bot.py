@@ -14,7 +14,6 @@ import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import Any, Callable
 
 from bot.approach_keys import _NO_RECOVERY, ApproachKeysMixin
@@ -378,7 +377,7 @@ class Bot(ApproachKeysMixin):
                  sleep_fn: Callable[[float], None] | None = None, rng: random.Random | None = None,
                  captcha_fn: Callable[[Any, dict], Any] = lambda img, cfg: find_captcha(img, cfg),
                  coords_fn: Callable[[Any, dict], Any] = read_coords,
-                 mount_marker: Path | None = None, spawn_map: SpawnMap | None = None,
+                 spawn_map: SpawnMap | None = None,
                  heading_fn: Callable[[Any, dict], float | None] = camera_heading,
                  senses: SensesStore | None = None) -> None:
         self.cfg, self.window, self.gi, self.control, self.alarm = cfg, window, game_input, control, alarm
@@ -451,7 +450,6 @@ class Bot(ApproachKeysMixin):
         self._last_click_vec: Xy | None = None
         self._clear = 0
         self._dismounted = False          # UNICA verdad de "estoy a pie" (se cambia solo con `_set_dismounted`)
-        self._mount_marker = mount_marker   # archivo que existe mientras se esta a pie (sobrevive a F12 / cortes)
         self.kmode = self.nav["mode"] == "teclado"   # caminar solo con W/A/S/D y girar con Q/E (sin clics en el piso)
         self.kb = self.nav["keyboard"]
         self.keynav = KeyboardNav(cfg)
@@ -494,7 +492,6 @@ class Bot(ApproachKeysMixin):
         self._t_start = self._last_t = self.clock()
         limit = None if max_minutes is None else float(max_minutes) * 60
         try:
-            self._remount_if_marked()
             logger.log(logging.INFO if self.pitch.enabled else logging.WARNING, "%s", self.pitch.status_line())
             if self.pitch.enabled and self.window.ensure_ready(should_stop=lambda: self.control.is_stopped):
                 self._pitch_reset("arranque")
@@ -2100,19 +2097,10 @@ class Bot(ApproachKeysMixin):
 
     # ------------------------------------------------------------------ RECOGER
     def _set_dismounted(self, value: bool, why: str) -> None:
-        """UNICO lugar que cambia `_dismounted`: ademas escribe (a pie) o borra (montado) la marca `mount_marker`."""
+        """UNICO lugar que cambia `_dismounted`. Regla fija: al arrancar el bot el personaje SIEMPRE esta montado (no se
+        aprieta Ctrl+G al arrancar); solo se baja para recoger y se vuelve a subir al terminar."""
         self._dismounted = value
-        m = self._mount_marker
-        if m is None:
-            return
-        try:
-            if value:
-                m.parent.mkdir(parents=True, exist_ok=True)
-                m.write_text(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {why}\n", encoding="utf-8")
-            else:
-                m.unlink(missing_ok=True)
-        except OSError as e:
-            logger.warning("No se pudo actualizar la marca de a pie %s: %s", m, e)
+        logger.debug("Montado: %s (%s)", "no" if value else "si", why)
 
     def _mount_wait(self) -> bool:
         """Espera la animacion de Ctrl+G mirando el captcha. False si aparecio (ya se entro a CAPTCHA)."""
@@ -2145,15 +2133,6 @@ class Bot(ApproachKeysMixin):
             self._remount()
         except Exception:  # noqa: BLE001
             logger.exception("Fallo al volver a montar")
-
-    def _remount_if_marked(self) -> None:
-        """Al empezar una corrida: si la anterior termino a pie (marca presente) se sube antes de seguir."""
-        m = self._mount_marker
-        if m is None or not m.exists():
-            return
-        logger.warning("La corrida anterior termino a pie (F12 o corte): me subo al caballo")
-        self._set_dismounted(True, "marca previa")
-        self._remount()
 
     def _start_pickup(self) -> None:
         self._pk = _Pickup(self.clock())
