@@ -266,7 +266,8 @@ def test_robustez_mundos_aleatorios_con_teclado(seed):
     de 25 s (a ciegas por clic tardaba 40-46 s en 2 de 20 mundos)."""
     cfg = make_cfg(navigation={"mode": "teclado"})
     cfg["navigation"]["keyboard"]["lateral"] = True   # estos mundos no tienen cono y sus A/D desplazan de costado: modelo de 8 combinaciones
-    env = random_world(seed, cfg)
+    # sin cono no se puede estimar donde esta un metin lejano (la regla de zona es "claramente afuera"): sin el metin de afuera
+    env = random_world(seed, cfg, outside_metin=False)
     dist = env.track_zone()
     assert env.run_until(max_s=300) == "limite"
     assert max(dist) <= tol(env)
