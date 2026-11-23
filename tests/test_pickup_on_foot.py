@@ -37,12 +37,18 @@ class Floor:
     la direccion caminada (suma normalizada de las teclas); Z junta el objeto si su punto esta a <= `ARRIVE` de los pies.
     `log` anota en orden ("combo", "W+D") por cada tramo, ("z", hay_objeto_cerca), ("g",) y ("click",)."""
 
-    def __init__(self, h, pts, pickable=True, blocked=False, z_needed=1, misplaced_until=0):
+    def __init__(self, h, pts, pickable=True, blocked=False, z_needed=1, misplaced_until=0, click_picks=False, monsters=(),
+                 stuck=(), turn_fix=False):
         self.h, self.pickable, self.blocked = h, pickable, blocked
+        self.click_picks = click_picks                # un clic izquierdo sobre la etiqueta lo levanta (camina hasta el)
+        self.monsters = list(monsters)                # etiquetas de monstruos que devuelve la percepcion
+        self.turn_fix = turn_fix                      # Q/E: los objetos quedan al costado del personaje y ya no estan trabados
+        self.turns = []                               # teclas de camara apretadas (q / e)
         self.z_needed, self.zs = z_needed, 0          # retraso de la Z: cuantas Z cerca hacen falta para juntar un objeto
         self.misplaced_until = misplaced_until        # las primeras N Z no juntan nada (mal ubicado) aunque se vea cerca
         self.z_log = []                               # (n_objetos_restantes_antes, tiempo) de cada Z
-        self.items = [list(map(float, p)) for p in pts]
+        # [x, y, trabado]: un objeto trabado no sale con Z (el personaje se ubica mal sobre el) aunque sea el mas cercano
+        self.items = [list(map(float, p[:2])) + [i in stuck] for i, p in enumerate(pts)]
         self.seen, self.down, self.leg, self.log = 0, set(), set(), []
 
     def _leg_done(self):
@@ -72,22 +78,39 @@ class Floor:
                     self._leg_done()
             elif e == ("mouse_down", "left"):
                 self.log.append(("click",))
+                mv = next(m for m in reversed(ev[:ev.index(e, self.seen)]) if m[0] == "move_to")
+                r = self.h.win.client_rect_on_screen()
+                x, y = mv[1] - r.x, mv[2] - r.y
+                hit = [i for i in self.items if abs(i[0] - x) <= 46 and abs(i[1] - y) <= 12]
+                if self.click_picks and hit:
+                    self.items.remove(hit[0])
+            elif e[0] == "key_down" and e[1] in ("q", "e"):
+                self.turns.append(e[1])
+                self.log.append(("turn", e[1]))
+                if self.turn_fix:
+                    side = 1 if e[1] == "e" else -1
+                    for it in self.items:
+                        d = math.dist(item_point(it), FEET)
+                        it[0], it[1], it[2] = FEET[0] + side * d, FEET[1] - 18, False
             elif e == ("key_down", "z"):
                 near = [i for i in self.items if math.dist(item_point(i), FEET) <= ARRIVE]
                 self.log.append(("z", bool(near)))
                 self.z_log.append((len(self.items), self.h.clock.t))
-                if near and self.pickable and len(self.z_log) > self.misplaced_until:
+                first = min(near, key=lambda i: math.dist(item_point(i), FEET)) if near else None   # Guabina: el mas cercano
+                if near and self.pickable and len(self.z_log) > self.misplaced_until and first[2:] != [True]:
                     self.zs += 1
                     if self.zs >= self.z_needed:
                         self.zs = 0
-                        self.items.remove(min(near, key=lambda i: math.dist(item_point(i), FEET)))   # Guabina: el mas cercano
+                        self.items.remove(first)
             elif e == ("key_down", "g"):
                 self.log.append(("g",))
         self.seen = len(ev)
 
     def __call__(self, h, n):
         self._events()
-        return perc(items=[label(i) for i in self.items])
+        p = perc(items=[label(i) for i in self.items])
+        p.monsters = list(self.monsters)
+        return p
 
 
 def start(h):
@@ -171,12 +194,24 @@ def test_un_monstruo_pegado_ya_no_importa_y_no_hay_clics():
 
 
 def test_objeto_inalcanzable_se_abandona_a_item_max_s_sin_loop_infinito(caplog):
+    """Las teclas no lo acercan (pared): a los item_max_s, como no hay monstruos cerca, UN clic sobre el (rescate); si no
+    desaparece, se lo saltea y se sube."""
     caplog.set_level(logging.INFO)
     h = floor_harness([UP_RIGHT], floor_kw={"blocked": True}, pickup=FAST_WALK)   # las teclas no lo acercan (pared)
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
-    assert h.keys("z") == 0 and h.clicks() == 0
+    assert h.keys("z") == 0 and h.clicks() == 1
     assert h.keys("g") == 2 and not h.bot._dismounted
+    assert "no sale (15 s sin que salga) y no hay monstruos cerca: clic izquierdo" in caplog.text
+    assert "sigue ahi 4 s despues del clic: lo salteo" in caplog.text and h.bot.stats.items == 0
+
+
+def test_objeto_inalcanzable_sin_rescate_se_abandona_a_item_max_s(caplog):
+    caplog.set_level(logging.INFO)
+    h = floor_harness([UP_RIGHT], floor_kw={"blocked": True}, pickup={**FAST_WALK, "rescue": False})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    assert h.keys("z") == 0 and h.clicks() == 0
     assert "me rindo con el objeto" in caplog.text and h.bot.stats.items == 0
 
 
@@ -213,7 +248,7 @@ def test_saltea_tras_4_z_con_reacomodo_y_pasa_al_siguiente(caplog):
     ultima mirada antes de subirse no los repite."""
     caplog.set_level(logging.INFO)
     near_a, near_b = (FEET[0] - 30, FEET[1] - 18), (FEET[0] + 30, FEET[1] - 18)   # los dos al alcance: sin caminar
-    h = floor_harness([near_a, near_b], floor_kw={"pickable": False}, pickup=FAST_WALK)
+    h = floor_harness([near_a, near_b], floor_kw={"pickable": False}, pickup={**FAST_WALK, "rescue": False})
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
     assert caplog.text.count("salteo el objeto") == 2 and "no desaparecio tras 4 Z" in caplog.text
@@ -384,11 +419,98 @@ def test_dismounted_solo_se_asigna_en_un_lugar():
     assert src.count("self._dismounted = ") == 2   # __init__ y _set_dismounted
 
 
-def test_recoger_no_tiene_ningun_clic_en_el_codigo():
+def test_el_unico_clic_de_recoger_es_el_del_rescate():
     import inspect
     import bot.bot as mod
-    for name in ("_do_recoger", "_pickup_step", "_pickup_walk", "_pickup_follow", "_pickup_look"):
+    for name in ("_do_recoger", "_pickup_step", "_pickup_walk", "_pickup_follow", "_pickup_look", "_stuck_item",
+                 "_start_rescue", "_rescue_step"):
         assert "click_at" not in inspect.getsource(getattr(mod.Bot, name)), name
+    assert "click_at" in inspect.getsource(mod.Bot._rescue_click)
+
+
+# ---------------------------------------------------------------- rescate de un objeto que no sale
+IN_FRONT = (FEET[0], FEET[1] - 18 - 40)   # punto del objeto 40 px adelante de los pies (al alcance: sin caminar)
+
+
+def test_objeto_que_no_sale_sin_monstruos_cerca_clic_izquierdo_y_desaparece(caplog):
+    """Con la camara casi horizontal se ubica mal sobre los objetos de adelante: 4 Z (con reacomodo) sin que salga y, sin
+    monstruos cerca, UN clic izquierdo sobre el (camina hasta el y lo levanta); se verifica que desaparezca."""
+    caplog.set_level(logging.INFO)
+    h = floor_harness([IN_FRONT], floor_kw={"stuck": (0,), "click_picks": True}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert not h.floor.items and h.bot.stats.items == 1
+    assert h.keys("z") == 4 and h.clicks() == 1 and h.floor.turns == []
+    seq = kinds(h)
+    assert seq.index("click") > max(i for i, e in enumerate(seq) if e == "z")   # el clic, recien despues de las 4 Z
+    assert "no sale (no desaparecio tras 4 Z) y no hay monstruos cerca: clic izquierdo sobre el" in caplog.text
+    assert "desaparecio tras el clic: recogido" in caplog.text and "salteo" not in caplog.text
+
+
+def test_clic_que_no_lo_levanta_recien_ahi_lo_saltea(caplog):
+    caplog.set_level(logging.INFO)
+    h = floor_harness([IN_FRONT], floor_kw={"stuck": (0,)}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert len(h.floor.items) == 1 and h.bot.stats.items == 0 and h.clicks() == 1
+    assert "sigue ahi 4 s despues del clic: lo salteo" in caplog.text
+    assert "Ultima mirada antes de subirme: no queda nada (salteados: 1)" in caplog.text
+
+
+def test_con_monstruos_cerca_no_hay_clic_gira_la_camara_hasta_verlo_de_costado_y_sigue_con_z(caplog):
+    """Con monstruos cerca no hay clic: Q/E hasta que el objeto quede al costado del personaje en pantalla y ahi W/A/S/D y
+    Z de nuevo (Z desde cero)."""
+    from bot.vision.monsters import MonsterLabel
+    caplog.set_level(logging.INFO)
+    mon = MonsterLabel(Rect(PLAYER[0] + 60, PLAYER[1] - 80, 120, 16), (PLAYER[0] + 120, PLAYER[1] - 72))
+    h = floor_harness([IN_FRONT], floor_kw={"stuck": (0,), "monsters": [mon], "turn_fix": True}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert not h.floor.items and h.bot.stats.items == 1 and h.clicks() == 0
+    assert len(h.floor.turns) >= 1 and caplog.text.count("Recoger: giro la camara") == 1   # un giro alcanzo
+    seq = kinds(h)
+    assert seq.index("turn") > max(i for i, e in enumerate(seq[:seq.index("turn")]) if e == "z")
+    assert seq[seq.index("turn"):].count("z") == 1                                   # despues del giro, Z lo junta
+    assert "y hay monstruos cerca: giro la camara (Q/E)" in caplog.text and "me acerco con W/A/S/D y Z" in caplog.text
+    # RECOGER no mira monstruos en cada ciclo: solo una vez, para decidir el rescate
+    assert sum(1 for c in h.calls if c[0] is State.RECOGER and "monsters" in c[1]) == 1
+
+
+def test_girando_la_camara_y_sin_que_salga_recien_ahi_lo_saltea(caplog):
+    from bot.vision.monsters import MonsterLabel
+    caplog.set_level(logging.INFO)
+    mon = MonsterLabel(Rect(PLAYER[0] + 60, PLAYER[1] - 80, 120, 16), (PLAYER[0] + 120, PLAYER[1] - 72))
+    h = floor_harness([IN_FRONT], floor_kw={"pickable": False, "monsters": [mon], "turn_fix": True}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert len(h.floor.items) == 1 and h.clicks() == 0 and h.keys("z") == 8
+    assert "ni despues de girar la camara para verlo de costado" in caplog.text
+
+
+def test_con_muchos_objetos_el_que_no_sale_queda_para_el_final_sin_clic(caplog):
+    """Quedan mas de pickup.rescue_items: el que no sale no se rescata todavia ni se saltea del todo, queda para el final."""
+    caplog.set_level(logging.INFO)
+    others = [UP_RIGHT, LEFT, (PLAYER[0] - 400, 300), (PLAYER[0] + 450, 800)]
+    h = floor_harness([IN_FRONT] + others, floor_kw={"stuck": (0,), "click_picks": True}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: "lo dejo para el final" in caplog.text, limit=400)
+    assert "no sale (no desaparecio tras 4 Z) y quedan 5: lo dejo para el final" in caplog.text
+    k = h.bot._pk
+    assert k.skipped[-1].later and k.cur is None and h.clicks() == 0 and h.floor.turns == []
+
+
+def test_sin_otros_objetos_vuelve_a_los_dejados_para_el_final_y_los_rescata(caplog):
+    from bot.bot import _Skip
+    caplog.set_level(logging.INFO)
+    h = floor_harness([IN_FRONT], floor_kw={"stuck": (0,), "click_picks": True}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot._pk is not None and h.bot._pk.phase == "collect", limit=50)
+    pt = label(h.floor.items[0]).click_point   # quedo para el final (como si antes hubiera habido muchos)
+    h.bot._pk.skipped.append(_Skip(pt, h.bot.tracker.position, None, h.clock(), None, True))
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
+    assert not h.floor.items and h.bot.stats.items == 1 and h.clicks() == 1
+    assert "no quedan otros objetos: vuelvo a los 1 que no salian" in caplog.text
+    assert caplog.text.index("vuelvo a los 1") < caplog.text.index("clic izquierdo sobre el")
 
 
 def test_salteado_se_reconoce_por_su_posicion_en_el_mapa(monkeypatch):

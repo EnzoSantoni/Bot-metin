@@ -277,6 +277,13 @@ class _Cur:
     items_n: int = 0                                # objetos pendientes al primer Z (si bajan, los Z juntaron otro)
     gone: int = 0                                   # capturas seguidas sin verlo
     moved: bool = False                             # el ciclo anterior camino: la etiqueta pudo correrse en pantalla
+    rescue: str = ""                                # rescate de un objeto que no sale: "" (ninguno), "click" (clic izquierdo
+                                                    # sobre el, sin monstruos cerca), "turn" (girando la camara hasta verlo
+                                                    # al costado) o "walk" (ya girada: W/A/S/D y Z como siempre)
+    rescue_t: float = 0.0                           # inicio del rescate (el clic)
+    turns: int = 0                                  # giros de camara del rescate
+    sig: Any = None                                 # firma del texto de su recuadro al empezar el rescate
+    items_at: int = 0                               # objetos pendientes al hacer el clic (sin firma: si bajan, lo levanto)
 
 
 @dataclass
@@ -291,6 +298,7 @@ class _Pickup:
     tracked: list = field(default_factory=list)     # objetos validos vistos: [punto de pantalla, ciclos seguidos sin verlo]
     z_t: float = -math.inf                          # instante del ultimo Z (de cualquier objeto)
     final: bool = False                             # ya se hizo la ultima mirada antes de subirse
+    revived: bool = False                           # ya se volvio a los objetos dejados para el final (_Skip.later)
     progress_t: float = 0.0                         # ultimo objeto recogido (o inicio de la fase collect): tope idle_max_s
 
 
@@ -303,6 +311,8 @@ class _Skip:
     t: float = -math.inf                            # hora en que se lo salteo
     sig: Any = None                                 # firma del texto del recuadro (`label_signature`): lo reconoce aunque
                                                     # se corra en pantalla
+    later: bool = False                             # no salia y quedaban muchos: se lo deja para el final (se lo rescata
+                                                    # cuando no quedan otros), no es un salteado definitivo
 
 
 @dataclass
@@ -2447,6 +2457,12 @@ class Bot(ApproachKeysMixin):
             return self._pickup_look(k, t, valid, back)
         pos = self.tracker.position
         pending = self._not_skipped(k.skipped, p, valid)
+        if not pending and k.cur is None and not k.revived and any(s_.later for s_ in k.skipped):
+            later = [s_ for s_ in k.skipped if s_.later]
+            k.revived = True   # una sola vez: desde ahora el que no sale se rescata aunque queden varios
+            k.skipped = [s_ for s_ in k.skipped if not s_.later]
+            pending = self._not_skipped(k.skipped, p, valid)
+            logger.info("Recoger: no quedan otros objetos: vuelvo a los %d que no salian (para rescatarlos)", len(later))
         k.empty = 0 if (pending or k.cur is not None) else k.empty + 1
         if k.empty >= int(self.pk["empty_confirm_cycles"]):
             if not k.final:   # antes de subirse: una ultima captura por si quedo algo (sin los salteados)
@@ -2522,20 +2538,143 @@ class Bot(ApproachKeysMixin):
 
         return [i for i in items if not any(hit(s, i) for s in skipped)]
 
-    def _skip_item(self, k: _Pickup, cur: _Cur, p: Perception, pos: tuple[int, int] | None) -> None:
+    def _skip_item(self, k: _Pickup, cur: _Cur, p: Perception, pos: tuple[int, int] | None, later: bool = False) -> None:
         """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo) y guarda en debug un
-        recorte de la captura alrededor de su etiqueta (`<run>/recoger/HHMMSS_mmm_salteado_x_y.png`)."""
+        recorte de la captura alrededor de su etiqueta (`<run>/recoger/HHMMSS_mmm_salteado_x_y.png`). Con `later` solo se lo
+        deja para el final (sin recorte): se lo rescata cuando no quedan otros."""
         h = self._heading() if pos is not None else None
-        lab = min(p.items, key=lambda i: math.dist(i.click_point, cur.point), default=None)
-        sig = self._item_sig(lab) if lab is not None and math.dist(lab.click_point, cur.point) <= float(self.pk["same_px"]) \
-            else None
-        k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h), self.clock(), sig))
+        lab = self._label_at(cur.point, p)
+        sig = self._item_sig(lab) if lab is not None else None
+        k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h), self.clock(), sig, later))
         k.cur = None
+        if later:
+            return
         hw, up, down = (int(v) for v in self.pk["skip_crop_px"])
         x, y = cur.point
         path = self.debug.save_snapshot(self._img, "recoger", f"salteado_{x}_{y}", (x - hw, y - up, 2 * hw, up + down))
         if path is not None:
             logger.info("Recoger: recorte del objeto salteado guardado en %s", path)
+
+    def _label_at(self, pt: tuple[int, int], p: Perception) -> Any | None:
+        """Etiqueta de objeto a <= `pickup.same_px` de `pt` en esta captura (la mas cercana) o None."""
+        lab = min(p.items, key=lambda i: math.dist(i.click_point, pt), default=None)
+        return lab if lab is not None and math.dist(lab.click_point, pt) <= float(self.pk["same_px"]) else None
+
+    def _stuck_item(self, k: _Pickup, cur: _Cur, p: Perception, t: float, pos: tuple[int, int] | None, pending: list,
+                    why: str, skip_msg: str) -> bool:
+        """El objeto actual no sale (`why`). Con la camara casi horizontal el personaje se ubica mal sobre los objetos que
+        quedan adelante o atras: si quedan pocos (<= `pickup.rescue_items`, contando este) o ya no quedan otros, UN rescate
+        (`_start_rescue`); con mas pendientes se lo deja para el final; ya rescatado (o `pickup.rescue` false) se lo saltea
+        (`skip_msg`). True si se lo saco del medio (salteado o para el final); False si empezo el rescate."""
+        if self.pk["rescue"] and not cur.rescue:
+            if len(pending) <= int(self.pk["rescue_items"]) or k.revived:
+                self._start_rescue(k, cur, p, t, pending, why)
+                return False
+            logger.info("Recoger: el objeto (%d, %d) no sale (%s) y quedan %d: lo dejo para el final y sigo con los demas",
+                        cur.point[0], cur.point[1], why, len(pending))
+            self._skip_item(k, cur, p, pos, later=True)
+            return True
+        if cur.rescue == "walk":
+            skip_msg += " (ni despues de girar la camara para verlo de costado)"
+        logger.info("%s", skip_msg)
+        self._skip_item(k, cur, p, pos)
+        return True
+
+    def _start_rescue(self, k: _Pickup, cur: _Cur, p: Perception, t: float, pending: list, why: str) -> None:
+        """Rescate de un objeto que no sale: (a) sin monstruos cerca del personaje ni del objeto (`pickup.rescue_monster_px`),
+        clic izquierdo sobre su etiqueta (el UNICO clic de RECOGER): el personaje camina hasta el y lo levanta; se verifica que
+        desaparezca (`_rescue_step`). (b) Con monstruos cerca, se gira la camara (Q/E) hasta que el objeto quede al costado del
+        personaje en pantalla (donde la distancia se ve bien) y ahi se sigue con W/A/S/D y Z. Recien si despues sigue sin
+        salir, se lo saltea."""
+        lab = self._label_at(cur.point, p)
+        cur.sig = self._item_sig(lab) if lab is not None else None
+        cur.items_at, cur.gone, cur.turns = len(pending), 0, 0
+        cur.rescue_t = cur.start_t = k.progress_t = t   # tiempo propio: item_max_s e idle_max_s cuentan desde aca
+        k.z_t = -math.inf   # sin Z reciente: las etiquetas que se corren (camina solo o gira la camara) no cuentan como recogidas
+        x, y = cur.point
+        if lab is not None and not self._monsters_close(p, self._item_point(lab)) and self._rescue_click(lab.click_point, p):
+            cur.rescue, cur.moved = "click", True
+            logger.info("Recoger: el objeto (%d, %d) no sale (%s) y no hay monstruos cerca: clic izquierdo sobre el (camina "
+                        "hasta el y lo levanta); verifico que desaparezca", x, y, why)
+            return
+        cur.rescue, cur.moved = "turn", True
+        logger.info("Recoger: el objeto (%d, %d) no sale (%s) y %s: giro la camara (Q/E) hasta verlo al costado del personaje "
+                    "y me acerco con W/A/S/D y Z", x, y, why,
+                    "no lo veo para hacer clic" if lab is None else "hay monstruos cerca")
+
+    def _monsters_close(self, p: Perception, pt: tuple[float, float]) -> bool:
+        """Hay monstruos a <= `pickup.rescue_monster_px` del personaje o de `pt` (RECOGER no mira monstruos en cada ciclo: se
+        analiza la captura de este ciclo solo para esto). Sin captura, True (no se hace clic)."""
+        if self._img is None:
+            return True
+        mp = self._perceive(self._img, self.cfg, parts={"monsters"})
+        lim = float(self.pk["rescue_monster_px"])
+        return any(math.dist(m.center, p.player_xy) <= lim or math.dist(m.center, pt) <= lim for m in mp.monsters)
+
+    def _rescue_click(self, pt: tuple[int, int], p: Perception) -> bool:
+        """El unico clic de RECOGER (permitido solo para el rescate sin monstruos cerca): clic izquierdo sobre la etiqueta."""
+        ok = self.gi.click_at(*pt, p.mask)
+        if ok:
+            self._last_click_t = self.clock()
+        return ok
+
+    def _rescue_find(self, cur: _Cur, pending: list) -> Any | None:
+        """El objeto del rescate en esta captura: por la firma de su recuadro (aunque se haya corrido en pantalla al caminar o
+        girar) o, sin firma, el pendiente mas cercano a su ultimo punto."""
+        if cur.sig is not None:
+            iou = float(self.pk["skip_sig_iou"])
+            same = [i for i in pending if (sg := self._item_sig(i)) is not None and same_label(sg, cur.sig, iou)]
+            return min(same, key=lambda i: math.dist(i.click_point, cur.point), default=None)
+        return min(pending, key=lambda i: math.dist(i.click_point, cur.point), default=None)
+
+    def _rescue_step(self, k: _Pickup, cur: _Cur, p: Perception, t: float, pos: tuple[int, int] | None,
+                     pending: list) -> None:
+        """Un ciclo del rescate. "click": el objeto tiene que desaparecer (`gone_cycles` capturas sin verlo; sin firma, que
+        bajen los pendientes) antes de `rescue_click_s`; si no, se lo saltea. "turn": con la imagen ya quieta tras el ultimo
+        giro, si el objeto esta a <= `rescue_side_deg` del costado (90 grados del frente, sobre el piso) o ya se giro
+        `rescue_turns` veces, se sigue con W/A/S/D y Z (Z, reacomodo y tope de Z desde cero); si no, otro giro."""
+        x, y = cur.point
+        if cur.rescue == "click":
+            it = self._rescue_find(cur, pending)
+            if it is not None and cur.sig is None and len(pending) < cur.items_at:
+                it = None   # sin firma: bajaron los pendientes, el del clic ya no esta
+            if it is None:
+                cur.gone += 1
+                if cur.gone >= int(self.pk["gone_cycles"]):
+                    self.stats.items += 1
+                    k.progress_t = t
+                    logger.info("Recoger: el objeto (%d, %d) desaparecio tras el clic: recogido", x, y)
+                    k.cur = None
+                return
+            cur.point, cur.gone = it.click_point, 0
+            if t - cur.rescue_t >= float(self.pk["rescue_click_s"]):
+                logger.info("Recoger: el objeto (%d, %d) sigue ahi %.0f s despues del clic: lo salteo", x, y, t - cur.rescue_t)
+                self._skip_item(k, cur, p, pos)
+            return
+        if not self._turn_ready():
+            return   # la imagen todavia puede ser de antes del giro
+        it = self._rescue_find(cur, pending)
+        if it is None:
+            logger.info("Recoger: perdi de vista el objeto (%d, %d) girando la camara: elijo de nuevo", x, y)
+            k.cur = None
+            return
+        cur.point = it.click_point
+        vx, vz = floor_vec(p.player_xy, self._item_point(it), p.shape, self.cfg)
+        ang = math.degrees(math.atan2(vx, vz))   # 0 = adelante, +90 = a la derecha, -90 = a la izquierda (sobre el piso)
+        off = abs(abs(ang) - 90.0)
+        if off <= float(self.pk["rescue_side_deg"]) or cur.turns >= int(self.pk["rescue_turns"]):
+            logger.info("Recoger: el objeto (%d, %d) quedo a %.0f grados del frente (%.0f del costado) tras %d giro(s): me acerco "
+                        "con W/A/S/D y Z", cur.point[0], cur.point[1], ang, off, cur.turns)
+            cur.rescue, cur.z, cur.z_t, cur.repo_done, cur.repo_legs = "walk", 0, -math.inf, False, 0
+            cur.start_t, cur.moved, cur.gone = t, False, 0
+            return
+        a, b = _wrap(math.radians(ang - 90.0)), _wrap(math.radians(ang + 90.0))   # girar la vista d lo corre a ang - d
+        delta = a if abs(a) <= abs(b) else b
+        key, secs = self.keynav.plan_turn(delta)
+        cur.turns += 1
+        logger.info("Recoger: giro la camara %+.0f grados (%s %.2f s) para ver el objeto (%d, %d) de costado: esta a %.0f grados "
+                    "del frente (giro %d)", math.degrees(delta), key, secs, cur.point[0], cur.point[1], ang, cur.turns)
+        self._search_turn(key, secs)
 
     def _final_look(self, k: _Pickup) -> list | None:
         """Ultima mirada antes de subirse: espera `pickup.final_look_s`, captura de nuevo y devuelve los objetos validos que
@@ -2573,11 +2712,15 @@ class Bot(ApproachKeysMixin):
         self._pickup_progress(k, p, t, pending)
         cur = k.cur
         if cur is not None and t - cur.start_t >= float(self.pk["item_max_s"]):
-            logger.info("Recoger: me rindo con el objeto (%d, %d) tras %.0f s: lo salteo", cur.point[0], cur.point[1],
-                        t - cur.start_t)
-            self._skip_item(k, cur, p, pos)
+            secs = t - cur.start_t
+            if not self._stuck_item(k, cur, p, t, pos, pending, f"{secs:.0f} s sin que salga",
+                                    f"Recoger: me rindo con el objeto ({cur.point[0]}, {cur.point[1]}) tras {secs:.0f} s: lo salteo"):
+                return   # empezo el rescate
             pending = [i for i in pending if math.dist(i.click_point, cur.point) > float(self.pk["same_px"])]
             k.cur = cur = None
+        if cur is not None and cur.rescue in ("click", "turn"):
+            self._rescue_step(k, cur, p, t, pos, pending)
+            return
         it = None
         if cur is not None:
             it = self._pickup_follow(cur, pending)
@@ -2615,9 +2758,9 @@ class Bot(ApproachKeysMixin):
         if cur.z >= int(self.pk["max_z_per_item"]) and len(pending) < cur.items_n:
             cur.z, cur.items_n = 0, len(pending)   # esos Z juntaron OTRO objeto (el juego junta el mas cercano): no cuentan
         if cur.z >= int(self.pk["max_z_per_item"]) and cur.repo_done:   # ya camino hasta el y el ultimo Z tampoco lo junto
-            logger.info("Recoger: salteo el objeto (%d, %d): no desaparecio tras %d Z (caminando hasta el); sigo con los demas",
-                        cur.point[0], cur.point[1], cur.z)
-            self._skip_item(k, cur, p, pos)
+            self._stuck_item(k, cur, p, t, pos, pending, f"no desaparecio tras {cur.z} Z",
+                             f"Recoger: salteo el objeto ({cur.point[0]}, {cur.point[1]}): no desaparecio tras {cur.z} Z "
+                             "(caminando hasta el); sigo con los demas")
             return
         if cur.z >= int(self.pk["reposition_after_z"]) and not cur.repo_done:
             # no salio con el Z: caminar hasta el con W/A/S/D segun donde este, lo suficiente para quedar encima (al menos un

@@ -357,7 +357,16 @@
              //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
              //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos
              //  de esta fraccion de su distancia (histeresis).
-             "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
+             "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6,
+             //  Rescate de un objeto que no sale (con la camara casi horizontal el personaje se ubica mal sobre los objetos de
+             //  adelante o atras). Cuando quedan <= rescue_items (contando ese; con mas, queda para el final y se lo rescata
+             //  cuando no quedan otros): sin monstruos a <= rescue_monster_px (pantalla) del personaje ni del objeto, clic
+             //  izquierdo sobre su etiqueta (el UNICO clic de RECOGER; camina hasta el y lo levanta) y tiene que desaparecer en
+             //  rescue_click_s; con monstruos cerca, gira la camara (Q/E, hasta rescue_turns giros) hasta que el objeto quede a
+             //  <= rescue_side_deg grados del costado del personaje y vuelve a W/A/S/D y Z. Recien si despues sigue sin salir, se
+             //  lo saltea. rescue false = se saltea directo como antes.
+             "rescue": true, "rescue_items": 3, "rescue_monster_px": 250, "rescue_click_s": 4.0, "rescue_side_deg": 30.0,
+             "rescue_turns": 3},
 
   // EXPLORAR (regla E): barrido de camara (camera_steps pasos de camera_step_s con Q o E, deberian dar ~360 grados;
   //  se mira etiquetas y piedras lejanas despues de cada paso), tramo recto, parar, barrido, otra direccion...

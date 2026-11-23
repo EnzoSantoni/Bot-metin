@@ -213,7 +213,14 @@ DEFAULTS: dict[str, Any] = {
                # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
                # este esta a menos de esta fraccion de su distancia (histeresis).
-               "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6},
+               "same_px": 25, "near_px": 160, "progress_window_s": 3.0, "switch_ratio": 0.6,
+               # Rescate de un objeto que no sale (con la camara casi horizontal se ubica mal sobre los de adelante o atras):
+               # si quedan <= rescue_items (o ya no quedan otros: con mas, queda para el final), sin monstruos a <=
+               # rescue_monster_px del personaje ni del objeto, clic izquierdo sobre el (unico clic de RECOGER) y tiene que
+               # desaparecer en rescue_click_s; con monstruos, giros de camara (hasta rescue_turns) hasta verlo a <=
+               # rescue_side_deg del costado del personaje y W/A/S/D y Z de nuevo. Recien despues se lo saltea.
+               "rescue": True, "rescue_items": 3, "rescue_monster_px": 250, "rescue_click_s": 4.0, "rescue_side_deg": 30.0,
+               "rescue_turns": 3},
     # Angulo vertical de la camara (bot/camera_pitch.py): reinicio con teclas (rueda lejos, G g_hold_s, t_taps toques de T,
     # rueda); enabled false = no toca la camara. t_taps se calibra con `calibrate.py camara`. Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
@@ -1161,7 +1168,7 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s", "max_z_per_item",
                     "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio",
                     "priority_px", "skip_keep_s", "idle_max_s", "priority_retry_s", "skip_retrigger_s", "skip_sig_min_px",
-                    "skip_sig_iou"),
+                    "skip_sig_iou", "rescue_items", "rescue_monster_px", "rescue_click_s", "rescue_side_deg", "rescue_turns"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s",
           "max_z_per_item", "skip_match_u",
@@ -1171,6 +1178,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("pickup.skip_crop_px debe tener 3 numeros > 0 (medio ancho, arriba, abajo)")
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
+    if not isinstance(cfg["pickup"].get("rescue"), bool):
+        raise ConfigError("pickup.rescue debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
                      "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units",
                      "settle_s", "settle_frames", "edge_return_u"),
