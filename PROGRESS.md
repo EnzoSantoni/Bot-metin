@@ -2,6 +2,28 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## Cambios tras la corrida de las 02:36 (2026-11-23; 6 metin en 15 min) — valen sobre lo de abajo
+Un commit por punto (`338bd04` + `063ce40`, `e36c3f3`, `31c289c`, `dc16831`). **Nada probado en el juego.**
+1. **Metin que le estoy pegando** (panel confirmado y la vida bajando en los últimos `attack.hp_progress_s`, o pegado a la
+   piedra) **no se deja por salir de la zona**: se rompe, se recoge y recién después VOLVER. RECOGER ya no se corta afuera
+   de la zona. **Objetos primero** también en VOLVER, CENTRO y DESTRABAR (la vuelta queda pendiente); en ATACAR no.
+2. **Solo el panel suelta una piedra** (Avaricia, panel de un monstruo, 2 clics sin panel). "Posición ignorada" pasó a ser
+   **solo la piedra exacta** que el panel rechazó, en su lugar de la pantalla (seguida ciclo a ciclo), `approach.reject_s` (30 s)
+   como máximo; un giro de cámara o alejarse `reject_same_u` la olvidan. **Ningún panel en 2 s → truco del clic derecho**
+   (sobre un monstruo cercano o, si no hay, la misma piedra) y segundo clic izquierdo; recién sin panel otra vez se suelta.
+   Salir de la zona yendo a un metin (sin pegarle) ya no ignora posiciones: VOLVER no ataca otro "cerca" hasta estar adentro y
+   por `reject_s` no se cliquean metin **sin posición estimada** (ni cámara ni rumbo del minimapa).
+3. **Objetos salteados** no vuelven a disparar RECOGER por `pickup.skip_retrigger_s` (60 s): se reconocen por el texto blanco
+   del recuadro aunque se corran en pantalla. Los de 02:45 eran Piedra de Magia+1, Poción Morada(M) y Piedra de Regate+0
+   (de Farfarfa; a los ~25 s ya sin reserva); no salían con Z (¿inventario lleno? no se puede saber desde el bot).
+4. **3 trabas seguidas sin monstruos yendo a un punto del mapa** (`spawns.stuck_max`): ese punto se descarta por ahora
+   (visitado, `revisit_s`) y se va a otro o se hace la vuelta de búsqueda.
+- **Límites nuevos:** sin cámara ni rumbo, una piedra claramente afuera se puede volver a intentar cada ~40 s (antes quedaba
+  ignorada 10 min tapando todo alrededor). Una piedra rechazada se vuelve a cliquear apenas gira la cámara (ya no está en el
+  mismo lugar de la pantalla): con un monstruo SIEMPRE delante se la reintenta seguido.
+- **A probar por Enzo:** corrida larga con `debug.enabled`; mirar "le estoy pegando al metin", "truco: clic derecho",
+  "Piedra ignorada 30 s", "lo descarto por ahora" en el log.
+
 ## PARA LA PRÓXIMA SESIÓN (2026-11-23, 03:00) — leer esto primero
 > Estado al cerrar la sesión larga del 2026-11-22/23. `main` = el commit de este texto (el anterior: `58a3334`); unos 1590 tests,
 > todos pasan. Las secciones de más abajo son historia: donde contradicen esta, vale esta.
