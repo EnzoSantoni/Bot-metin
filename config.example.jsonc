@@ -327,8 +327,9 @@
   //  centro inferior de su etiqueta + item_below_label_px. arrive_px: llegada = ese punto a <= arrive_px de los pies.
   //  Ya encima: Z cada z_interval_s (la Z del servidor tiene retraso) mientras la etiqueta siga; desaparecida =
   //  gone_cycles capturas seguidas sin verla cerca de su ultimo punto (track_px) -> recogido, sigue el proximo. Tras
-  //  reposition_after_z Z sin que desaparezca, se reacomoda: UN tramo hacia su punto exacto si esta a mas de arrive_px *
-  //  reposition_frac, y sigue con Z. Tras max_z_per_item Z (reacomodo incluido) se SALTEA ese objeto y sigue con los demas
+  //  reposition_after_z Z sin que desaparezca, camina hasta quedar encima: W/A/S/D segun donde este (al menos un tramo
+  //  aunque parezca que ya esta encima; hasta over_px de los pies o walk_to_legs tramos) y sigue con Z. Recien si despues
+  //  de caminar hasta el llega a max_z_per_item Z sin que salga, se SALTEA ese objeto y sigue con los demas
   //  (tambien a los item_max_s desde que empezo con el, p. ej. si no lo alcanza). Un salteado no se vuelve a recoger: se lo
   //  reconoce por su posicion en el mapa (a <= skip_match_u, con el rumbo de la camara) o, sin rumbo, por su punto de
   //  pantalla (a <= same_px) mientras el personaje no se mueva same_spot_u unidades. Antes de subirse al caballo espera final_look_s, mira
@@ -338,7 +339,7 @@
   "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
              "dismount": true, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-             "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
+             "gone_cycles": 2, "reposition_after_z": 1, "over_px": 12, "walk_to_legs": 3, "item_max_s": 15.0,
              "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
              //  Objetos primero: buscando, explorando o yendo a otro metin, un objeto valido a <= priority_px (de pantalla) del
              //  personaje que no se salteo pasa a RECOGER antes que cualquier otra cosa (nunca se elige un metin nuevo con

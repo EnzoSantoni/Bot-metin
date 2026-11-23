@@ -263,7 +263,8 @@ class _Cur:
     start_t: float                                  # desde que se empezo con este objeto (tope item_max_s)
     z: int = 0                                      # Z apretadas sobre el
     z_t: float = -math.inf                          # instante del ultimo Z
-    repo_done: bool = False                         # ya se reacomodo sobre el (una vez, tras pickup.reposition_after_z Z)
+    repo_done: bool = False                         # ya camino hasta quedar encima (tras pickup.reposition_after_z Z)
+    repo_legs: int = 0                              # tramos caminados hasta el en ese reacomodo (tope pickup.walk_to_legs)
     items_n: int = 0                                # objetos pendientes al primer Z (si bajan, los Z juntaron otro)
     gone: int = 0                                   # capturas seguidas sin verlo
     moved: bool = False                             # el ciclo anterior camino: la etiqueta pudo correrse en pantalla
@@ -2451,18 +2452,23 @@ class Bot(ApproachKeysMixin):
             return   # esperando que el ultimo Z haga efecto
         if cur.z >= int(self.pk["max_z_per_item"]) and len(pending) < cur.items_n:
             cur.z, cur.items_n = 0, len(pending)   # esos Z juntaron OTRO objeto (el juego junta el mas cercano): no cuentan
-        if cur.z >= int(self.pk["max_z_per_item"]):   # el ultimo Z ya tuvo su tiempo y el objeto sigue ahi
-            logger.info("Recoger: salteo el objeto (%d, %d): no desaparecio tras %d Z (con reacomodo); sigo con los demas",
+        if cur.z >= int(self.pk["max_z_per_item"]) and cur.repo_done:   # ya camino hasta el y el ultimo Z tampoco lo junto
+            logger.info("Recoger: salteo el objeto (%d, %d): no desaparecio tras %d Z (caminando hasta el); sigo con los demas",
                         cur.point[0], cur.point[1], cur.z)
             self._skip_item(k, cur, p, pos)
             return
         if cur.z >= int(self.pk["reposition_after_z"]) and not cur.repo_done:
-            cur.repo_done = True
-            logger.info("Recoger: reacomodo sobre el objeto (%d, %d) tras %d Z", cur.point[0], cur.point[1], cur.z)
-            if d > float(self.pk["arrive_px"]) * float(self.pk["reposition_frac"]):   # UN tramo hacia su punto exacto
+            # no salio con el Z: caminar hasta el con W/A/S/D segun donde este, lo suficiente para quedar encima (al menos un
+            # tramo aunque parezca que ya esta encima: el punto estimado bajo la etiqueta puede no ser donde cae el objeto);
+            # recien despues siguen los Z
+            if cur.repo_legs == 0 or (d > float(self.pk["over_px"]) and cur.repo_legs < int(self.pk["walk_to_legs"])):
+                cur.repo_legs += 1
                 cur.moved = True
-                self._pickup_walk(p, pt, d)
+                logger.info("Recoger: el objeto (%d, %d) no salio tras %d Z: camino hasta quedar encima (tramo %d)",
+                            cur.point[0], cur.point[1], cur.z, cur.repo_legs)
+                self._pickup_walk(p, pt, max(d, float(self.pk["over_px"])))
                 return
+            cur.repo_done = True
         if cur.z == 0:
             cur.items_n = len(pending)
         cur.z += 1

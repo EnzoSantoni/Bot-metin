@@ -181,15 +181,16 @@ DEFAULTS: dict[str, Any] = {
                "lost_swap_after": 2},
     # RECOGER: mirar look_s si hay objetos validos; si hay, bajarse (dismount) y, objeto por objeto (el mas cercano primero,
     # fijo hasta que desaparece), caminar con W/A/S/D (sin clics) hasta quedar encima y apretar Z cada z_interval_s hasta que
-    # su etiqueta desaparezca (gone_cycles capturas sin verla). Tras reposition_after_z Z sigue ahi: reacomodo (un tramo hacia
-    # su punto exacto si esta a mas de arrive_px * reposition_frac); tras max_z_per_item Z (reacomodo incluido) se SALTEA ese objeto y sigue con los demas
+    # su etiqueta desaparezca (gone_cycles capturas sin verla). Tras reposition_after_z Z sigue ahi: camina hasta quedar encima
+    # (W/A/S/D segun donde este; al menos un tramo, hasta over_px de los pies o walk_to_legs tramos) y sigue con Z; recien si
+    # despues de caminar llega a max_z_per_item Z sin salir, se SALTEA ese objeto y sigue con los demas
     # (a los item_max_s tambien, p. ej. si no se lo alcanza). Antes de subirse: espera final_look_s, mira una ultima captura y
     # recoge lo que haya quedado, sin repetir los salteados (skip_match_u: radio en el mapa para reconocerlos).
     # Ver config.example.jsonc.
     "pickup": {"z_interval_s": 0.4, "empty_confirm_cycles": 5, "max_presses": 200, "max_seconds": 90.0,
                "dismount": True, "mount_wait_s": 2.0, "look_s": 1.0, "arrive_px": 70, "item_below_label_px": 10,
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
-               "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
+               "gone_cycles": 2, "reposition_after_z": 1, "over_px": 12, "walk_to_legs": 3, "item_max_s": 15.0,
                "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
                # Objetos primero: buscando, explorando o yendo a otro metin, un objeto valido a <= priority_px (pantalla) del
                # personaje que no se salteo pasa a RECOGER antes que cualquier otra cosa. Los salteados se recuerdan
@@ -596,7 +597,7 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("pickup", "dismount_hp"),
+                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("pickup", "dismount_hp"), ("pickup", "reposition_frac"),
                  ("attack", "max_seconds_keep_hp"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
                  ("attack", "confirm_check_s"),
                  # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
@@ -1144,11 +1145,11 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("attack.clear_offsets_px debe ser una lista de pares [dx, dy]")
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
-                    "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s", "max_z_per_item",
+                    "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s", "max_z_per_item",
                     "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio",
                     "priority_px", "skip_keep_s", "idle_max_s", "priority_retry_s"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
-          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s",
+          "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "over_px", "walk_to_legs", "item_max_s",
           "max_z_per_item", "skip_match_u",
           "same_px", "near_px", "progress_window_s", "switch_ratio"))
     _require_numbers(cfg["pickup"].get("skip_crop_px"), "pickup.skip_crop_px", 3)

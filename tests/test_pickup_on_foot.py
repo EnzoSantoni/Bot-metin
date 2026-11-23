@@ -200,21 +200,24 @@ def test_se_reacomoda_tras_el_primer_z_y_sigue_con_z(caplog):
     h = floor_harness([DOWN], floor_kw={"misplaced_until": 3})     # las primeras 3 Z no juntan: mal ubicado
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
-    assert caplog.text.count("reacomodo sobre el objeto (") == 1 and "tras 1 Z" in caplog.text
+    assert caplog.text.count("no salio tras 1 Z: camino hasta quedar encima (tramo 1)") == 1
+    seq = kinds(h)
+    first_z = seq.index("z")
+    assert "combo" in seq[first_z + 1:seq.index("z", first_z + 1)]   # entre el 1er y el 2do Z camina hasta el objeto
     assert "salteo" not in caplog.text and "me rindo" not in caplog.text
     assert not h.floor.items and h.bot.stats.items == 1 and h.keys("z") == 4   # la cuarta Z lo junta: no se saltea
 
 
 def test_saltea_tras_4_z_con_reacomodo_y_pasa_al_siguiente(caplog):
-    """Objetos que no se juntan: 4 Z (con un reacomodo en el medio) y se saltea; sigue con el otro. La ultima mirada antes
-    de subirse no los repite."""
+    """Objetos que no se juntan: 1 Z, camina hasta quedar encima, 3 Z mas y recien ahi se saltea; sigue con el otro. La
+    ultima mirada antes de subirse no los repite."""
     caplog.set_level(logging.INFO)
     near_a, near_b = (FEET[0] - 30, FEET[1] - 18), (FEET[0] + 30, FEET[1] - 18)   # los dos al alcance: sin caminar
     h = floor_harness([near_a, near_b], floor_kw={"pickable": False}, pickup=FAST_WALK)
     start(h)
     h.run_until(lambda: h.bot.state is State.BUSCAR, limit=800)
     assert caplog.text.count("salteo el objeto") == 2 and "no desaparecio tras 4 Z" in caplog.text
-    assert caplog.text.count("reacomodo sobre el objeto") == 2 and "me rindo" not in caplog.text
+    assert caplog.text.count("camino hasta quedar encima (tramo 1)") == 2 and "me rindo" not in caplog.text
     assert h.keys("z") == 8 and h.bot.stats.items == 0 and len(h.floor.items) == 2
     assert "Ultima mirada antes de subirme: no queda nada (salteados: 2)" in caplog.text
     assert h.keys("g") == 2 and not h.bot._dismounted and h.clicks() == 0
@@ -481,3 +484,17 @@ def test_objeto_salteado_guarda_un_recorte_con_la_hora(tmp_path, caplog):
     assert len(crops) == 1 and re.fullmatch(r"\d{6}_\d{3}_salteado_\d+_\d+\.png", crops[0].name)
     assert cv2.imread(str(crops[0])).shape[:2] == (200, 320)   # [160, 110, 90]: 320 de ancho, 200 de alto
     assert "recorte del objeto salteado" in caplog.text
+
+
+def test_objeto_a_22_px_que_no_sale_con_el_primer_z_camina_hasta_el_aunque_parezca_encima(caplog):
+    """02:30:54: el objeto (907, 562) quedaba a ~22 px de los pies (menos que el viejo umbral del reacomodo): apretaba Z sin
+    moverse y lo salteo. Ahora, si no sale con el 1er Z, camina hacia el (aca a la izquierda: A) y recien ahi sigue con Z."""
+    caplog.set_level(logging.INFO)
+    left = (FEET[0] - 22, FEET[1] - 18)   # punto del objeto = (FEET[0] - 22, FEET[1]): a 22 px, a la izquierda
+    h = floor_harness([left], floor_kw={"misplaced_until": 1}, pickup=FAST_WALK)
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=600)
+    seq = [e for e in (h.floor._events() or h.floor.log)]
+    zs = [i for i, e in enumerate(seq) if e[0] == "z"]
+    assert ("combo", "A") in seq[zs[0] + 1:zs[1]], seq   # tramo con A entre el 1er y el 2do Z
+    assert "salteo" not in caplog.text and h.bot.stats.items == 1 and not h.floor.items
