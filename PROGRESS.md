@@ -2,6 +2,107 @@
 
 Requisitos completos: [ESPECIFICACION.md](ESPECIFICACION.md). Este archivo registra estado, decisiones y pruebas pendientes. **Para retomar una sesión: leer este archivo primero.**
 
+## PARA LA PRÓXIMA SESIÓN (2026-11-23, 03:00) — leer esto primero
+> Estado al cerrar la sesión larga del 2026-11-22/23. `main` = el commit de este texto (el anterior: `58a3334`); unos 1590 tests,
+> todos pasan. Las secciones de más abajo son historia: donde contradicen esta, vale esta.
+
+### Cómo trabajar con Enzo
+- Escribe en rioplatense; plan Pro: sesiones austeras, **sin subagentes** salvo que los pida, respuestas cortas.
+- Un commit por punto pedido y push, **solo si pasan los tests relacionados** (`.venv\Scripts\python.exe -m pytest -q tests\...`).
+  Nunca force push. **Nunca commitear `config.json`** (su config; está en .gitignore). `PRUEBAS_ESTA_NOCHE.md`,
+  `CAPTURAS_CAMARA.md` y `config.json.bak` quedan sin trackear (son suyos).
+- "Si algo no se comporta como describí, frená y decímelo en vez de inventar otro método."
+- **El juego corre como administrador: la terminal de Claude no le puede mandar input.** Nada se prueba en el juego: lo prueba
+  Enzo. Los tests nunca mandan input real ni teclas (backend falso / simulador `tests/sim_bot_env.py`).
+- `samples/` y `data/` están en .gitignore (capturas reales y el mapa de metin `data/Ciudad 1.mapa.json`).
+- **Hasta nuevo aviso NO se agregan funciones**: solo importan detectar el metin, cliquearlo bien y recoger lo que suelta.
+
+### Cómo funciona el juego (lo contó Enzo; no está en el código)
+- Ventana "Guabina", cliente 1858x1057. Mapa "Ciudad 1", servidor privado que permite bots.
+- **Cámara:** Q/E la giran. **G** sube el plano (vista desde arriba, se ve el piso); **T** lo baja (más horizontal). Si se
+  mantiene T de más llega a plano y **la cámara se acerca (zoom) al personaje**; ese zoom no se va con G, solo con la rueda
+  hacia "lejos". En Guabina la rueda hacia adelante **acerca**: `camera_pitch.zoom_out_sign` = -1. El terreno (bordes,
+  montañas) sube la cámara solo y no la devuelve.
+- **Ctrl+G** baja/sube del caballo. **Al apretarlo el personaje deja de atacar**: solo se baja cuando el metin se rompe (para
+  recoger) y se sube al terminar. **Al arrancar el bot Enzo siempre está montado** (no hay marca `a_pie.flag`).
+- **Z** junta UN objeto, el más cercano al personaje, con retraso del servidor (a veces hacen falta varias Z) y **hay que estar
+  encima**: si no sale, caminar hasta él.
+- **ESPACIO** ataca hacia adelante (sirve para sacarse bichos de encima).
+- **Clic izquierdo** sobre un metin: camina hasta él y le pega hasta que pase otra cosa (también a un Metin de Avaricia: para
+  cortar, un paso con teclado).
+- **Truco del clic derecho:** si el panel se pierde con la vida al 100% (error del juego), un clic derecho (apretar y soltar,
+  sin arrastrar) sobre un monstruo cercano lo selecciona **sin atacarlo** y el panel vuelve; después, clic izquierdo al metin.
+- **Escape abre el menú de opciones:** nunca se aprieta (para dejar un monstruo seleccionado: clic directo en el metin).
+- **Panel viejo:** el panel de arriba puede seguir mostrando un metin seleccionado de antes (en la corrida de las 23:48 ya
+  mostraba "Metin de Oscuridad 80.250/80.250" desde el arranque): una "confirmación" puede ser falsa.
+- El hover sobre una piedra no siempre muestra el nombre (23:48): **no decidir por el hover ni por el nombre; decide el panel**.
+- Los metin aparecen en **puntos fijos** y reaparecen rápido (se vio otro en el mismo punto a los ~25 s).
+- Captcha: el bot **no lo resuelve**; suena la alarma y espera (Bot Verify y la frase dorada).
+
+### Decisiones de Enzo vigentes
+1. **Objetos primero:** con objetos válidos cerca (`pickup.priority_px`) se recoge antes que buscar, explorar o ir a otro metin.
+2. **Decisión simple** (`d938b66`), en orden: a) objetos; b) metin a la vista (piedra o nombre naranja): **clic izquierdo
+   directo en el más cercano** (solo por distancia de piso), sin hover ni acercamiento con teclado; **el panel decide**: metin
+   objetivo = atacar; otro metin (Avaricia) = paso atrás (S, `attack.leave_s`) e ignorar esa posición; **ningún panel en 2 s**
+   (`attack.no_panel_s`) = recién ahí ignorar esa posición (`approach.no_label_ignore_s`); c) un metin objetivo a la vista a
+   piso <= 4 (`approach.near_floor`) **no se deja** (VOLVER y CENTRO lo atacan antes de irse; atacando afuera de la zona se sigue
+   si no está claramente afuera); d) sin metin: **girar la cámara de a pasos y frenar en el primero**; e) sin nada en la vuelta:
+   **el punto conocido más cercano** (aunque no esté "listo") y ahí se repite.
+3. **Recoger:** a pie con W/A/S/D (sin clics). Si el objeto no sale con el 1er Z, **camina hasta quedar encima** (al menos un
+   tramo; `pickup.over_px`, `pickup.walk_to_legs`) y recién después sigue con Z; se saltea solo si después de caminar llega a
+   4 Z sin salir. Los salteados se recuerdan y dejan recorte en debug (`recoger/HHMMSS_mmm_salteado_x_y.png`); antes de
+   subirse se guarda la pantalla completa (`recoger/HHMMSS_mmm_antes_de_subir.png`), con `debug.enabled`.
+4. **Trabado yendo al metin con 0 monstruos:** si la piedra sigue en pantalla, hasta 2 reclics en ella esperando 3 s cada uno
+   (`attack.stuck_reclicks`, `stuck_reclick_wait_s`); recién después paso al costado; el reclic usa la piedra de esa captura
+   sin girar la vista. Con bichos: ESPACIO y reclic.
+5. **2 clics seguidos que seleccionan un monstruo:** ESPACIO 1,5 s y clic en la parte alta de la piedra (debajo del nombre),
+   lejos de las etiquetas de monstruos.
+6. **Panel perdido con vida 100%:** truco del clic derecho (hasta 3 por metin) y después clic izquierdo.
+7. **Cámara:** reinicio con teclas (rueda lejos, G 3 s, `t_taps` toques de T de 120 ms medidos con reloj de alta precisión,
+   rueda lejos). **Solo cuando la cámara mira el piso**, con al menos 60 s entre reinicios (`camera_pitch.min_gap_s`). Nunca al
+   arrancar (Enzo la deja acomodada), ni tras cada metin, ni periódico. Al arrancar el log dice ENCENDIDO/APAGADO. `t_taps` se
+   calibra con `calibrate.py camara` (como administrador); en su config.json: `enabled` true, `zoom_out_sign` -1, `t_taps` 6.
+8. **Mapa de metin:** cada punto guarda la última rotura y mide cuánto tarda en reaparecer (`respawn_s`, la menor cota de la
+   sesión); las horas de sesiones viejas no cuentan.
+
+### Reglas que descartaban un metin visible
+- **Sacadas o apagadas:** hover sin nombre; descartar por nombre (etiqueta dudosa, otro tipo); regla ciega ("posición
+  desconocida, lejos o jugador sin margen"); piedra sin humo rodeada de monstruos; descartes por tiempo máximo de ataque, por
+  reclics, por deselecciones y por "inalcanzable"; metin "apartado" 30 s; acercamiento con teclado; lista de candidatos de la
+  vuelta (`explore.candidate_list` false); barrido mientras ataca y metin "recordado" (`attack.scan_enabled` false); reclics
+  rápidos sin panel (`attack.quick_reclicks` 0); puntos conocidos antes de la vuelta; metin en curso bloqueando a otro visible
+  (`attack.keep_with_others_s` 0); prioridad etiqueta/piedra; márgenes chicos de zona (`metin_outside_u`, `blind_*`).
+- **Quedan:** Avaricia (otro metin) confirmado por el panel; metin **claramente** afuera de la zona más `outside_tolerance`
+  (posición por la cámara, por el rumbo del minimapa, o porque el personaje salió de la zona yendo a él); ningún panel en 2 s
+  tras el clic; panel de un monstruo al cliquear una piedra sin nombre; clic que caería sobre la interfaz.
+- Reclics sin que baje la vida: tras `attack.max_reclicks` pasa a la escalera de destrabe (paso al costado, ESPACIO, DESTRABAR)
+  con el mismo metin, nunca descarta.
+- Código que quedó **sin uso** (se puede borrar más adelante): ACERCARSE/hover, acercamiento con teclado (`_start_walk`,
+  `_keys_approach`), y claves de config sin efecto (`approach.blind_*`, `hover_*`, `metin_outside_u`, `far_monsters_*`,
+  `max_tries_per_spot`, `attack.max_seconds`, `discard_minutes`...).
+
+### Límites conocidos (avisados a Enzo)
+1. **Un metin al que no se le puede pegar nunca se suelta:** reclics, destrabe y DESTRABAR para siempre. En el simulador, uno
+   detrás de un obstáculo tardó ~3 min en romperse (los tests e2e permiten ATACAR hasta 240 s).
+2. **Piedras lejanas sin rumbo del minimapa:** no se puede estimar si están afuera de la zona; se las cliquea, el personaje
+   camina hacia ella y recién al salir de la zona más la tolerancia la ignora y vuelve. En el modo clic del simulador (viejo,
+   no lo usa Enzo) VOLVER sin cámara puede caminar para el lado equivocado; por eso los mundos aleatorios no llevan el metin
+   de afuera.
+3. **Panel viejo** seleccionado de antes: puede dar una confirmación falsa al primer clic (no está resuelto).
+4. En `real_metin_enfrente_omitido` el tercer metin (arriba a la derecha, tapado por el texto de un NPC) no se detecta.
+
+### Pruebas con capturas reales (`tests/test_capturas_reales.py`; ningún cambio de detección/elección está terminado sin ellas)
+`real_metin_enfrente_omitido` 2 de 3 (elige el de enfrente); `metin_cerca_sin_seleccionar` 1; `metin_oscuridad_a_distancia` 3;
+`real_tres_metin_hover` 3 (clic directo en la piedra más cercana, sin nombre); `items_en_piso` 5 objetos, 0 metin.
+
+### Estado y pendiente
+- Última prueba de Enzo: 02:29 (2 min), anduvo bien (atacó, recogió, se subió, encontró el siguiente sin vuelta). Único error:
+  un objeto salteado sin caminar hasta él → arreglado en `bee0df6`, **sin probar en el juego**.
+- **A probar por Enzo:** la decisión simple (`d938b66`), el trabado con reclic antes del paso (`e787acb`) y la recogida
+  caminando hasta el objeto (`bee0df6`), en una corrida larga con `debug.enabled`.
+- Pendiente (no hacer sin que Enzo lo pida): detectar por pantalla si está montado; el panel viejo al arrancar; borrar el código
+  y las claves sin uso; `PRUEBAS_ESTA_NOCHE.md` está desactualizado (es de Enzo, no tocarlo sin preguntar).
+
 ## PARA ENZO (2026-11-22): Fase 6i, más metin por hora. `main` `c166291`, 1560 tests
 **Qué hice**, en orden (commit y push de cada uno):
 0. **Merge pendiente cerrado** (`6210496`):

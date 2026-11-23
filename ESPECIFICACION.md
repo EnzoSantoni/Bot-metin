@@ -15,28 +15,39 @@ Quiero construir un bot de farmeo para Metin2 (servidor privado que permite este
 
 ## Cómo se ven las cosas
 - Metin: piedra con un anillo o brillo rojo en la base y su NOMBRE EN NARANJA flotando encima, SIN el prefijo "Lv" (ej. "Metin de Oscuridad"). Los monstruos tienen el nombre en rojo con "Lv XX" en verde: no confundirlos. Detectá los metin principalmente por su etiqueta naranja y verificá el nombre: solo hay que atacar los tipos configurados en config.json, en una lista para poder agregar o quitar tipos sin tocar el código: "target_metin_names": ["Metin de Oscuridad", "Metin Negro"] (cambiado por Enzo el 2026-11-18; antes era un solo tipo). Las piedras de los distintos tipos se ven iguales o parecidas: lo que los distingue es el nombre. Hay otros metin en el mapa (ej. "Metin de Avaricia", ver metin_avaricia_seleccionado.png) que hay que ignorar.
-- El panel superior también aparece al seleccionar monstruos (ej. "Lv.28 (Nivel 4.) Se-Rang") o a mi propio personaje (muestra "Farfarfa" con un botón "Desmontar", ver yang_en_piso.png). Solo cuenta como metin seleccionado si el nombre del panel coincide con cualquiera de los nombres de target_metin_names. Si seleccionó a mi personaje o a un monstruo por error, deseleccionar con Escape y volver a buscar.
+  - (Cambiado por Enzo el 2026-11-23.) **No decidir por el nombre ni por el hover:** toda piedra de metin a la vista (con o sin
+    nombre naranja) se cliquea y **decide el panel**: metin objetivo = atacar; otro metin (Avaricia) = irse e ignorar esa
+    posición; ningún panel en 2 s = recién ahí ignorar esa posición.
+- El panel superior también aparece al seleccionar monstruos (ej. "Lv.28 (Nivel 4.) Se-Rang") o a mi propio personaje (muestra "Farfarfa" con un botón "Desmontar", ver yang_en_piso.png). Solo cuenta como metin seleccionado si el nombre del panel coincide con cualquiera de los nombres de target_metin_names. Si seleccionó a mi personaje o a un monstruo por error, deseleccionar con Escape y volver a buscar. (Cambiado por Enzo: **nunca
+  Escape**, abre el menú de opciones; para dejar un monstruo seleccionado, clic directo en el metin. El panel puede quedar
+  mostrando un metin seleccionado de antes.)
 - Objetos en el piso: un recuadro oscuro con el nombre del objeto en letras blancas. Si encima dice el nombre de mi personaje en amarillo ("Farfarfa's"), es un objeto reservado para mí; si está solo en blanco, es público. Los dos son objetos válidos para recoger (ver items_en_piso.png).
 - Yang (la moneda): recuadros que dicen "Yang" (ver yang_en_piso.png). NO hay que recogerlos, porque se recogen de a uno y hacen perder mucho tiempo. Excluilos.
-- Captcha (ver captcha.png): cada tanto aparece un panel "Bot Verify" (en la captura está a la derecha, pero detectalo en cualquier posición). Arriba muestra 4 números grandes en blanco (ej. "6 1 1 6") y al lado una casilla de entrada; abajo hay un teclado numérico con botones 1-9 y 0, "Clear", "Delete" y "OK". Al detectarlo: pausar el loop, leer los 4 números, clickear "Clear", clickear los botones del teclado en orden y después "OK". Verificar que el panel desapareció. Configurable con "solve_captcha": true. Si no logra leer los números con suficiente confianza, o el panel sigue después de 2 intentos, pausarse y hacer sonar una alarma para que lo resuelva yo.
+- Captcha (ver captcha.png): cada tanto aparece un panel "Bot Verify" (en la captura está a la derecha, pero detectalo en cualquier posición). Arriba muestra 4 números grandes en blanco (ej. "6 1 1 6") y al lado una casilla de entrada; abajo hay un teclado numérico con botones 1-9 y 0, "Clear", "Delete" y "OK". Al detectarlo: pausar el loop, leer los 4 números, clickear "Clear", clickear los botones del teclado en orden y después "OK". Verificar que el panel desapareció. Configurable con "solve_captcha": true. Si no logra leer los números con suficiente confianza, o el panel sigue después de 2 intentos, pausarse y hacer sonar una alarma para que lo resuelva yo. (Cambiado por Enzo: **el bot no resuelve el captcha**: alarma y espera.)
 - Muerte (ver muerte.png): aparecen arriba a la izquierda los botones "Volver a Empezar Aquí" y "Volver a Empezar en la Ciudad".
 
 ## Controles del juego (todos configurables en config.json)
 - Clic izquierdo en el piso: el personaje camina hasta ahí. Clic izquierdo sobre un enemigo o metin: lo ataca hasta romperlo.
 - También: W A S D para moverse y barra espaciadora para atacar hacia adelante.
 - Cámara: Q y E la giran (también clic derecho arrastrando). Rueda del mouse: zoom.
-- Z: recoge UN objeto cercano por cada vez que se aprieta.
-- Ctrl izquierdo + G: bajarse o subirse al caballo.
+  - (Agregado por Enzo.) G sube el plano de la cámara (vista desde arriba) y T lo baja (más horizontal). T mantenida de más
+    llega a plano y ACERCA la cámara al personaje; ese zoom solo se saca con la rueda hacia "lejos" (en Guabina, la rueda hacia
+    atrás). El terreno sube la cámara solo: reiniciarla (rueda lejos, G, toques cortos de T, rueda) solo cuando mira el piso.
+  - Clic derecho (apretar y soltar) sobre un monstruo lo selecciona sin atacarlo: si el panel del metin se perdió con la vida al
+    100% (error del juego), así vuelve; después, clic izquierdo al metin.
+- Z: recoge UN objeto cercano por cada vez que se aprieta. (Enzo: junta el más cercano, con retraso; hay que estar encima.)
+- Ctrl izquierdo + G: bajarse o subirse al caballo. (Enzo: al apretarlo el personaje deja de atacar; bajarse solo con el metin
+  roto, para recoger. Al arrancar el bot siempre está montado.)
 - F1: habilidad de daño que dura 100 segundos. Para activarla hay que bajarse del caballo, apretar F1, esperar unos 2 segundos de animación y volver a subirse. Es OPCIONAL: apagada por defecto ("use_buff": false).
 - El personaje es cuerpo a cuerpo (sura o guerrero) y ataca montado.
 - Las pociones se toman solas: no hay que gestionarlas.
 
 ## Loop principal (máquina de estados)
 1. BUSCAR: capturar y detectar metin de los tipos configurados. Si hay varios, elegir el más cercano al personaje, de cualquiera de los tipos, dentro de la zona de farmeo o de su franja de tolerancia.
-2. ATACAR: clic izquierdo sobre el metin. Confirmar que se seleccionó leyendo el panel superior (nombre y vida). Leer la vida con la barra roja y, de ser posible, con el número. Si la vida no baja durante X segundos, reintentar el clic; si sigue sin bajar, descartarlo y buscar otro.
+2. ATACAR: clic izquierdo sobre el metin. Confirmar que se seleccionó leyendo el panel superior (nombre y vida). Leer la vida con la barra roja y, de ser posible, con el número. Si la vida no baja durante X segundos, reintentar el clic; si sigue sin bajar, descartarlo y buscar otro. (Cambiado por Enzo el 2026-11-23: un metin a la vista **no se descarta** por tiempo ni por reclics; solo se deja si el panel dice Avaricia, si queda claramente afuera de la zona más la tolerancia o si no aparece ningún panel en 2 s. Un metin objetivo a piso <= 4 no se deja hasta romperlo.)
 3. Al romperse (el panel desaparece o la vida llega a 0), pasar a RECOGER.
-4. RECOGER: detectar etiquetas de objetos que no sean yang. Mientras queden, apretar Z o hacer clic sobre la etiqueta para ir hasta el objeto. Opción configurable de bajarse del caballo para recoger con clic (montado a veces cuesta) y volver a subirse al terminar. Máximo de intentos y de tiempo para no trabarse. Terminar cuando no quedan objetos válidos.
-5. EXPLORAR: si no hay metin visible, primero girar la cámara con Q/E en pasos para mirar alrededor. Si sigue sin haber, caminar por la zona con clics en el piso.
+4. RECOGER (cambiado por Enzo: los objetos van **antes que todo**; a pie con W/A/S/D, sin clics; si no sale con una Z, caminar hasta quedar encima): detectar etiquetas de objetos que no sean yang. Mientras queden, apretar Z o hacer clic sobre la etiqueta para ir hasta el objeto. Opción configurable de bajarse del caballo para recoger con clic (montado a veces cuesta) y volver a subirse al terminar. Máximo de intentos y de tiempo para no trabarse. Terminar cuando no quedan objetos válidos.
+5. EXPLORAR: si no hay metin visible, primero girar la cámara con Q/E en pasos para mirar alrededor. Si sigue sin haber, caminar por la zona con clics en el piso. (Cambiado por Enzo: girar de a pasos frenando en el primer metin que aparezca; si no hay ninguno, ir al punto conocido más cercano donde ya se rompió un metin, que aparecen en lugares fijos, y repetir; se camina con W/A/S/D.)
 6. Volver a BUSCAR. Repetir hasta que yo lo detenga.
 - En cualquier estado, revisar en cada ciclo si apareció el captcha o la pantalla de muerte.
 
@@ -71,7 +82,7 @@ Hace falta leer: nombre en el panel superior, número de vida, coordenadas, etiq
 - Logs claros en consola y en archivo de cada cambio de estado.
 - Código modular: captura, detección de metin, lectura del panel, lectura de coordenadas, detección de objetos, captcha, muerte, input y máquina de estados.
 - Tests (pytest) de toda la detección contra ./samples.
-- README en español: instalación, calibración, pruebas, uso, qué ajustar si algo falla, y la aclaración de que puede hacer falta ejecutar como administrador si el juego corre como administrador.
+- README en español: instalación, calibración, pruebas, uso, qué ajustar si algo falla, y la aclaración de que puede hacer falta ejecutar como administrador si el juego corre como administrador. (Enzo: el juego corre como administrador; Claude no puede mandarle input ni probar en él: lo prueba Enzo.)
 
 ## Material disponible (./samples, capturas reales a 1920x1080)
 - metin_oscuridad_seleccionado_vida_llena.png: metin seleccionado, vida 80.250/80.250, con su etiqueta naranja.
