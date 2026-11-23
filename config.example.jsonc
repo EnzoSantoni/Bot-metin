@@ -202,7 +202,8 @@
 
   // ATACAR. confirm_timeout_s: tiempo sin ver el panel del metin (ni moverse) antes de reclickear.
   //  hp_stall_s: la vida no baja por tanto tiempo -> reclic. max_reclicks: mas que esto -> descartar el metin.
-  //  max_seconds: tope total de un ataque. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
+  //  max_seconds: tope total de un ataque; pasado ese tope, un metin con la vida por debajo de max_seconds_keep_hp (0.20 =
+  //  20%) NO se abandona: reclic en el metin (cada reclick_wait_s si la vida no baja) y se sigue. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
   //  metin por roto. discard_minutes: un metin descartado no se vuelve a elegir por ese tiempo.
   //  discard_radius: unidades del juego a la redonda que se consideran "el mismo metin".
   //  discard_error_frac: se suma al radio esta fraccion de la distancia al metin (el error de la camara crece con la distancia).
@@ -218,7 +219,7 @@
   //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
   //  vida (hp_stall_s) hasta walk_max_s. Quieto stuck.window_s con la vida sin bajar y >= stuck.monsters_min monstruos cerca
   //  -> ESPACIO unstick_space_s y reclic (cuenta para max_reclicks). (walk_max_s, unstick_space_s: ESTIMADOS.)
-  "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
+  "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0, "max_seconds_keep_hp": 0.20,
              "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
              "wrong_monsters_min": 1, "blocked_window_frac": 0.8,
@@ -311,10 +312,6 @@
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
              "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
              "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
-             //  dismount_hp: atacando, cuando la vida del metin baja de esta fraccion (2 lecturas seguidas del panel) se baja
-             //  del caballo ya (Ctrl+G), para estar a pie cuando se rompe; si no se rompe sigue atacando a pie. Si el metin deja
-             //  de estar en curso sin romperse, se vuelve a subir. 0 = solo se baja al recoger.
-             "dismount_hp": 0.10,
              //  Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto entre
              //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
              //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos

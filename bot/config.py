@@ -106,6 +106,9 @@ DEFAULTS: dict[str, Any] = {
     "loop": {"cycle_ms": 150, "captcha_full_search_every": 10, "hold_chunk_s": 0.5},
     # ATACAR: tiempos en s, descarte en minutos, radio de descarte en unidades del juego.
     "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
+               # max_seconds_keep_hp: pasado max_seconds, un metin con la vida por debajo de esta fraccion NO se abandona:
+               # reclic en el metin (cada reclick_wait_s si la vida no baja) y se sigue atacando.
+               "max_seconds_keep_hp": 0.20,
                "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
                "max_wrong_selections": 3,
                # blocked_s: confirmado, vida sin bajar y quieto/en circulo -> ESPACIO; circle_ratio: recorrido > ratio x
@@ -173,9 +176,6 @@ DEFAULTS: dict[str, Any] = {
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
                "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
                "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
-               # dismount_hp: atacando, con la vida del metin por debajo de esta fraccion (2 lecturas seguidas) se baja del
-               # caballo YA (Ctrl+G), asi esta a pie cuando se rompe; si no se rompe sigue atacando a pie. 0 = solo al recoger.
-               "dismount_hp": 0.10,
                # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
                # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
@@ -568,7 +568,7 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
+                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("pickup", "dismount_hp"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
                  ("attack", "confirm_check_s"),
                  # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
                  ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"), ("approach", "click_floor"),
@@ -1100,6 +1100,9 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("attack.scan_enabled debe ser true o false")
     if not 0 <= a["label_click_up_frac"] < 1:
         raise ConfigError("attack.label_click_up_frac debe estar en [0, 1)")
+    keep = a.get("max_seconds_keep_hp")
+    if isinstance(keep, bool) or not isinstance(keep, (int, float)) or not 0 <= keep < 1:
+        raise ConfigError("attack.max_seconds_keep_hp debe ser una fraccion en [0, 1) (0.20 = 20% de vida; 0 = siempre abandona)")
     if not 0 < a["broken_hp_ratio"] <= 1:
         raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
     offs = a["clear_offsets_px"]
@@ -1109,15 +1112,13 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
                     "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s", "max_z_per_item",
-                    "skip_match_u", "final_look_s", "dismount_hp", "same_px", "near_px", "progress_window_s", "switch_ratio"),
+                    "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s",
           "max_z_per_item", "skip_match_u",
           "same_px", "near_px", "progress_window_s", "switch_ratio"))
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
-    if cfg["pickup"]["dismount_hp"] >= 1:
-        raise ConfigError("pickup.dismount_hp debe ser una fraccion < 1 (0.10 = 10% de vida; 0 = solo al recoger)")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
                      "max_without_metin_s", "min_leg_sep_deg", "recent_legs", "visited_keep", "leg_tiebreak_units",
                      "settle_s", "settle_frames", "edge_return_u"),

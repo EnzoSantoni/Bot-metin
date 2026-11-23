@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 TOP_ACTION = "camera_top"     # controls: G, vista desde arriba
 FLAT_ACTION = "camera_flat"   # controls: T, perspectiva mas plana
 BACKOFF_MAX = 8   # tope del multiplo de `min_gap_s` tras reinicios por piso que no arreglaron nada
+FLOOR_REASON = "mira el piso"   # motivo del reinicio cuando la camara quedo mirando el piso
 
 
 def looks_at_floor(img: Any, cfg: dict, mask: Any = None, player_xy: tuple[int, int] | None = None) -> bool:
@@ -71,6 +72,16 @@ class CameraPitch:
     @property
     def enabled(self) -> bool:
         return bool(self.c["enabled"])
+
+    def status_line(self) -> str:
+        """Una linea para el arranque: si el reinicio esta encendido o apagado (y con que valores)."""
+        c = self.c
+        if not self.enabled:
+            return "Camara: reinicio APAGADO (camera_pitch.enabled false en config.json): el bot no toca el angulo de la camara"
+        wheel = int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"])
+        return (f"Camara: reinicio ENCENDIDO (rueda {wheel:+d}, G {float(c['g_hold_s']):.1f} s, T x{int(c['t_taps'])} de "
+                f"{int(c['t_tap_ms'])} ms): al arrancar, tras cada metin roto, si {FLOOR_REASON} y cada "
+                f"{float(c['every_s']):.0f} s buscando")
 
     def periodic_due(self, t: float) -> bool:
         """Pasaron `every_s` desde el ultimo reinicio (se chequea al empezar cada vuelta de busqueda)."""
@@ -152,12 +163,13 @@ class CameraPitch:
                     int(c["t_tap_ms"]), int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"]), why)
         self.tap_ms = []
         if not self.run(perceive, gi, sleep):
+            logger.warning("Camara: reinicio cortado a la mitad [%s] (captcha, ventana sin foco o F12)", why)
             return False
         if self.tap_ms:
             logger.info("Camara: toques de T medidos: %s ms", ", ".join(f"{v:.1f}" for v in self.tap_ms))
         sleep(float(self.cfg["explore"]["settle_s"]))
         self.resets += 1
-        if why == "piso":
+        if why == FLOOR_REASON:
             after = perceive()
             if after is not None and looks_at_floor(after[0], self.cfg, after[1].mask, after[1].player_xy):
                 self.fruitless += 1

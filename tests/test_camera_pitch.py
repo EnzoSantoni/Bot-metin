@@ -338,7 +338,7 @@ def test_con_camera_pitch_apagada_no_toca_la_camara_para_nada():
     with_cam(h, cam)
     h.bot.run(max_minutes=0.001)                                   # al arrancar
     h.bot.state = State.BUSCAR
-    assert h.bot._pitch_reset("metin roto y recogido") is False    # despues de cada metin
+    assert h.bot._pitch_reset("metin roto") is False    # despues de cada metin
     h.bot._img = cam.image()
     for _ in range(5):                                             # mirando el piso y con every_s vencido
         h.clock.t += 100
@@ -367,7 +367,7 @@ def test_reinicia_despues_de_romper_y_recoger_y_nunca_atacando_ni_recogiendo(cap
     h.run_until(lambda: h.bot.stats.metins == 1 and g_holds(h) >= 1)
     assert State.RECOGER in h.states() and h.be.pressed == ([], [])
     assert scrolls(h) == [("scroll", 20), ("scroll", 20)]
-    assert any("[metin roto y recogido]" in r.getMessage() for r in caplog.records)
+    assert any("[metin roto]" in r.getMessage() for r in caplog.records)
     assert all(s not in (State.ATACAR, State.RECOGER, State.CAPTCHA) for s, _, _ in h.cam_states)
 
 
@@ -495,3 +495,34 @@ def test_send_wheel_positivo_es_hacia_adelante(monkeypatch):
     sent.clear()
     pd.send_wheel(-2)
     assert sent == [-pd.WHEEL_DELTA] * 2
+
+
+# ------------------------------------------------------------------ log: una linea por reinicio y estado al arrancar
+@pytest.mark.parametrize("enabled", [True, False])
+def test_al_arrancar_dice_si_el_reinicio_esta_encendido_o_apagado(caplog, enabled):
+    caplog.set_level(logging.INFO)
+    c = pitch_cfg()
+    c["camera_pitch"]["enabled"] = enabled
+    h = Harness(lambda h, n: perc(), cfg=c)
+    with_cam(h, SimCam())
+    h.bot.run(max_minutes=0.001)
+    word = "ENCENDIDO" if enabled else "APAGADO"
+    rec = [r for r in caplog.records if f"Camara: reinicio {word}" in r.getMessage()]
+    assert len(rec) == 1 and rec[0].levelno == (logging.INFO if enabled else logging.WARNING)
+    assert any("[arranque]" in r.getMessage() for r in caplog.records) is enabled
+
+
+def test_reinicio_por_piso_dice_el_motivo(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+    with_cam(h, SimCam(floor_at_start=True))
+    h.bot.pitch.last_reset_t = h.clock.t - 1000
+    h.run_until(lambda: h.bot.pitch.resets >= 1)
+    assert any("[mira el piso]" in r.getMessage() for r in caplog.records)
+
+
+def test_reinicio_cortado_queda_en_el_log(caplog):
+    caplog.set_level(logging.INFO)
+    g, _, _, _ = make()
+    assert CameraPitch(cfg()).reset(lambda: None, g, lambda s: None, 0.0, "metin roto") is False
+    assert any("Camara: reinicio cortado" in r.getMessage() and "[metin roto]" in r.getMessage() for r in caplog.records)

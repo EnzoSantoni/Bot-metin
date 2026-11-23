@@ -697,61 +697,49 @@ def test_run_bot_plantilla_faltante_falla_claro(capsys, monkeypatch):
     assert code == 1 and "plantilla" in capsys.readouterr().out.lower()
 
 
-# ---------------------------------------------------------------- bajarse del caballo con la vida del metin baja
-def _low_hp_script(hps, at_recoger):
-    w = {"atk": 0, "done": False}
+# ---------------------------------------------------------------- tope de tiempo de ataque con la vida baja
+def _long_attack_script(hps):
+    """BUSCAR ve un metin; en ATACAR el panel muestra `hps` (la ultima se repite) y cada ciclo pasa 1 s."""
+    w = {"atk": 0}
 
     def script(h, n):
-        st = h.bot.state
-        if st is State.BUSCAR and not w["done"]:
-            return perc(metins=[metin()])
-        if st is State.ATACAR:
+        if h.bot.state is State.ATACAR:
             w["atk"] += 1
-            if w["atk"] == len(hps) + 1:
-                h.clock.t += 20.0   # pasaron mas de attack.min_break_s
-            return perc(panel=target_panel(hps[w["atk"] - 1]) if w["atk"] <= len(hps) else None)
-        if st is State.RECOGER:
-            if not w["done"]:
-                at_recoger.append(h.keys("g"))
-            w["done"] = True
-            return perc(items=[item()] if h.keys("z") < 2 else [])
-        return perc()
+            h.clock.t += 1.0
+            return perc(metins=[metin()], panel=target_panel(hps[min(w["atk"], len(hps)) - 1]))
+        return perc(metins=[metin()])
     return script
 
 
-def test_vida_del_metin_bajo_10_se_baja_antes_de_romperse(caplog):
+_LONG = {"max_seconds": 10.0, "reclick_wait_s": 3.0, "hp_progress_s": 2.0, "reclick_stall_s": 1e9, "blocked_s": 1e9,
+         "scan_enabled": False}
+
+
+def test_tiempo_maximo_con_vida_bajo_20_no_abandona_reclic_y_sigue(caplog):
     caplog.set_level(logging.INFO)
-    at_recoger = []
-    h = Harness(_low_hp_script([0.5, 0.2, 0.09, 0.08, 0.05], at_recoger))
-    h.run_until(lambda: State.EXPLORAR in h.states())
-    assert at_recoger == [1], "Ctrl+G atacando (vida < 10%), antes de llegar a RECOGER"
-    assert h.keys("g") == 2 and not h.bot._dismounted   # una bajada (atacando) y una subida (al terminar de recoger)
-    assert "me bajo del caballo ya" in caplog.text and "ya estoy a pie" in caplog.text
-    assert h.bot.stats.metins == 1 and h.bot.stats.items == 1
+    h = Harness(_long_attack_script([0.5, 0.15]), attack=_LONG, stuck={"fast_s": 1e9})
+    h.run_until(lambda: h.bot._atk is not None and h.clock.t - h.bot._atk.start_t > 20, limit=200)
+    assert h.bot.state is State.ATACAR and not any("tiempo maximo" in r for _, r in h.seen)
+    assert caplog.text.count("no lo abandono, reclic y sigo") >= 2   # cada reclick_wait_s, no en cada ciclo
+    assert h.clicks() >= 3 and h.keys("g") == 0
 
 
-def test_una_sola_lectura_baja_no_baja_del_caballo():
-    at_recoger = []
-    h = Harness(_low_hp_script([0.5, 0.09, 0.3, 0.2], at_recoger), attack={"broken_hp_ratio": 0.25})
-    h.run_until(lambda: at_recoger, limit=400)
-    assert at_recoger == [0]
+def test_tiempo_maximo_con_vida_alta_abandona():
+    h = Harness(_long_attack_script([0.5, 0.35]), attack=_LONG, stuck={"fast_s": 1e9})
+    h.run_until(lambda: any("tiempo maximo de ataque" in r for _, r in h.seen), limit=200)
+    assert h.bot._cur is None
 
 
-def test_dismount_hp_cero_solo_se_baja_al_recoger():
-    at_recoger = []
-    h = Harness(_low_hp_script([0.5, 0.09, 0.08, 0.05], at_recoger), pickup={"dismount_hp": 0.0})
-    h.run_until(lambda: State.EXPLORAR in h.states())
-    assert at_recoger == [0] and h.keys("g") == 2
+def test_vida_del_metin_baja_no_se_baja_del_caballo_atacando():
+    """Ctrl+G hace que el personaje deje de atacar: solo se baja al recoger, nunca con el metin vivo."""
+    h = Harness(_long_attack_script([0.5, 0.2, 0.09, 0.05, 0.04, 0.03]), attack=_LONG, stuck={"fast_s": 1e9})
+    h.run_until(lambda: h.bot._atk is not None and h.clock.t - h.bot._atk.start_t > 8, limit=200)
+    assert h.bot.state is State.ATACAR and h.keys("g") == 0 and not h.bot._dismounted
 
 
-@pytest.mark.parametrize("in_progress", [False, True])
-def test_bajado_por_vida_baja_se_sube_si_ya_no_hay_metin_en_curso(in_progress):
-    from bot.bot import _CurrentMetin
-    h = Harness(lambda h, n: perc())
-    h.bot._set_dismounted(True, "test")
-    h.bot._early_down = True
-    if in_progress:   # el metin sigue en curso (se lo busca): se sigue a pie
-        h.bot._cur = _CurrentMetin((900, 300), None, "metin_de_oscuridad", 0.0, h.clock.t, 0)
-    h.bot.step()
-    assert h.keys("g") == (0 if in_progress else 1)
-    assert h.bot._dismounted is in_progress
+def test_max_seconds_keep_hp_invalido():
+    cfg = make_cfg()
+    for bad in (1.0, -0.1, True, "0.2"):
+        cfg["attack"]["max_seconds_keep_hp"] = bad
+        with pytest.raises(ConfigError):
+            validate_config(cfg)
