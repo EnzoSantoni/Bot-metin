@@ -1,6 +1,7 @@
 """Tests de bot/bot.py y run_bot.py: ventana, backend, alarma, reloj y percepcion simulados (nada de input real)."""
 import copy
 import logging
+import math
 import random
 
 import numpy as np
@@ -779,3 +780,37 @@ def test_panel_perdido_con_vida_100_clic_derecho_en_un_monstruo_y_despues_clic_i
     assert ev[:first_right].count(("mouse_down", "left")) == 1, "ningun reclic antes del truco"
     assert not any(e == ("key_down", "space") for e in ev[:first_right]), "sin ESPACIO antes del truco"
     assert "Panel perdido con vida 100%" in caplog.text
+
+
+# ---------------------------------------------------------------- seleccion equivocada repetida: ESPACIO y parte alta de la piedra
+def test_dos_selecciones_de_monstruo_seguidas_espacio_y_clic_en_la_parte_alta_de_la_piedra(caplog):
+    """22:25:48: 4 clics seguidos seleccionaron un monstruo (los puntos se corrian hacia abajo) y lo aparto. Ahora, al
+    segundo: ESPACIO 1.5 s y clic mas arriba, debajo del nombre y lejos de las etiquetas de monstruos."""
+    import dataclasses
+
+    from bot.vision.monsters import MonsterLabel
+    caplog.set_level(logging.INFO)
+    mon = Rect(985, 475, 70, 12)   # un monstruo con su nombre encima de la parte de abajo de la piedra
+
+    def script(h, n):
+        h.clock.t += 0.5
+        if h.bot.state is State.BUSCAR:
+            return perc(metins=[metin()])
+        if h.bot.state is not State.ATACAR:
+            return perc()
+        other = PanelInfo(present=True, kind="other", name="Lobo", hp_ratio=1.0)
+        return dataclasses.replace(perc(metins=[metin()], panel=other), monsters=[MonsterLabel(mon, mon.center)],
+                                   monsters_near=2, monsters_on_me=1)
+    h = Harness(script)
+    spaces, clicks = [], []
+    real_space, real_click = h.bot._hold_space, h.gi.click_at
+    h.bot._hold_space = lambda seconds=None: spaces.append(seconds) or real_space(seconds)
+    h.gi.click_at = lambda x, y, *a, **k: clicks.append((x, y)) or real_click(x, y, *a, **k)
+    h.run_until(lambda: "Parte alta de la piedra" in caplog.text and len(clicks) >= 3, limit=200)
+    assert spaces[:2] == [None, 1.5], spaces   # 1ra: ESPACIO de siempre; 2da seguida: 1.5 s
+    label_bottom = metin().label_rect.bottom
+    x, y = clicks[2]
+    assert clicks[2] != clicks[1] and y < clicks[0][1] and label_bottom < y <= label_bottom + 40, clicks   # parte alta
+    gap = math.hypot(max(mon.x - x, 0, x - mon.right), max(mon.y - y, 0, y - mon.bottom))
+    assert gap > DEFAULTS["attack"]["monster_clear_px"], (clicks, gap)   # lejos de la etiqueta del monstruo
+    assert "2 clics seguidos seleccionaron un monstruo" in caplog.text

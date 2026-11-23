@@ -154,6 +154,10 @@ DEFAULTS: dict[str, Any] = {
                # derecho sobre un monstruo cercano (lo selecciona sin atacarlo y el panel vuelve) y despues clic izquierdo al
                # metin; hasta recover_max veces por metin.
                "recover_hp": 0.99, "recover_max": 3,
+               # SELECCION EQUIVOCADA REPETIDA: si wrong_high_after clics seguidos seleccionan un monstruo, ESPACIO wrong_space_s
+               # y clic en la parte alta de la piedra (debajo del nombre hasta high_frac del cuerpo; sin piedra medible,
+               # high_up_px mas arriba), lejos de las etiquetas de monstruos.
+               "wrong_high_after": 2, "wrong_space_s": 1.5, "high_frac": 0.45, "high_up_px": 30,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
                "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
@@ -1105,7 +1109,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
                     "confirm_wait_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
-                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s", "recover_hp", "recover_max"),
+                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s", "recover_hp", "recover_max",
+                    "wrong_high_after", "wrong_space_s", "high_frac", "high_up_px"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
@@ -1114,6 +1119,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     a = cfg["attack"]
     if not isinstance(a.get("panel_recover"), bool):
         raise ConfigError("attack.panel_recover debe ser true o false")
+    if not 0 < a["high_frac"] <= 1 or a["wrong_high_after"] < 1:
+        raise ConfigError("attack.high_frac debe estar en (0, 1] y attack.wrong_high_after debe ser >= 1")
     if not 0 < a["recover_hp"] <= 1:
         raise ConfigError("attack.recover_hp debe estar en (0, 1] (0.99 = vida 100%)")
     if not isinstance(a.get("scan_enabled"), bool):

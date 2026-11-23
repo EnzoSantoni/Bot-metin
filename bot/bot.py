@@ -32,7 +32,7 @@ from bot.perception import Perception, perceive
 from bot.spawns import Spot, SpawnMap, spawn_map_from_config
 from bot.tracking import CoordStats, CoordTracker, StuckEpisode
 from bot.vision.captcha import find_captcha
-from bot.vision.click_point import click_candidates, point_is_free, stone_rect_near
+from bot.vision.click_point import click_candidates, monster_column, point_is_free, stone_rect_near
 from bot.vision.coords import read_coords
 from bot.vision.far_metin import FarMetin
 from bot.vision.minimap import camera_heading
@@ -172,6 +172,8 @@ class _Attack:
     clicks: int = 1                             # clics izquierdos dados a este metin sin confirmar (tope `approach.max_clicks`)
     recover_t: float | None = None              # hora del clic derecho que intenta recuperar el panel (espera `attack.recover_wait_s`)
     recover_lost: bool = False                  # ese clic derecho fue por panel perdido con vida 100%: despues, clic izquierdo
+    wrong_streak: int = 0                       # clics seguidos que seleccionaron un monstruo (se reinicia con el panel del metin)
+    aim_high: bool = False                      # el proximo reclic va a la parte ALTA de la piedra (`_high_point`)
 
 
 @dataclass
@@ -1292,6 +1294,45 @@ class Bot(ApproachKeysMixin):
                     return best
         return self._clear_by_labels(point, p)
 
+    def _high_point(self, point: tuple[int, int], p: Perception) -> tuple[int, int]:
+        """Punto en la parte ALTA de la piedra de `point` (de justo debajo del nombre hasta `attack.high_frac` del cuerpo),
+        fuera de las etiquetas de monstruos (a mas de `attack.monster_clear_px`) y de sus columnas (las siluetas): para cuando
+        dos clics seguidos seleccionaron un monstruo. El mas alto que quede libre; si ninguno, el mas alejado de las etiquetas."""
+        lab = self._label_of(point, p)
+        top = lab.label_rect.bottom + int(self.atk["name_gap_px"]) + 4 if lab is not None else None
+        rect = self._stone_rect(point, p)
+        cands: list[tuple[int, int]] = []
+        if rect is not None:
+            y0 = rect.y if top is None else max(rect.y, top)
+            y1 = max(y0, rect.y + int(rect.h * float(self.atk["high_frac"])))
+            for fy in (0.0, 0.5, 1.0):
+                for fx in (0.5, 0.35, 0.65, 0.2, 0.8):
+                    cands.append((rect.x + int(fx * (rect.w - 1)), int(y0 + fy * (y1 - y0))))
+        else:   # sin piedra medible: debajo del nombre (o mas arriba del punto), corriendo a los costados
+            x = lab.label_rect.center[0] if lab is not None else point[0]
+            y = top if top is not None else point[1] - int(self.atk["high_up_px"])
+            cands = [(x + dx, y + dy) for dy in (0, 15, 30) for dx in (0, -25, 25, -50, 50)]
+        cands = [c for c in cands if p.mask.allows(*c)] or [point]
+        rects = [m.rect for m in p.monsters]
+        cols = [monster_column(r, p.shape, self.cfg) for r in rects]
+        clr = float(self.atk["monster_clear_px"])
+
+        def gap(pt: tuple[int, int]) -> float:
+            return min((math.hypot(max(r.x - pt[0], 0, pt[0] - r.right), max(r.y - pt[1], 0, pt[1] - r.bottom))
+                        for r in rects), default=math.inf)
+
+        def free(pt: tuple[int, int]) -> bool:
+            own = p.own_label
+            if own is not None and own.x <= pt[0] < own.right and own.y <= pt[1] < own.bottom:
+                return False
+            return gap(pt) > clr and not any(c.x <= pt[0] < c.right and c.y <= pt[1] < c.bottom for c in cols)
+
+        good = [c for c in cands if free(c)]
+        best = good[0] if good else max(cands, key=gap)
+        logger.info("Parte alta de la piedra: clic en %s en vez de %s (%s)", best, point,
+                    "sin etiquetas de monstruos" if good else f"lo mas lejos de los monstruos: a {gap(best):.0f} px")
+        return best
+
     def _clear_by_labels(self, point: tuple[int, int], p: Perception) -> tuple[int, int]:
         """Punto de clic sobre el cuerpo de la piedra sin nombres de monstruos encima. Si `point` ya queda a mas de
         `attack.monster_clear_px` de toda etiqueta de monstruo, se usa tal cual; si no, el mas alejado de las etiquetas
@@ -1494,6 +1535,21 @@ class Bot(ApproachKeysMixin):
                 logger.info("Seleccion equivocada repetida (%s) en un metin con nombre: no lo descarto, me reacomodo y reintento", what)
             crowd = p.monsters_near >= max(1, int(self.atk["wrong_monsters_min"])) or p.monsters_on_me > 0
             if kind == "other" and (crowd or not a.stone):
+                a.wrong_streak += 1
+                if a.wrong_streak >= int(self.atk["wrong_high_after"]):
+                    # Dos clics seguidos seleccionaron un monstruo: ESPACIO un rato y clic en OTRA parte de la piedra, mas arriba
+                    # (debajo del nombre), lejos de las etiquetas de monstruos.
+                    secs = float(self.atk["wrong_space_s"])
+                    logger.info("%d clics seguidos seleccionaron un monstruo (%d cerca, %d encima): ESPACIO %.1f s y clic en la "
+                                "parte alta de la piedra, sin etiquetas de monstruos", a.wrong_streak, p.monsters_near,
+                                p.monsters_on_me, secs)
+                    self._dbg("equivocada", f"{a.wrong_streak} selecciones de monstruo seguidas: ESPACIO + parte alta")
+                    if not self._hold_space(secs):   # captcha: ya esta en CAPTCHA, sin mas teclas
+                        return None
+                    self.tracker.forget_reference()
+                    a.aim_high = True
+                    a.pending = ("monstruo seleccionado otra vez", False)
+                    return None
                 # Sin Escape (abre el menu de opciones): para dejar al monstruo se hace clic directo en el metin (punto despejado),
                 # con ESPACIO antes si hay bichos cerca o encima.
                 logger.info("Seleccion equivocada con %d monstruos cerca (%d encima): %sclic directo en el metin (sin Escape)", p.monsters_near,
@@ -1606,7 +1662,7 @@ class Bot(ApproachKeysMixin):
         """Panel con el metin objetivo: confirma el ataque y sigue la vida (cuando BAJA es que esta pegando)."""
         c = a.cm
         hp = panel.hp_ratio
-        a.missing, a.wait_t = 0, None
+        a.missing, a.wait_t, a.wrong_streak = 0, None, 0
         if hp is None or hp > 0:
             a.gone = 0   # con la vida en 0 y el panel todavia puesto, los ciclos sin piedra a la vista siguen contando
         if not a.confirmed:
@@ -1856,7 +1912,11 @@ class Bot(ApproachKeysMixin):
                 self._atk = None
                 return State.BUSCAR, "no veo la piedra para reclickear (el metin sigue en curso)"
         swap = int(self.atk["lost_swap_after"])   # tras `lost_swap_after` panel perdidos seguidos con vida alta: otro punto de la piedra
-        point = self._off_name(self._clear_point(point, p, a.cm.deselects // swap if a.cm is not None else 0), p)
+        if a.aim_high:   # tras 2 selecciones de monstruo seguidas: la parte alta de la piedra
+            a.aim_high = False
+            point = self._off_name(self._high_point(point, p), p)
+        else:
+            point = self._off_name(self._clear_point(point, p, a.cm.deselects // swap if a.cm is not None else 0), p)
         logger.info("Reclic en %s (%s%s)", point, why, f", intento {a.reclicks}" if count else "")
         if self.gi.click_at(*point, p.mask):   # sin mark_moving: el reclic no reinicia la ventana de trabado
             self._last_click_t = self.clock()

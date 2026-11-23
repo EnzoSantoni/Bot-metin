@@ -275,6 +275,10 @@
              //  el panel vuelva; despues clic izquierdo al metin (si la vida ya baja, no hace falta). Aunque haya bichos encima;
              //  hasta recover_max veces por metin. Sin monstruo cerca, el reclic de siempre.
              "recover_hp": 0.99, "recover_max": 3,
+             //  SELECCION EQUIVOCADA REPETIDA (monstruos encima de la piedra): si wrong_high_after clics seguidos seleccionan un
+             //  monstruo, ESPACIO wrong_space_s y clic en OTRA parte de la piedra, mas arriba (de justo debajo del nombre hasta
+             //  high_frac del cuerpo; sin piedra medible, high_up_px mas arriba del punto), donde no haya etiquetas de monstruos.
+             "wrong_high_after": 2, "wrong_space_s": 1.5, "high_frac": 0.45, "high_up_px": 30,
              //  METIN EN CURSO (clickeado/seleccionado/atacado, no roto): no se elige otro. Si se pierde de vista se lo busca a
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
