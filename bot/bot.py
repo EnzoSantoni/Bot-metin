@@ -61,9 +61,11 @@ class State(Enum):
 
 # Partes de la percepcion que necesita cada estado (ventanas, mascara, captcha y muerte se calculan siempre).
 PARTS = {
-    State.BUSCAR: {"metins", "coords", "far", "monsters"}, State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
-    State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters"},
-    State.ACERCARSE: {"metins", "coords", "far", "monsters"},
+    # BUSCAR, EXPLORAR y ACERCARSE tambien miran objetos: los objetos validos en el piso van antes que todo (`_items_first`)
+    State.BUSCAR: {"metins", "coords", "far", "monsters", "items"},
+    State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
+    State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters", "items"},
+    State.ACERCARSE: {"metins", "coords", "far", "monsters", "items"},
     State.VOLVER: {"coords", "monsters"}, State.CENTRO: {"coords", "monsters"},   # van por coordenadas (monstruos: rodeado)
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
     State.MUERTO: set(), State.FIN: set(),
@@ -271,6 +273,7 @@ class _Pickup:
     tracked: list = field(default_factory=list)     # objetos validos vistos: [punto de pantalla, ciclos seguidos sin verlo]
     z_t: float = -math.inf                          # instante del ultimo Z (de cualquier objeto)
     final: bool = False                             # ya se hizo la ultima mirada antes de subirse
+    progress_t: float = 0.0                         # ultimo objeto recogido (o inicio de la fase collect): tope idle_max_s
 
 
 @dataclass
@@ -423,6 +426,10 @@ class Bot(ApproachKeysMixin):
         self._labels_seen = False                 # el ultimo `_pick_goal` vio metin objetivo con etiqueta
         self._walk: _Walk | None = None
         self._pk: _Pickup | None = None
+        self._skipped: list = []           # objetos salteados de las ultimas recogidas (_Skip): no se vuelven a intentar
+        self._skipped_t = -math.inf        # hora de la ultima recogida que salteo algo (se olvidan a los pickup.skip_keep_s)
+        self._final_img: Any = None        # captura de la ultima mirada antes de subirse (se guarda en debug)
+        self._items_retry_t = -math.inf    # "objetos primero" no entra antes de esta hora (tras una recogida cortada)
         self._ex: _Explore | None = None
         self._us: _Unstuck | None = None
         self._ep: StuckEpisode | None = None      # episodio de traba vigente (persiste entre estados)
@@ -590,6 +597,8 @@ class Bot(ApproachKeysMixin):
         if self.state in (State.ATACAR, State.RECOGER, State.ACERCARSE):
             self._no_target_t = t      # atacando o yendo a una piedra: hay objetivo
         before = self.state
+        if self._items_first(p, t):
+            return
         if self._surrounded(p, t):
             return
         out = getattr(self, "_do_" + self.state.name.lower())(p, t)
@@ -2135,12 +2144,40 @@ class Bot(ApproachKeysMixin):
             logger.exception("Fallo al volver a montar")
 
     def _start_pickup(self) -> None:
-        self._pk = _Pickup(self.clock())
+        k = self._pk = _Pickup(self.clock())
+        self._final_img = None
+        if self.clock() - self._skipped_t <= float(self.pk["skip_keep_s"]):
+            k.skipped = list(self._skipped)   # los salteados de la recogida anterior no se vuelven a intentar
+        else:
+            self._skipped = []
 
     def _end_pickup(self, back: State, reason: str) -> Transition:
+        k = self._pk
+        if k is not None and k.skipped:
+            self._skipped, self._skipped_t = list(k.skipped), self.clock()
+        if self._dismounted or (k is not None and k.phase == "collect"):
+            img = self._final_img if self._final_img is not None else self._img
+            path = self.debug.save_snapshot(img, "recoger", "antes_de_subir")
+            if path is not None:
+                logger.info("Captura completa antes de subirme: %s", path)
         if self._dismounted:
             logger.info("Termine de recoger (%s): me subo al caballo", reason)
         return back, reason
+
+    def _items_first(self, p: Perception, t: float) -> bool:
+        """Objetos primero: buscando, explorando o yendo a otro metin, si hay objetos validos a <= `pickup.priority_px` del
+        personaje que no se saltearon, se pasa a RECOGER antes que cualquier otra cosa (nunca se elige un metin nuevo con
+        objetos sin intentar). True si entro a RECOGER."""
+        if self.state not in (State.BUSCAR, State.EXPLORAR, State.ACERCARSE) or not p.items or t < self._items_retry_t:
+            return False
+        lim = float(self.pk["priority_px"])
+        near = [i for i in self._valid_items(p) if math.dist(i.click_point, p.player_xy) <= lim]
+        if near and t - self._skipped_t <= float(self.pk["skip_keep_s"]):
+            near = self._not_skipped(self._skipped, p, near)
+        if not near:
+            return False
+        self._enter(State.RECOGER, f"{len(near)} objeto(s) valido(s) en el piso: primero los recojo")
+        return True
 
     def _valid_items(self, p: Perception) -> list:
         return [i for i in p.items if i.kind == "item" and not i.reserved_other and i.allowed]
@@ -2154,7 +2191,7 @@ class Bot(ApproachKeysMixin):
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
         pos = self.tracker.position
-        pending = self._not_skipped(k, p, valid)
+        pending = self._not_skipped(k.skipped, p, valid)
         k.empty = 0 if (pending or k.cur is not None) else k.empty + 1
         if k.empty >= int(self.pk["empty_confirm_cycles"]):
             if not k.final:   # antes de subirse: una ultima captura por si quedo algo (sin los salteados)
@@ -2169,12 +2206,21 @@ class Bot(ApproachKeysMixin):
                 logger.info("Ultima mirada antes de subirme: no queda nada%s",
                             f" (salteados: {len(k.skipped)})" if k.skipped else "")
             return self._end_pickup(back, "no quedan objetos")
+        cut = None
         if k.presses >= int(self.pk["max_presses"]):
-            return self._end_pickup(back, "tope de pulsaciones de Z")
-        if t - k.start_t >= float(self.pk["max_seconds"]):
-            return self._end_pickup(back, "tiempo maximo recogiendo")
-        if self._zone_status() is ZoneStatus.OUTSIDE:
-            return self._end_pickup(State.VOLVER, "fuera de la zona recogiendo")
+            cut = back, "tope de pulsaciones de Z"
+        elif t - k.start_t >= float(self.pk["max_seconds"]):
+            cut = back, "tiempo maximo recogiendo"
+        elif self._zone_status() is ZoneStatus.OUTSIDE:
+            cut = State.VOLVER, "fuera de la zona recogiendo"
+        elif t - k.progress_t >= float(self.pk["idle_max_s"]):
+            cut = back, f"{float(self.pk['idle_max_s']):.0f} s sin recoger ningun objeto"
+        if cut is not None:   # los que quedan cuentan como intentados: "objetos primero" no vuelve a entrar por ellos
+            self._items_retry_t = self.clock() + float(self.pk["priority_retry_s"])
+            for it in pending:
+                k.skipped.append(_Skip(it.click_point, pos, self._item_world(it.click_point, p, pos, self._heading()
+                                                                            if pos is not None else None)))
+            return self._end_pickup(*cut)
         self._pickup_step(k, p, t, pos, pending)
         return None
 
@@ -2195,6 +2241,7 @@ class Bot(ApproachKeysMixin):
         else:
             logger.info("Objetos en el piso: %d validos -> recojo montado", len(valid))
         k.phase, k.empty, k.start_t = "collect", 0, self.clock()   # el tiempo maximo cuenta desde que empieza a recoger
+        k.progress_t = k.start_t
         return None
 
     def _item_world(self, pt: tuple[int, int], p: Perception, pos: tuple[int, int] | None, h: float | None) -> Xy | None:
@@ -2203,13 +2250,13 @@ class Bot(ApproachKeysMixin):
             return None
         return world_pos(pos, h, floor_vec(p.player_xy, pt, p.shape, self.cfg), self.kscale.k)
 
-    def _not_skipped(self, k: _Pickup, p: Perception, items: list) -> list:
+    def _not_skipped(self, skipped: list, p: Perception, items: list) -> list:
         """`items` sin los objetos salteados: por posicion en el mapa (a <= `pickup.skip_match_u`) si se conoce el rumbo o,
         si no, por punto de pantalla (a <= `same_px`) mientras el jugador no se movio `same_spot_u` desde que lo salteo."""
-        if not k.skipped or not items:
+        if not skipped or not items:
             return items
         pos = self.tracker.position
-        h = self._heading() if pos is not None and any(s.world is not None for s in k.skipped) else None
+        h = self._heading() if pos is not None and any(s.world is not None for s in skipped) else None
         same_px, same_u, match_u = float(self.pk["same_px"]), float(self.pk["same_spot_u"]), float(self.pk["skip_match_u"])
 
         def hit(s: _Skip, it: Any) -> bool:
@@ -2219,7 +2266,7 @@ class Bot(ApproachKeysMixin):
             moved = pos is not None and s.pos is not None and math.dist(pos, s.pos) > same_u
             return not moved and math.dist(it.click_point, s.point) <= same_px
 
-        return [i for i in items if not any(hit(s, i) for s in k.skipped)]
+        return [i for i in items if not any(hit(s, i) for s in skipped)]
 
     def _skip_item(self, k: _Pickup, cur: _Cur, p: Perception, pos: tuple[int, int] | None) -> None:
         """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo)."""
@@ -2239,8 +2286,9 @@ class Bot(ApproachKeysMixin):
             self.gi.release_all()
             self._enter(State.CAPTCHA, "panel Bot Verify detectado durante una accion")
             return None
+        self._final_img = img
         fp = self._perceive(img, self.cfg, parts=PARTS[State.RECOGER])
-        return self._not_skipped(k, fp, self._valid_items(fp))
+        return self._not_skipped(k.skipped, fp, self._valid_items(fp))
 
     def _item_point(self, it: Any) -> tuple[float, float]:
         """Punto del objeto en pantalla: centro inferior de su etiqueta mas `pickup.item_below_label_px`."""
@@ -2347,6 +2395,7 @@ class Bot(ApproachKeysMixin):
                 alive.append([i.click_point, 0])
         k.tracked = alive
         if done:
+            k.progress_t = t
             self.stats.items += done
             logger.info("Recoger: %d objeto(s) recogido(s) (desaparecieron tras Z)", done)
             k.cur = None

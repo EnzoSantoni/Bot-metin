@@ -60,6 +60,9 @@
     // Lecturas de coordenadas fallidas o descartadas: recorte x4 de la zona en <run>/coordenadas/NNNN_<motivo>.png
     // (motivo: sin_lectura, confianza, salto). max_coord_crops: tope por corrida; coord_crop_every_s: separacion minima.
     "max_coord_crops": 60,
+    // Capturas sueltas sin dibujos con la hora en el nombre (<run>/recoger/: antes de subirse al caballo y objetos
+    // salteados). max_snapshots: tope por corrida.
+    "max_snapshots": 400,
     "coord_crop_every_s": 1.0,
     // save_raw: junto a cada imagen anotada guarda la captura CRUDA (sin dibujos) como NNNN_..._raw.png (cuenta para
     // max_images): sirve de caso de prueba limpio.
@@ -312,6 +315,15 @@
              "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
              "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
              "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
+             //  Objetos primero: buscando, explorando o yendo a otro metin, un objeto valido a <= priority_px (de pantalla) del
+             //  personaje que no se salteo pasa a RECOGER antes que cualquier otra cosa (nunca se elige un metin nuevo con
+             //  objetos sin intentar). Los salteados se recuerdan skip_keep_s. Antes de subirse al caballo se guarda en
+             //  debug/<run>/recoger/ una captura completa (HHMMSS_mmm_antes_de_subir.png), con debug.enabled.
+             "priority_px": 450, "skip_keep_s": 300.0,
+             //  idle_max_s: recogiendo sin que desaparezca ningun objeto por tanto tiempo, termina (los que quedan cuentan como
+             //  intentados). priority_retry_s: tras una recogida cortada (sin progreso, tope de Z o de tiempo, fuera de la zona),
+             //  "objetos primero" espera esto antes de volver a entrar.
+             "idle_max_s": 20.0, "priority_retry_s": 60.0,
              //  Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto entre
              //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
              //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos

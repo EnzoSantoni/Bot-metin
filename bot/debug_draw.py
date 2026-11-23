@@ -200,10 +200,43 @@ class DebugRecorder:
         self.coord_crop_every_s = float(d["coord_crop_every_s"])
         self.coord_crops = 0
         self._last_crop = -math.inf
+        self.max_snapshots = int(d["max_snapshots"])
+        self.snapshots = 0
 
     @property
     def run_dir(self) -> Path | None:
         return self._dir
+
+    def save_snapshot(self, img: np.ndarray | None, folder: str, name: str,
+                      box: tuple[int, int, int, int] | None = None) -> Path | None:
+        """Guarda una captura SIN dibujos en `<run>/<folder>/<HHMMSS_mmm>_<name>.png` (la hora en el nombre), entera o
+        recortada a `box` (x, y, w, h; se ajusta a la imagen). Tope `debug.max_snapshots` por corrida. Solo con
+        `debug.enabled`. Nunca lanza."""
+        if not self.enabled or img is None or self.snapshots >= self.max_snapshots:
+            return None
+        try:
+            if box is not None:
+                ih, iw = img.shape[:2]
+                x, y, w, h = box
+                x0, y0, x1, y1 = max(0, int(x)), max(0, int(y)), min(iw, int(x + w)), min(ih, int(y + h))
+                if x1 <= x0 or y1 <= y0:
+                    return None
+                img = img[y0:y1, x0:x1]
+            if self._dir is None:
+                self._dir = self._base / f"run_{self._now():%Y%m%d_%H%M%S}"
+            out = self._dir / folder
+            out.mkdir(parents=True, exist_ok=True)
+            now = self._now()
+            path = out / f"{now:%H%M%S}_{now.microsecond // 1000:03d}_{_slug(name)}.png"
+            if not cv2.imwrite(str(path), img):
+                raise OSError(f"cv2.imwrite no pudo escribir {path}")
+            self.snapshots += 1
+            if self.snapshots == self.max_snapshots:
+                logger.warning("Debug: tope de %d capturas sueltas alcanzado", self.max_snapshots)
+            return path
+        except Exception:  # noqa: BLE001 - el debug nunca puede romper el loop
+            logger.exception("Debug: no se pudo guardar la captura %s", name)
+            return None
 
     def explore_due(self, t: float) -> bool:
         """True (y rearma el reloj) si pasaron `debug.explore_every_s` desde la ultima imagen periodica."""

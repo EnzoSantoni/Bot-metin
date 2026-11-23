@@ -396,8 +396,73 @@ def test_salteado_se_reconoce_por_su_posicion_en_el_mapa(monkeypatch):
     it = p.items[0]
     k = _Pickup(0.0)
     k.skipped.append(_Skip(it.click_point, pos, h.bot._item_world(it.click_point, p, pos, 0.0)))
-    assert h.bot._not_skipped(k, p, p.items) == []
+    assert h.bot._not_skipped(k.skipped, p, p.items) == []
     # salteado con el jugador 20 u mas al oeste: el mismo punto de pantalla ahora es OTRO lugar del mapa
     old = (pos[0] - 20, pos[1])
     k.skipped[0] = _Skip(it.click_point, old, h.bot._item_world(it.click_point, p, old, 0.0))
-    assert h.bot._not_skipped(k, p, p.items) == p.items
+    assert h.bot._not_skipped(k.skipped, p, p.items) == p.items
+
+
+# ---------------------------------------------------------------- objetos primero
+def test_buscando_con_objetos_en_el_piso_los_recoge_antes_de_elegir_un_metin():
+    """Hay un metin a la vista y objetos validos cerca: primero RECOGER, ningun clic al metin."""
+    from test_bot_states import metin
+    box = {}
+
+    def script(h, n):
+        p = box["f"](h, n)
+        p.metins.append(metin())
+        return p
+    h = Harness(script)
+    box["f"] = h.floor = Floor(h, [DOWN])
+    h.run_until(lambda: h.bot.state is State.RECOGER, limit=20)
+    assert h.seen[0][0] is State.RECOGER and "primero los recojo" in h.seen[0][1]
+    assert h.clicks() == 0
+
+
+def test_objeto_lejos_en_pantalla_no_cuenta_como_objetos_primero():
+    h = floor_harness([(PLAYER[0] + 800, 450)], pickup={"priority_px": 450})
+    for _ in range(5):
+        h.bot.step()
+    assert State.RECOGER not in h.states()
+
+
+def test_salteados_no_vuelven_a_disparar_objetos_primero():
+    h = floor_harness([DOWN], floor_kw={"pickable": False}, pickup={"max_z_per_item": 2})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=400)
+    assert len(h.bot._skipped) == 1
+    n = len(h.seen)
+    for _ in range(10):   # el objeto salteado sigue en pantalla: no vuelve a RECOGER
+        h.bot.step()
+    assert State.RECOGER not in [s for s, _ in h.seen[n:]]
+
+
+def test_antes_de_subirse_guarda_una_captura_completa_con_la_hora(tmp_path, caplog):
+    import re
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN], debug={"enabled": True, "dir": str(tmp_path), "save_raw": False})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR)
+    shots = list(tmp_path.glob("run_*/recoger/*_antes_de_subir.png"))
+    assert len(shots) == 1 and re.fullmatch(r"\d{6}_\d{3}_antes_de_subir\.png", shots[0].name)
+    assert "Captura completa antes de subirme" in caplog.text
+
+
+def test_sin_debug_no_guarda_capturas(tmp_path):
+    h = floor_harness([DOWN], debug={"enabled": False, "dir": str(tmp_path)})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_recogida_sin_progreso_termina_y_objetos_primero_espera_para_reintentar():
+    h = floor_harness([DOWN], floor_kw={"pickable": False},
+                      pickup={"max_z_per_item": 99, "item_max_s": 99.0, "idle_max_s": 3.0, "priority_retry_s": 60.0})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=400)
+    assert "sin recoger ningun objeto" in h.seen[-1][1]
+    n = len(h.seen)
+    for _ in range(10):
+        h.bot.step()
+    assert State.RECOGER not in [s for s, _ in h.seen[n:]]

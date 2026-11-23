@@ -32,7 +32,9 @@ DEFAULTS: dict[str, Any] = {
     "debug": {"enabled": False, "dir": "debug", "explore_every_s": 30.0, "max_images": 400, "jpeg_quality": 80,
               "max_per_kind": {"estado": 150, "descarte": 40, "destrabe": 60, "ignorada": 20, "equivocada": 20,
                                "bloqueado": 20, "explorar": 40},
-              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0, "save_raw": True},
+              "reason_memory_s": 60.0, "max_coord_crops": 60, "coord_crop_every_s": 1.0, "save_raw": True,
+              # max_snapshots: capturas sin dibujos con la hora en el nombre (antes de subirse al caballo, objetos salteados)
+              "max_snapshots": 400},
     # Alarma sonora (bot/alarm.py): beep de `freq` Hz y `beep_ms` ms, pausa `pause_ms`, en bucle.
     # max_seconds: corta sola a los N segundos (0 = suena hasta stop()).
     "alarm": {"freq": 1000, "beep_ms": 400, "pause_ms": 300, "max_seconds": 0},
@@ -176,6 +178,14 @@ DEFAULTS: dict[str, Any] = {
                "step_s": 0.25, "min_step_s": 0.1, "full_step_px": 200, "track_px": 80, "same_spot_u": 3.0,
                "gone_cycles": 2, "reposition_after_z": 1, "reposition_frac": 0.5, "item_max_s": 15.0,
                "max_z_per_item": 4, "skip_match_u": 4.0, "final_look_s": 0.5,
+               # Objetos primero: buscando, explorando o yendo a otro metin, un objeto valido a <= priority_px (pantalla) del
+               # personaje que no se salteo pasa a RECOGER antes que cualquier otra cosa. Los salteados se recuerdan
+               # skip_keep_s (no se vuelven a intentar).
+               "priority_px": 450, "skip_keep_s": 300.0,
+               # idle_max_s: recogiendo sin que desaparezca ningun objeto por tanto tiempo -> termina (los que quedan cuentan como
+               # intentados); priority_retry_s: tras una recogida cortada (sin progreso, tope de Z o de tiempo, fuera de la zona)
+               # "objetos primero" espera esto antes de volver a entrar.
+               "idle_max_s": 20.0, "priority_retry_s": 60.0,
                # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
                # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
@@ -1112,7 +1122,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
     nums("pickup", ("z_interval_s", "empty_confirm_cycles", "max_presses", "max_seconds", "mount_wait_s", "look_s",
                     "arrive_px", "item_below_label_px", "step_s", "min_step_s", "full_step_px", "track_px", "same_spot_u",
                     "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s", "max_z_per_item",
-                    "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio"),
+                    "skip_match_u", "final_look_s", "same_px", "near_px", "progress_window_s", "switch_ratio",
+                    "priority_px", "skip_keep_s", "idle_max_s", "priority_retry_s"),
          ("empty_confirm_cycles", "max_presses", "max_seconds", "look_s", "arrive_px", "step_s", "min_step_s",
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s",
           "max_z_per_item", "skip_match_u",
@@ -1219,7 +1230,7 @@ def validate_config(cfg: dict) -> None:
     v = debug.get("reason_memory_s")
     if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
         raise ConfigError("debug.reason_memory_s debe ser un numero >= 0")
-    for k in ("max_coord_crops", "coord_crop_every_s"):
+    for k in ("max_coord_crops", "coord_crop_every_s", "max_snapshots"):
         v = debug.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
             raise ConfigError(f"debug.{k} debe ser un numero >= 0")
