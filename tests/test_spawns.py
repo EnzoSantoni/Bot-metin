@@ -298,3 +298,79 @@ def test_sin_punto_listo_va_al_centro_y_camina_hasta_llegar_antes_de_buscar(tmp_
         assert any("voy al centro" in r.message for r in caplog.records)
     else:                                  # ya estaba en el centro: busca de nuevo desde ahi (nada de tramos al azar todavia)
         assert any("busco de nuevo desde aqui" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------- recorrido por puntos conocidos (sesion actual)
+def test_horas_de_otra_sesion_no_hacen_esperar_y_el_log_no_las_muestra(tmp_path):
+    wall = Wall()
+    old = make_map(tmp_path, wall)
+    old.record_broken((600.0, 160.0))          # sesion vieja: roto y visto recien para ella
+    wall.t += 30                               # la sesion nueva arranca 30 s despues (antes de respawn_s y de revisit_s)
+    m = make_map(tmp_path, wall)
+    assert m.next_target((0.0, 0.0), ALL) is m.spots[0] and m.ready_in(m.spots[0]) == 0
+    assert m.spots[0].ages(wall.t, m.session_start) == "roto hace en otra sesion, visto hace en otra sesion"
+
+
+def test_mide_la_reaparicion_y_los_puntos_sin_medir_usan_la_mediana(tmp_path):
+    wall = Wall()
+    m = make_map(tmp_path, wall)
+    a = m.record_broken((598.0, 122.0))
+    other = m.record_broken((520.0, 192.0))
+    assert m.respawn_of(other) == m.respawn_s and m.last_sample is None
+    wall.t += 100
+    m.record_broken((598.0, 123.0), found=wall.t - 75)   # rota a los 100 s; se la encontro (clic) a los 25 s
+    assert m.last_sample == 25.0 and a.respawn_s == 25.0
+    assert m.respawn_of(other) == 25.0                   # sin medicion propia: la mediana de los medidos
+    assert m.ready_in(a) == 25.0                         # recien rota: deberia tener metin en 25 s
+    wall.t += 25
+    assert m.ready_in(a) == 0 and m.next_target((598.0, 122.0), ALL) is a
+    data = json.loads((tmp_path / "mapa.json").read_text(encoding="utf-8"))
+    assert data["spots"][0]["respawn_s"] == 25.0
+    assert make_map(tmp_path, wall).spots[0].respawn_s == 25.0   # se lee de vuelta
+
+
+def test_al_entrar_a_explorar_va_primero_al_punto_y_si_no_hay_metin_al_siguiente(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    wall = Wall()
+    sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
+    sm.record_broken((INSIDE_XY[0] + 2.0, INSIDE_XY[1]))   # al lado del jugador: llega enseguida
+    sm.record_broken((600.0, 160.0))
+    wall.t += 1000
+    h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
+    h.run_until(lambda: h.bot.state is State.EXPLORAR, limit=20)
+    x = h.bot._ex
+    assert x.phase == "walk" and x.spot is not None and x.spot.x == INSIDE_XY[0] + 2.0   # sin vuelta de busqueda antes
+    h.run_until(lambda: h.bot._ex.spot is not None and h.bot._ex.spot.x == 600.0, limit=40)
+    assert any("no hay metin a la vista: sigo con el proximo" in r.message for r in caplog.records)
+    assert h.bot._ex.phase == "walk" and h.bot._ex.steps == 0
+
+
+def test_sin_puntos_listos_hace_la_vuelta_completa(tmp_path):
+    wall = Wall()
+    sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
+    h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
+    h.bot.spawns.record_broken((600.0, 160.0))   # roto en esta sesion: todavia no reaparecio
+    h.run_until(lambda: h.bot.state is State.EXPLORAR, limit=20)
+    assert h.bot._ex.phase == "sweep" and h.bot._ex.spot is None
+
+
+def test_metin_roto_otra_vez_en_el_punto_mide_la_reaparicion(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    w = {"atk": 0}
+
+    def script(h, n):
+        if h.bot.state is State.BUSCAR:
+            return perc(metins=[metin()])
+        if h.bot.state is State.ATACAR:
+            w["atk"] += 1
+            if w["atk"] == 4:
+                h.clock.t += 20.0   # un metin real tarda mas de attack.min_break_s en romperse
+            return perc(panel=target_panel([0.9, 0.5, 0.05][w["atk"] - 1]) if w["atk"] <= 3 else None)
+        return perc()
+    wall = Wall()
+    h, sm, _ = spawn_harness(tmp_path, script, wall=wall)
+    sm.record_broken(INSIDE_XY)        # roto en esta sesion, 60 s antes del clic al nuevo
+    wall.t += 60
+    h.run_until(lambda: State.RECOGER in h.states())
+    assert sm.spots[0].respawn_s > 0 and sm.spots[0].n == 2
+    assert any("tuvo metin otra vez a los" in r.message for r in caplog.records)

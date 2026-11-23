@@ -27,17 +27,22 @@
   },
 
   // Mapa de metin: al romper un metin se guarda la posicion del personaje (pegado a la piedra) con la hora. Cuando no
-  //  se ve ningun metin, el bot va al punto conocido mas cercano que ya reaparecio y no visito hace poco, en vez de
-  //  explorar al azar. Persiste entre sesiones (archivo JSON; borralo para empezar de cero). Con --observar no escribe.
+  //  se ve ningun metin cerca (BUSCAR mira una captura), el bot va al punto conocido mas cercano que ya deberia tener metin
+  //  y no visito hace poco, mirando mientras camina (si ve un metin, lo ataca) y look_frames capturas al llegar; si no hay,
+  //  sigue con el proximo punto. La vuelta de busqueda completa queda solo para cuando no hay ningun punto listo.
+  //  Reaparicion: al romper otra vez un metin en un punto roto en ESTA sesion se mide cuanto tardo (cota: desde la rotura
+  //  anterior hasta el clic al nuevo); el punto guarda la menor y los puntos sin medir usan la mediana de los medidos (o
+  //  respawn_s). Las horas de sesiones viejas no cuentan. Persiste entre sesiones (archivo JSON; borralo para empezar de
+  //  cero). Con --observar no escribe.
   //  enabled: usar el mapa. file: ruta (relativa al proyecto; la carpeta data/ esta en .gitignore).
   //  merge_u: un metin roto a esta distancia (unidades) o menos de un punto conocido es el mismo punto.
-  //  respawn_s: segundos que tarda en reaparecer un metin (ESTIMADO: "a los pocos minutos").
+  //  respawn_s: reaparicion supuesta mientras no se midio ninguna (ESTIMADO: "a los pocos minutos").
   //  revisit_s: no volver a un punto visitado hace menos de esto. arrive_u: llegada al punto (unidades).
   //  max_walk_s: tope de caminata hacia un punto; al agotarlo se lo da por visitado.
   //  map_name: nombre del mapa (se guarda en el archivo y sale en los logs; si no coincide avisa). file: por defecto
   //  "data/<nombre>.mapa.json"; si existe el viejo data/mapa_metin.json y el nuevo no, se migra solo (el viejo queda .migrado).
   "spawns": {"enabled": true, "map_name": "Ciudad 1", "file": "data/Ciudad 1.mapa.json", "merge_u": 6.0, "respawn_s": 240, "revisit_s": 120,
-             "arrive_u": 5.0, "max_walk_s": 40},
+             "arrive_u": 5.0, "max_walk_s": 40, "look_frames": 2},
 
   "debug": {
     // true guarda capturas anotadas con lo detectado. Activalo solo para depurar: ocupa disco.

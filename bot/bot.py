@@ -301,6 +301,7 @@ class _Explore:
     hovered: list = field(default_factory=list)   # posiciones del mapa de piedras ya confirmadas con hover en esta vuelta
     last_secs: float = 0.0             # segundos de tecla del ultimo paso de la vuelta (para afinar el giro por segundo)
     hov: tuple | None = None           # hover pendiente de resolver: (punto de pantalla, posicion del mapa)
+    looks: int = 0                     # capturas mirando al llegar a un punto del mapa (fase "spot_look")
 
 
 @dataclass
@@ -701,7 +702,7 @@ class Bot(ApproachKeysMixin):
             self._close_episode("metin roto")
             self._start_pickup()
         elif new is State.EXPLORAR:
-            self._new_sweep()
+            self._start_explore()
         elif new is State.ACERCARSE:
             if old is not State.DESTRABAR:   # volver del destrabe no es un acercamiento nuevo
                 self.stats.approaches += 1
@@ -1659,7 +1660,7 @@ class Bot(ApproachKeysMixin):
             n = self.cands.remove_near(pos, float(self.ex["candidate_broken_u"]))
             if n:
                 logger.info("Lista de candidatos: borro %d cerca del metin roto", n)
-        self._record_spawn()
+        self._record_spawn(a.start_t)
         if self._zone_status() is ZoneStatus.TOLERANCE:
             self.pending_return = True
         return State.RECOGER, "metin roto"
@@ -2515,13 +2516,26 @@ class Bot(ApproachKeysMixin):
     def _new_sweep(self) -> None:
         self._ex = _Explore(dir=self.rng.choice(("left", "right")))
 
-    def _record_spawn(self) -> None:
-        """Metin roto: guarda la posicion del personaje (pegado a la piedra) en el mapa de metin."""
+    def _record_spawn(self, found_t: float | None = None) -> None:
+        """Metin roto: guarda la posicion del personaje (pegado a la piedra) en el mapa de metin. `found_t` (reloj del bot):
+        cuando se lo encontro (clic); si el punto ya se habia roto en esta sesion, mide cuanto tardo en reaparecer."""
         pos = self.tracker.position
         if pos is None or self.spawns.path is None:
             return
-        s = self.spawns.record_broken(pos)
+        found = None if found_t is None else self.spawns.now() - max(0.0, self.clock() - found_t)
+        s = self.spawns.record_broken(pos, found)
         logger.info("Mapa de metin: guardo punto (%.0f, %.0f) (%d puntos conocidos)", s.x, s.y, len(self.spawns))
+        if self.spawns.last_sample is not None:
+            logger.info("Mapa de metin: el punto (%.0f, %.0f) tuvo metin otra vez a los %.0f s de romperlo (reaparicion "
+                        "estimada %.0f s)", s.x, s.y, self.spawns.last_sample, self.spawns.respawn_of(s))
+
+    def _start_explore(self) -> None:
+        """Al entrar a EXPLORAR (sin metin a la vista): primero el punto conocido mas cercano que ya deberia tener metin
+        (mirando mientras camina y al llegar, `_spawn_leg`); la vuelta de busqueda completa solo si no hay ninguno listo o
+        se esta buscando el metin en curso."""
+        self._new_sweep()
+        if self._cur is None:
+            self._spawn_leg(self._ex, self.clock())
 
     def _spawn_leg(self, x: _Explore, t: float) -> bool:
         """Si hay un punto conocido listo, el tramo va hacia el: True. Si no, False (exploracion al azar)."""
@@ -2532,13 +2546,19 @@ class Bot(ApproachKeysMixin):
         if spot is None:
             wait = self.spawns.seconds_until_ready(self.zone.accepts)
             if wait is not None:
-                logger.info("Mapa de metin: ningun punto listo (proximo en %.0f s): exploro", wait)
+                logger.info("Mapa de metin: ningun punto listo (proximo en %.0f s): vuelta de busqueda", wait)
             return False
-        logger.info("Mapa de metin: voy al punto (%.0f, %.0f) a %.0f u (%s)", spot.x, spot.y, math.dist(pos, spot.xy),
-                    spot.ages(self.spawns.now()))
-        x.spot, x.target, x.phase, x.walk_start = spot, spot.xy, "walk", t
+        logger.info("Mapa de metin: voy al punto (%.0f, %.0f) a %.0f u (%s; reaparece en ~%.0f s)", spot.x, spot.y,
+                    math.dist(pos, spot.xy), spot.ages(self.spawns.now(), self.spawns.session_start),
+                    self.spawns.respawn_of(spot))
+        x.spot, x.target, x.phase, x.walk_start, x.looks = spot, spot.xy, "walk", t, 0
         self._dest = x.target
         return True
+
+    def _next_spot_or_sweep(self, t: float) -> None:
+        """Sin metin en el punto del mapa: al siguiente punto listo mas cercano; si no queda ninguno, la vuelta completa."""
+        self._new_sweep()
+        self._spawn_leg(self._ex, t)
 
     def _new_leg(self, x: _Explore, t: float, empty_lap: bool = False) -> None:
         """Elige el proximo tramo cuando no hay metin a la vista. Siempre hay adonde ir: el punto listo del mapa de metin mas cercano
@@ -2607,6 +2627,14 @@ class Bot(ApproachKeysMixin):
                 self._new_sweep()
                 return None
             return self._aim_look(p, t, x, h, pos0)
+        if x.phase == "spot_look":   # llego al punto del mapa: `spawns.look_frames` capturas (`_pick_goal` arriba) y sigue
+            x.looks += 1
+            if x.looks < int(self.sp["look_frames"]):
+                return None
+            logger.info("Mapa de metin: en el punto (%.0f, %.0f) no hay metin a la vista: sigo con el proximo", x.spot.x,
+                        x.spot.y)
+            self._next_spot_or_sweep(t)
+            return None
         if x.phase == "sweep":
             if not self._turn_ready():   # el paso anterior todavia se esta analizando (tiempo y capturas)
                 return None
@@ -2639,11 +2667,16 @@ class Bot(ApproachKeysMixin):
                     self._walk = None
                 x.phase, x.aim_turns = "aim", 0
                 return None
-            if x.spot is not None:   # llegado o agotado: visitado; sigue el barrido de camara
-                self.spawns.mark_visited(x.spot)
-            if self._walk is not None:   # parar antes del barrido
+            if self._walk is not None:   # parar antes de mirar
                 self._brake(p)
                 self._walk = None
+            if x.spot is not None:   # llegado: mira ahi (sin vuelta); agotado: al proximo punto
+                self.spawns.mark_visited(x.spot)
+                if res == "arrived":
+                    x.phase, x.looks = "spot_look", 0
+                else:
+                    self._next_spot_or_sweep(t)
+                return None
             self._new_sweep()
         return None
 
