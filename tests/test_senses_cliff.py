@@ -89,3 +89,24 @@ def test_config_view_right_key_y_ad_side_fijos_desde_el_arranque():
     env = SimEnv(1, cfg=cfg)
     kn = env.bot.keynav
     assert kn.locked_q and kn.locked_ad and kn.view_right_key == "camera_left" and kn.side == -1
+
+
+def test_tres_trabas_sin_monstruos_yendo_a_un_punto_del_mapa_lo_descarta_por_ahora(caplog):
+    """Corrida de las 02:36 (02:51:05 a 02:51:29): contra una pared yendo a un punto conocido del mapa giraba 90 grados seis
+    veces seguidas. A la tercera traba sin monstruos descarta ese punto por ahora y elige otro (o la vuelta de busqueda)."""
+    from bot.spawns import SpawnMap
+    caplog.set_level(logging.INFO)
+    env = kenv(obstacles=[Box(530, 60, 545, 240)])
+    sm = SpawnMap(None, 6.0)
+    spot = sm.record_broken(TARGET)
+    env.bot.spawns = sm
+    env.run_until(lambda: env.bot.state is State.EXPLORAR and env.bot.tracker.position is not None, max_s=10)
+    assert env.bot._spawn_leg(env.bot._ex, env.bot.clock()) and env.bot._ex.spot is spot
+    assert env.run_until(lambda: "lo descarto por ahora" in caplog.text, max_s=120) == "cond"
+    msgs = [r.getMessage() for r in caplog.records]
+    i = next(k for k, m in enumerate(msgs) if "lo descarto por ahora" in m)
+    # dos desvios yendo al punto (la pared lo saca de la zona: los de VOLVER no cuentan) y la tercera traba lo descarta
+    assert "me trabe 3 veces seguidas" in msgs[i]
+    assert sum("no avanza" in m and "giro la vista" in m for m in msgs[:i]) <= 4
+    assert env.bot._ex.spot is None and env.bot._ex.phase == "sweep"            # sin otro punto: vuelta de busqueda
+    assert sm.nearest(tuple(env.world.pos), env.bot.zone.accepts) is None        # descartado por ahora (spawns.revisit_s)

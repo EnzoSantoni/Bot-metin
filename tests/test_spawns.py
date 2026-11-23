@@ -345,3 +345,46 @@ def test_metin_roto_otra_vez_en_el_punto_mide_la_reaparicion(tmp_path, caplog):
     h.run_until(lambda: State.RECOGER in h.states())
     assert sm.spots[0].respawn_s > 0 and sm.spots[0].n == 2
     assert any("tuvo metin otra vez a los" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------- trabas seguidas yendo a un punto (corrida de las 02:36)
+def _stuck_harness():
+    from test_bot_states import Harness, perc
+    sm = SpawnMap(None, 6.0)
+    stuck_spot, other = sm.record_broken((640, 160)), sm.record_broken((500, 170))
+    h = Harness(lambda h, n: perc(), bot_kwargs={"spawn_map": sm})
+    h.bot.tracker.update(perc().coords, h.clock())
+    h.bot._enter(State.EXPLORAR, "test")
+    x = h.bot._ex
+    x.spot, x.target, x.phase = stuck_spot, stuck_spot.xy, "walk"
+    return h, sm, stuck_spot, other
+
+
+def test_tres_trabas_sin_monstruos_yendo_a_un_punto_lo_descartan_por_ahora_y_elige_otro(caplog):
+    """02:51:05 a 02:51:29: 6 trabas seguidas sin monstruos girando 90 grados yendo al punto (681, 148). A la tercera se
+    descarta ese punto por ahora (visitado) y se va a otro (o vuelta de busqueda)."""
+    caplog.set_level(logging.INFO)
+    h, sm, stuck_spot, other = _stuck_harness()
+    pos = h.bot.tracker.position
+    assert not h.bot._spot_stuck(pos, h.clock()) and not h.bot._spot_stuck(pos, h.clock())
+    assert h.bot._spot_stuck(pos, h.clock())
+    assert "lo descarto por ahora" in caplog.text
+    assert h.bot._ex.spot is other and h.bot._ex.phase == "walk"
+    assert sm.nearest(pos, h.bot.zone.accepts) is other   # el punto trabado no se vuelve a elegir por ahora (revisit_s)
+
+
+def test_acercarse_al_punto_entre_trabas_reinicia_la_cuenta():
+    h, sm, stuck_spot, other = _stuck_harness()
+    pos = h.bot.tracker.position
+    assert not h.bot._spot_stuck(pos, h.clock()) and not h.bot._spot_stuck(pos, h.clock())
+    closer = (pos[0] + 15, pos[1] + 2)   # avanzo mas de stuck.resolve_dist hacia (640, 160)
+    assert not h.bot._spot_stuck(closer, h.clock())
+    assert h.bot._ex.spot is stuck_spot and h.bot._spot_jam[1] == 1
+
+
+def test_sin_un_punto_del_mapa_las_trabas_no_cuentan():
+    h, sm, stuck_spot, other = _stuck_harness()
+    h.bot._ex.spot = None
+    pos = h.bot.tracker.position
+    assert not any(h.bot._spot_stuck(pos, h.clock()) for _ in range(5))
+

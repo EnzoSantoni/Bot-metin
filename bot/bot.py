@@ -450,6 +450,9 @@ class Bot(ApproachKeysMixin):
         self._apr: _Approach | None = None
         self._sur: _Surround | None = None        # rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO caminando)
         self._detour: _Detour | None = None       # desvio en curso tras una traba sin monstruos (teclado)
+        self._spot_drops = 0                       # puntos del mapa descartados por trabas seguidas (para cortar el tramo viejo)
+        self._spot_jam: list | None = None         # [punto del mapa, trabas seguidas SIN monstruos yendo a el, distancia en la
+                                                   # primera]: sigue entre entradas a EXPLORAR (una traba puede sacar de la zona)
         self._left_zone = False                    # se solto un metin por salir de la zona: sin "metin cerca" hasta volver adentro
         self._blind_wait_until = -math.inf         # hasta entonces no se cliquean metin SIN posicion estimada (tras soltar uno
                                                    # por salir de la zona sin saber donde estaba: seria el mismo, en bucle)
@@ -3415,8 +3418,11 @@ class Bot(ApproachKeysMixin):
         leg, self._leg = self._leg, None
         if leg is not None and t - leg.end_t <= LEG_MAX_AGE_S and self.tracker.last_outcome == CoordTracker.OK:   # lectura buena de este ciclo
             res = self._after_leg(leg, pos)
+            drops = self._spot_drops
             if res == "stuck" and self._try_detour(p, t, pos):
                 res = None   # una sola secuencia: primero los desvios (girar la vista y probar otra direccion), despues DESTRABAR
+                if self._spot_drops != drops:
+                    return "moving"   # se descarto el punto del mapa: el tramo hacia el ya no vale (sigue EXPLORAR)
             if res is not None:
                 return res
         if self.navigator.arrived(pos, target):
@@ -3823,7 +3829,10 @@ class Bot(ApproachKeysMixin):
                         f" ({p.monsters_on_me} encima)" if p.monsters_on_me else "")
             self._dbg("bloqueado", f"rodeado de {n} monstruos sin avanzar: ESPACIO")
             self.stats.surrounded += 1
+            self._spot_jam = None   # con monstruos no cuenta como traba "sin monstruos"
             done = self._hold_space(float(self.stuck["surrounded_space_s"]))
+        elif self._spot_stuck(pos, t):
+            done = True
         elif self.kmode:
             done = self._start_detour(pos, quiet)
         else:
@@ -3837,6 +3846,33 @@ class Bot(ApproachKeysMixin):
             self._walk = self._leg = None   # el tramo en curso ya no vale: el personaje se movio
             self._zero_streak = 0           # una sola reaccion por episodio: el contador de tramos quietos empieza de cero
             sr.ref, sr.since = pos, self.clock()
+        return True
+
+    def _spot_stuck(self, pos: Xy, t: float) -> bool:
+        """Traba SIN monstruos explorando hacia un punto conocido del mapa: cuenta las trabas seguidas yendo a ese punto, aunque
+        en el medio se haya salido de EXPLORAR (se reinicia con otro punto, si se acerco `stuck.resolve_dist` al punto desde la
+        primera, o con una traba con monstruos). A las `spawns.stuck_max` descarta ese
+        punto por ahora (queda como visitado: `spawns.revisit_s`) y elige otro o, si no hay, la vuelta de busqueda. True si lo
+        descarto (no hace falta el desvio)."""
+        x = self._ex
+        if self.state is not State.EXPLORAR or x is None or x.spot is None or x.phase != "walk":
+            return False
+        d = math.dist(pos, x.spot.xy)
+        jam = self._spot_jam
+        if jam is None or jam[0] is not x.spot or jam[2] - d >= float(self.stuck["resolve_dist"]):
+            jam = self._spot_jam = [x.spot, 0, d]
+        jam[1] += 1
+        if jam[1] < int(self.sp["stuck_max"]):
+            return False
+        self._spot_jam = None
+        logger.info("Mapa de metin: me trabe %d veces seguidas sin monstruos yendo al punto (%.0f, %.0f) (a %.0f u): lo descarto "
+                    "por ahora y elijo otro (o vuelta de busqueda)", jam[1], x.spot.x, x.spot.y, d)
+        self._dbg("bloqueado", f"{jam[1]} trabas sin monstruos yendo al punto ({x.spot.x:.0f}, {x.spot.y:.0f}): lo descarto")
+        self.spawns.mark_visited(x.spot)
+        self._walk = self._leg = None
+        self._detour = None
+        self._spot_drops += 1
+        self._next_spot_or_sweep(t)
         return True
 
     def _try_detour(self, p: Perception, t: float, pos: Xy) -> bool:
@@ -3856,6 +3892,9 @@ class Bot(ApproachKeysMixin):
         sr.n += 1
         self._walk = self._leg = None
         self._zero_streak = 0
+        if self._spot_stuck(pos, t):
+            sr.ref, sr.since = pos, self.clock()
+            return True
         ok = self._start_detour(pos, float(self.stuck["fast_s"]))
         self.tracker.forget_reference()
         sr.ref, sr.since = pos, self.clock()

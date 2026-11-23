@@ -24,7 +24,10 @@ DEFAULTS: dict[str, Any] = {
     "log": {"level": "INFO", "dir": "logs", "file": "bot.log"},
     # Mapa de metin: puntos donde se rompio un metin (persisten entre sesiones). Ver config.example.jsonc.
     "spawns": {"enabled": True, "map_name": "Ciudad 1", "file": "data/Ciudad 1.mapa.json", "merge_u": 6.0, "respawn_s": 240.0, "revisit_s": 120.0,
-               "arrive_u": 5.0, "max_walk_s": 40.0, "look_frames": 2},
+               "arrive_u": 5.0, "max_walk_s": 40.0, "look_frames": 2,
+               # stuck_max: trabas seguidas SIN monstruos yendo a un punto -> se lo descarta por ahora (revisit_s) y se elige
+               # otro o se hace la vuelta de busqueda
+               "stuck_max": 3},
     # explore_every_s: cada cuanto guarda una imagen periodica mientras explora; max_images: tope por corrida;
     # jpeg_quality 1-100; max_per_kind: tope de imagenes por tipo de evento (estado, descarte, destrabe, ignorada,
     # equivocada, bloqueado, explorar = la periodica); reason_memory_s: un motivo de descarte que vuelve a aparecer antes
@@ -1255,7 +1258,7 @@ def validate_config(cfg: dict) -> None:
         raise ConfigError("spawns.enabled debe ser true o false")
     _require_text(sp.get("file"), "spawns.file")
     _require_text(sp.get("map_name"), "spawns.map_name")
-    for k in ("merge_u", "respawn_s", "revisit_s", "arrive_u", "max_walk_s", "look_frames"):
+    for k in ("merge_u", "respawn_s", "revisit_s", "arrive_u", "max_walk_s", "look_frames", "stuck_max"):
         v = sp.get(k)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             raise ConfigError(f"spawns.{k} debe ser un numero > 0")
