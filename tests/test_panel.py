@@ -18,6 +18,8 @@ WITH_PANEL = {
     "metin_avaricia_seleccionado": ("other_metin", "metin_de_avaricia", 47400, 47400),
     COMBATE: ("target_metin", "metin_de_oscuridad", 18131, 80250),
     "metin_oscuridad_seleccionado_vida_llena": ("target_metin", "metin_de_oscuridad", 80250, 80250),
+    # corrida de las 23:48: el panel ya mostraba un Metin de Oscuridad seleccionado de antes (no el de enfrente)
+    "real_metin_enfrente_omitido": ("target_metin", "metin_de_oscuridad", 80250, 80250),
     NEGRO: ("target_metin", "metin_negro", 63450, 63450),
     "yang_en_piso": ("other", "farfarfa", 5213, 6713),     # el propio personaje
 }

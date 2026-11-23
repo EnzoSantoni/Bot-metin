@@ -22,12 +22,13 @@ def harness(p, camera=False):
     return h
 
 
-def test_sin_posicion_y_lejos_no_se_va():
-    p = perc(coords=INSIDE_XY, metins=[metin((200, 350))])   # piso 5.0 > approach.near_floor (4)
+def test_sin_posicion_y_lejos_tambien_se_va():
+    """Sin la regla ciega: un metin a la vista sin posicion conocida se cliquea igual (piso 5.0), decide el panel."""
+    p = perc(coords=INSIDE_XY, metins=[metin((200, 350))])
     h = harness(p)
-    assert not h.bot._goals(h.bot._label_view(p, 0.0)[0], [], p)
+    assert h.bot._goals(h.bot._label_view(p, 0.0)[0], [], p)
     h.bot.step()
-    assert State.ATACAR not in h.states() and h.clicks() == 0
+    assert State.ATACAR in h.states() and h.clicks() == 1
 
 
 def test_sin_posicion_cerca_y_jugador_adentro_si_se_va():
@@ -37,11 +38,12 @@ def test_sin_posicion_cerca_y_jugador_adentro_si_se_va():
     assert State.ATACAR in h.states() and h.clicks() == 1
 
 
-def test_sin_posicion_cerca_pero_jugador_en_la_tolerancia_no_se_va():
+def test_sin_posicion_cerca_y_jugador_en_la_tolerancia_si_se_va():
+    """Sin estimar la posicion del metin no se lo puede dar por claramente afuera: se cliquea."""
     p = perc(coords=TOL_XY, metins=[metin((1000, 500))])
     h = harness(p)
     h.bot.step()
-    assert h.clicks() == 0
+    assert h.clicks() == 1
 
 
 def test_sin_posicion_cerca_y_jugador_pegado_al_borde_adentro_si_se_va():
@@ -65,7 +67,7 @@ def test_posicion_conocida_afuera_no_se_va_y_adentro_si():
     afuera = perc(coords=base_xy, metins=[metin((960, 548 - 215))])   # ~36 u afuera: mas que outside_tolerance (30)
     h = harness(afuera, camera=True)
     cands, why = h.bot._label_view(afuera, 0.0)
-    assert not cands and "fuera de zona" in why[0][1]
+    assert not cands and "afuera de la zona mas la tolerancia" in why[0][1]
     h.bot.step()
     assert h.clicks() == 0
     adentro = perc(coords=base_xy, metins=[metin((1060, 548))])    # +20 u a la derecha: adentro
@@ -76,10 +78,10 @@ def test_posicion_conocida_afuera_no_se_va_y_adentro_si():
 
 def test_candidato_666_81_fuera_de_la_zona_no_entra_a_la_lista_ni_se_elige():
     h = harness(perc(coords=INSIDE_XY), camera=True)
-    assert not h.bot._metin_accepts((666, 81))
-    assert h.bot._metin_accepts((666, 100)) and h.bot._metin_accepts((600, 150))
+    assert not h.bot._metin_accepts((666, 55))   # claramente afuera de la zona mas la tolerancia (30)
+    assert h.bot._metin_accepts((666, 81)) and h.bot._metin_accepts((666, 100)) and h.bot._metin_accepts((600, 150))
     cm = CandidateMap(180.0, 12.0, 4.0, 0.5)
-    cm.add((666, 81), "piedra", False, 0.0)
+    cm.add((666, 55), "piedra", False, 0.0)
     assert cm.best((600, 150), (580, 150), 1.0, h.bot._metin_accepts) is None
     # por la cosecha: jugador en (666, 130) mirando al norte (rumbo -90 grados), piedra adelante: cae afuera y no se guarda
     p = perc(coords=(666, 130), metins=[metin((960, 300))])
@@ -111,9 +113,10 @@ def test_coordenadas_perdidas_un_momento_metin_cerca_con_la_ultima_posicion_aden
     assert State.ATACAR in h.states() and h.clicks() == 1
 
 
-def test_coordenadas_perdidas_y_metin_lejos_no_se_va():
+def test_coordenadas_perdidas_y_metin_lejos_tambien_es_candidato():
+    """Sin estimar la posicion del metin no se lo descarta (solo se descarta lo CLARAMENTE afuera de la zona)."""
     h = Harness(lambda h, n: perc(coords=None, metins=[metin((200, 350))]), strict_zone=True)
     h.bot.tracker.update(perc(coords=INSIDE_XY).coords, h.clock())
     h.clock.t += 60
-    cands, why = h.bot._label_view(perc(coords=None, metins=[metin((200, 350))]), h.clock.t)
-    assert not cands and "sin la posicion del jugador" in why[0][1]
+    cands, _ = h.bot._label_view(perc(coords=None, metins=[metin((200, 350))]), h.clock.t)
+    assert len(cands) == 1

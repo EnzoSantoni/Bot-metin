@@ -48,10 +48,10 @@ def test_b1_metin_afuera_de_la_zona_sin_camara_no_hace_loop(seed):
     env.run_until(max_s=300)
     assert sum(1 for t in env.transitions if t.new == "ATACAR") <= 1
     assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= 3
-    # sin camara, con el jugador en la franja y el metin a la vista se ataca (regla del metin a la vista): puede asomarse
-    # unas unidades mas alla de la tolerancia persiguiendolo, pero no hay loop
-    assert max(zd) <= tol(env) + 5
-    assert len(env.world.clicks_on_metin) <= 3 and m.alive
+    # modo clic sin camara: no se puede estimar donde esta el metin (la unica regla de zona es "claramente afuera"), asi que
+    # se lo cliquea; al salir de la zona mas la tolerancia yendo hacia el queda ignorado y se vuelve: sin loop
+    assert max(zd) <= tol(env) + 25
+    assert m.alive and env.bot.ignored
 
 
 def test_b1_salir_de_la_zona_atacando_descarta_la_posicion():
@@ -67,7 +67,7 @@ def test_b1_salir_de_la_zona_atacando_descarta_la_posicion():
     h.bot.tracker.forget_reference()
     h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), h.clock())
     out = h.bot._do_atacar(p, 0.2)
-    assert out is not None and out[0] is State.VOLVER and h.bot.discarded
+    assert out is not None and out[0] is State.VOLVER and h.bot.ignored   # el metin quedo claramente afuera
 
 
 def test_b1_tramo_cortado_por_la_guardia_alimenta_a_la_camara():
@@ -183,12 +183,11 @@ def test_i2_piedra_fantasma_no_hace_loop():
         return p
     env.bot._perceive = per
     env.run_until(max_s=600)
-    # la piedra fantasma no muestra nombre en el hover: nunca se le hace clic y su posicion queda ignorada no_label_ignore_s;
-    # en 600 s solo puede volver a intentarse cuando vence (a lo sumo una vez por vencimiento, mas la 1a y un margen)
-    assert not any(t.new == "ATACAR" for t in env.transitions)
-    acercarse = sum(1 for t in env.transitions if t.new == "ACERCARSE")
-    assert acercarse <= 2 + 600 / float(env.cfg["approach"]["no_label_ignore_s"])
-    assert env.bot.ignored
+    # decision simple: a la piedra fantasma se le hace clic directo; no muestra ningun panel en no_panel_s y su posicion queda
+    # ignorada no_label_ignore_s: en 600 s solo puede volver a intentarse cuando vence (una vez por vencimiento, mas margen)
+    tries = sum(1 for t in env.transitions if "ningun panel" in t.reason)
+    assert 1 <= tries <= 2 + 600 / float(env.cfg["approach"]["no_label_ignore_s"])
+    assert env.bot.ignored and not any(t.new == "ACERCARSE" for t in env.transitions)
 
 
 def test_i2_tope_de_aproximaciones_por_posicion():
@@ -276,14 +275,12 @@ def test_i6_config_por_defecto():
 
 
 # ---------------------------------------------------------------- I7
-def test_i7_piedra_sin_humo_rodeada_de_monstruos_se_ignora_pero_con_humo_no():
+def test_i7_piedra_sin_humo_rodeada_de_monstruos_tambien_es_candidata():
+    """Decision simple: sin el filtro de "rodeada de monstruos": se la cliquea y decide el panel."""
     h = Harness(lambda h, n: perc_far())
     h.bot.tracker.update(__import__('bot.vision.coords', fromlist=['Coords']).Coords(550, 150, 1.0), h.clock())
     p = perc_far(far=[FarMetin(Rect(1275, 488, 50, 70), (1300, 548), 0.9, True, smoke=False)])
     p.monsters = [MonsterLabel(Rect(1250, 500, 100, 12), (1300, 506)), MonsterLabel(Rect(1300, 560, 100, 12), (1350, 566))]
-    far, why = h.bot._far_view(p, 0.0)
-    assert not far and any("monstruos" in m for _, m in why)
-    p.far_metins = [FarMetin(Rect(1275, 488, 50, 70), (1300, 548), 0.9, True, smoke=True)]
     far, _ = h.bot._far_view(p, 0.0)
     assert len(far) == 1
 

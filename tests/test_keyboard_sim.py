@@ -122,18 +122,6 @@ def test_centro_con_teclado():
 
 
 # ---------------------------------------------------------------- (d) ACERCARSE a una piedra lejana
-def test_acercarse_a_piedra_lejana_con_teclado():
-    env = kenv(1, start=(520.0, 160.0))
-    m = env.world.add_metin((640.0, 150.0), name=OSC)   # a 120 u: se ve la piedra pero no la etiqueta (label_dist 60)
-    clicks = watch_clicks(env)
-    dist = env.track_zone()
-    why = env.run_until(lambda: not m.alive, max_s=600)
-    assert why == "cond", (why, env.transitions[-6:])
-    assert any(t.new == "ACERCARSE" for t in env.transitions)
-    assert clicks and not ground_clicks(clicks)
-    assert max(dist) <= tol(env)
-
-
 # ---------------------------------------------------------------- (e) destrabe con teclas
 def test_destrabe_mirar_y_atras_con_teclado_sin_clics():
     env = kenv(2, start=(550.0, 150.0))
@@ -193,18 +181,6 @@ def test_caminar_a_un_punto_no_aprieta_q_e_ni_invierte_las_teclas():
     assert k.get("q", 0) == 0 and k.get("e", 0) == 0
     assert kn.view_right_key == "camera_right" and kn.side == 1
     assert math.dist(tuple(env.world.pos), target) <= float(env.cfg["center"]["arrive_dist"]) + 3
-
-
-def test_acercarse_a_una_piedra_no_gira_la_vista_ni_invierte_las_teclas():
-    """ACERCARSE ya no gira la camara (hover + clic): Q/E no se aprietan por ir a la piedra y la tecla no se invierte."""
-    env = kenv(1, start=(520.0, 160.0))
-    env.world.add_metin((640.0, 150.0), name=OSC)
-    flips = []
-    orig = env.bot.keynav._fix_q
-    env.bot.keynav._fix_q = lambda key: (flips.append(env.world.t), orig(key))[1]
-    env.run_until(lambda: env.world.broken, max_s=600)
-    assert env.world.broken and not flips and env.bot.keynav.view_right_key == "camera_right"
-    assert any(t.new == "ACERCARSE" for t in env.transitions)
 
 
 def test_view_right_key_correcta_no_se_invierte():

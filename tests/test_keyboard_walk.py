@@ -170,9 +170,9 @@ def test_vuelve_desde_afuera_aunque_la_imagen_no_muestre_nada(sd):
                         max_s=150)
     assert why == "cond", (why, env.transitions[-5:])
     assert max(dist) <= max(-sd, 0) + 12
-    for name, parts in seen:                       # VOLVER y CENTRO solo leen las coordenadas
+    for name, parts in seen:                       # VOLVER y CENTRO: coordenadas, monstruos y etiquetas (regla c)
         if name in ("VOLVER", "CENTRO"):
-            assert set(parts) == {"coords", "monsters"}
+            assert set(parts) == {"coords", "monsters", "metins"}
 
 
 def test_explorar_cerca_del_borde_con_el_tramo_alejandose_vuelve_al_centro(caplog):

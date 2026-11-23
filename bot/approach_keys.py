@@ -105,9 +105,11 @@ class ApproachKeysMixin:
         self._dbg("descarte", f"apartado {secs:.0f} s: {why}")
 
     def _give_up(self, a: Any, why: str, p: Any, t: float) -> Any:
-        """Tope de clics sin confirmar: se aparta el metin un rato y se elige otro (no se descarta)."""
+        """Tope de clics sin que el panel muestre el metin: el panel no lo confirmo, se ignora esa posicion
+        `approach.no_label_ignore_s` y se elige otro."""
         from bot.bot import State
-        self._cool_down(a.gp, a.click, t, why)
+        self._ignore_position(a.gp, t, f"sin el panel del metin ({why})", a.click,
+                              seconds=float(self.apr["no_label_ignore_s"]))
         self._atk = None
         return State.BUSCAR, f"sin confirmar: {why}"
 

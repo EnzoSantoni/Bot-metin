@@ -210,8 +210,8 @@
 
   // ATACAR. confirm_timeout_s: tiempo sin ver el panel del metin (ni moverse) antes de reclickear.
   //  hp_stall_s: la vida no baja por tanto tiempo -> reclic. max_reclicks: mas que esto -> descartar el metin.
-  //  max_seconds: tope total de un ataque; pasado ese tope, un metin con la vida por debajo de max_seconds_keep_hp (0.20 =
-  //  20%) NO se abandona: reclic en el metin (cada reclick_wait_s si la vida no baja) y se sigue. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
+  //  DECISION SIMPLE: un metin a la vista NUNCA se descarta por tiempo, reclics, deselecciones ni por no poder llegar (sigue
+  //  el reclic / el destrabe con el mismo metin); max_seconds y max_reclicks ya no cortan el ataque. broken_confirm_cycles: ciclos seguidos sin panel (o con vida 0) para dar el
   //  metin por roto. discard_minutes: un metin descartado no se vuelve a elegir por ese tiempo.
   //  discard_radius: unidades del juego a la redonda que se consideran "el mismo metin".
   //  discard_error_frac: se suma al radio esta fraccion de la distancia al metin (el error de la camara crece con la distancia).
@@ -227,7 +227,7 @@
   //  Metin lejano: tras el clic el personaje camina solo. Mientras sus coordenadas cambian no cuenta el estancamiento de
   //  vida (hp_stall_s) hasta walk_max_s. Quieto stuck.window_s con la vida sin bajar y >= stuck.monsters_min monstruos cerca
   //  -> ESPACIO unstick_space_s y reclic (cuenta para max_reclicks). (walk_max_s, unstick_space_s: ESTIMADOS.)
-  "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0, "max_seconds_keep_hp": 0.20,
+  "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
              "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
              "max_wrong_selections": 3, "blocked_s": 4.0, "circle_ratio": 2.5, "circle_min_path": 4.0,
              "wrong_monsters_min": 1, "blocked_window_frac": 0.8,
@@ -260,7 +260,7 @@
              //  VERIFICACION RAPIDA: a los confirm_wait_s del clic sin panel de metin (ni de otra cosa), reclic mejor apuntado
              //  (piedra/etiqueta relocalizada; si cae en el mismo punto, quick_up_px mas arriba por intento), hasta quick_reclicks;
              //  despues el flujo de siempre (confirm_timeout_s). No cuentan para max_reclicks.
-             "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+             "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 0, "quick_up_px": 10,
              //  RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
              //  movimiento (coordenadas cambiando); sin confirmar, otro clic recien despues de confirm_wait_s. name_gap_px: el
              //  clic cae siempre a mas de tantos px debajo del nombre de la etiqueta (nunca sobre el nombre ni la franja de arriba).
@@ -275,6 +275,12 @@
              //  el panel vuelva; despues clic izquierdo al metin (si la vida ya baja, no hace falta). Aunque haya bichos encima;
              //  hasta recover_max veces por metin. Sin monstruo cerca, el reclic de siempre.
              "recover_hp": 0.99, "recover_max": 3,
+             //  DECISION SIMPLE: tras el clic en un metin (con o sin nombre) decide el panel: metin objetivo = atacar; otro metin
+             //  (Avaricia) = irse e ignorar esa posicion (approach.ignore_minutes); NINGUN panel en no_panel_s = recien ahi
+             //  ignorar esa posicion (approach.no_label_ignore_s).
+             "no_panel_s": 2.0,
+             //  leave_s: con otro metin en el panel (Avaricia), un paso atras (S) de tantos segundos para dejar de pegarle.
+             "leave_s": 0.6,
              //  SELECCION EQUIVOCADA REPETIDA (monstruos encima de la piedra): si wrong_high_after clics seguidos seleccionan un
              //  monstruo, ESPACIO wrong_space_s y clic en OTRA parte de la piedra, mas arriba (de justo debajo del nombre hasta
              //  high_frac del cuerpo; sin piedra medible, high_up_px mas arriba del punto), donde no haya etiquetas de monstruos.
@@ -283,9 +289,10 @@
              //  <= relocate_px de su ultimo punto de pantalla (camara sin girar) o por su posicion estimada; si no aparece en
              //  target_keep_s se lo suelta.
              "relocate_px": 150, "target_keep_s": 25.0,
-             //  keep_with_others_s: si el metin en curso no se ve y hay OTRO metin objetivo con etiqueta a la vista, se lo
-             //  suelta a los keep_with_others_s en vez de target_keep_s. Solo hay metin en curso si el panel lo confirmo.
-             "keep_with_others_s": 8.0,
+             //  keep_with_others_s: si el metin en curso no se ve y hay OTRO metin a la vista (con o sin nombre), se lo suelta
+             //  a los keep_with_others_s (0 = enseguida: nunca impide elegir un metin visible) en vez de target_keep_s. Solo
+             //  hay metin en curso si el panel lo confirmo.
+             "keep_with_others_s": 0.0,
              //  Buscar el proximo metin MIENTRAS se ataca: con scan_enabled, la vida del metin bajando desde hace scan_after_s y el
              //  panel confirmado, la camara gira de a un paso de Q/E (explore.camera_step_s) hasta scan_steps pasos o hasta ver un
              //  metin objetivo (distinto del que se ataca) y vuelve la misma cantidad de pasos a su posicion original. Entre paso y
@@ -293,7 +300,7 @@
              //  ataque (la vida deja de bajar hp_progress_s + scan_hp_margin_s), vuelve la camara, avisa y no busca mas mientras ataca en esta
              //  corrida. NUNCA hace clic en otro metin hasta romper el actual y recoger. Lo encontrado se recuerda next_keep_s
              //  segundos: al terminar RECOGER gira esos pasos y va directo a el (a <= relocate_px del punto recordado).
-             "scan_enabled": true, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+             "scan_enabled": false, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
              "scan_hp_margin_s": 2.0,
              //  BICHOS ENCIMA (nombres rojos solapados o a <= vision.monsters.on_me_px del nombre amarillo del personaje): panel
              //  perdido / seleccion equivocada / trabado -> ESPACIO (on_me_space_s en la deseleccion) antes del reclic.
@@ -360,7 +367,9 @@
   //  edge_return_u: adentro a menos de esto del borde con el tramo alejandose del poligono -> VOLVER al centro; igual si
   //  termino un barrido completo sin ver nada util estando a menos de border_margin del borde. VOLVER/CENTRO se guian solo
   //  por las coordenadas (W/A/S/D), aunque la imagen no muestre referencias.
-  "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
+  //  candidate_list: vuelta con lista de candidatos en el mapa. false (DECISION SIMPLE): cada paso de la vuelta mira y frena en
+  //  el primer metin que aparece; sin metin en toda la vuelta, el punto conocido mas cercano, y ahi se repite.
+  "explore": {"candidate_list": false, "camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
               "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
               "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
               "settle_s": 0.6, "settle_frames": 2, "edge_return_u": 5.0,

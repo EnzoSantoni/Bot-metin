@@ -26,6 +26,9 @@ def fast(monkeypatch):
 
 def env_for(phi, start=(560.0, 150.0), right_key_ok=True, **kw):
     cfg = make_cfg()
+    # la vuelta con lista de candidatos y el barrido mientras ataca estan apagados por defecto (decision simple): aca se prueban
+    cfg["explore"]["candidate_list"] = True
+    cfg["attack"]["scan_enabled"] = True
     if right_key_ok:   # en el simulador la tecla camera_left sube el rumbo: con esto Q/E ya estan bien supuestas
         cfg["navigation"]["keyboard"]["view_right_key"] = "camera_left"
     return SimEnv(3, phi=phi, start=start, cfg=cfg, heading=True, pinhole_k=K, **kw)

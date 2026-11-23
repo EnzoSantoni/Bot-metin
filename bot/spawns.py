@@ -194,6 +194,17 @@ class SpawnMap:
         ok = [s for s in self.spots if accepts(s.xy) and self._eligible(s, now)]
         return min(ok, key=lambda s: math.dist(s.xy, pos)) if ok else None
 
+    def nearest(self, pos: Xy, accepts: Callable[[Xy], bool]) -> Spot | None:
+        """El punto conocido mas cercano dentro de la zona aunque todavia no deberia tener metin, salvo los visitados (sin
+        metin) hace menos de `revisit_s` en esta sesion. None si no queda ninguno."""
+        now = self.now()
+
+        def fresh(s: Spot) -> bool:
+            return s.last_visit < max(self.session_start, 1e-9) or s.last_visit <= s.last_broken \
+                or now - s.last_visit >= self.revisit_s
+        ok = [s for s in self.spots if accepts(s.xy) and fresh(s)]
+        return min(ok, key=lambda s: math.dist(s.xy, pos)) if ok else None
+
     def seconds_until_ready(self, accepts: Callable[[Xy], bool]) -> float | None:
         """Segundos hasta que el primer punto de la zona quede elegible (None si no hay puntos)."""
         now = self.now()

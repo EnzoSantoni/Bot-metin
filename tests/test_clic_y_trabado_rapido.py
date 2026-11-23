@@ -77,7 +77,8 @@ def test_clic_sin_panel_reclickea_a_los_15_s_mejor_apuntado(caplog):
         if h.bot.state is State.ATACAR:
             return perc_far(coords=xy, metins=[metin()])   # sin panel
         return perc(coords=xy, metins=[metin()])
-    h = Harness(script, attack={"confirm_timeout_s": 50.0}, stuck={"fast_s": 1000.0})
+    # los reclics rapidos y su tope estan apagados por defecto (decision simple: sin panel en no_panel_s se ignora la posicion)
+    h = Harness(script, attack={"confirm_timeout_s": 50.0, "quick_reclicks": 2, "no_panel_s": 1e9}, stuck={"fast_s": 1000.0})
     t0 = _until_second_click(h)
     assert 1.5 <= h.clock.t - t0 < 2.6   # a los ~1.5 s (`attack.confirm_wait_s`), no antes ni a los 6 s
     assert any("Clic sin panel en 1.5 s: reclic mejor apuntado en (1000, 466)" in m for m in messages(caplog))
@@ -89,7 +90,8 @@ def test_los_reclics_rapidos_tienen_tope_y_despues_sigue_el_flujo_de_siempre(cap
     caplog.set_level(logging.INFO)
     xy = lambda n: (500 + min(n, 8), 150)   # camina un rato y queda quieto
     h = Harness(lambda h, n: perc_far(coords=xy(n), metins=[metin()]) if h.bot.state is State.ATACAR
-                else perc(coords=xy(n), metins=[metin()]), attack={"confirm_timeout_s": 50.0}, stuck={"fast_s": 1000.0})
+                else perc(coords=xy(n), metins=[metin()]),
+                attack={"confirm_timeout_s": 50.0, "quick_reclicks": 2, "no_panel_s": 1e9}, stuck={"fast_s": 1000.0})
     for _ in range(120):
         h.bot.step()
     assert sum("Clic sin panel" in m for m in messages(caplog)) == int(h.cfg["attack"]["quick_reclicks"])
@@ -252,7 +254,7 @@ def test_hover_y_barrido_de_camara_no_son_caminata():
 def test_config_nueva():
     a, s = DEFAULTS["attack"], DEFAULTS["stuck"]
     assert s["fast_s"] == 1.8 and "surrounded_s" not in s and "walk_stuck_s" not in a
-    assert (a["confirm_wait_s"], a["quick_reclicks"], a["label_click_up_frac"]) == (1.5, 2, 0.37)
+    assert (a["confirm_wait_s"], a["quick_reclicks"], a["label_click_up_frac"]) == (1.5, 0, 0.37)
     assert "confirm_check_s" not in a and a["min_click_gap_s"] == 1.5 and a["panel_recover"] is True
     ap = DEFAULTS["approach"]
     assert ap["keys_enabled"] is True and ap["near_floor"] == 4.0 and "click_floor" not in ap and ap["max_clicks"] == 4

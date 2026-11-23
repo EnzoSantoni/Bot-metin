@@ -119,11 +119,11 @@ def test_menu_que_no_se_cierra_usa_la_tecla_de_cierre_tras_los_clics(caplog):
 
 
 # ---------------------------------------------------------------- nunca Escape
-def test_deselecciones_agotadas_y_descarte_nunca_aprietan_escape():
+def test_deselecciones_agotadas_nunca_aprietan_escape():
     script, _ = scripted(lambda i: target_panel(0.64) if i <= 2 else None, stone=lambda i: [metin(A_POINT)])
     h = Harness(None, attack={"max_deselect_reclicks": 2})
     h.script = script
-    h.run_until(lambda: len(h.bot.discarded) >= 1 or State.EXPLORAR in h.states(), limit=900)
+    h.run_until(lambda: h.clicks() >= 6, limit=900)   # (ya no se descarta: sigue el reclic)
     assert h.keys("esc") == 0
 
 
@@ -167,7 +167,8 @@ def test_trabado_yendo_al_metin_con_bichos_encima_usa_espacio(caplog):
     def script(h, n):
         if h.bot.state is not State.ATACAR:
             return perc(metins=[metin(A_POINT)])
-        p = perc(metins=[metin(A_POINT)], panel=None)
+        # el panel confirma el metin (con la vida quieta): sin NINGUN panel decidiria attack.no_panel_s
+        p = perc(metins=[metin(A_POINT)], panel=target_panel(0.9))
         p.monsters_on_me, p.monsters_near = 2, 0     # sin zona de cerca: solo los nombres pegados al propio
         return p
     h = Harness(script, stuck={"fast_s": 1.0})

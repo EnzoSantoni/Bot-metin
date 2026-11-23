@@ -215,27 +215,6 @@ def test_seleccion_equivocada_sin_escape():
     assert h.states()[:2] == [State.ATACAR, State.BUSCAR]
 
 
-@pytest.mark.parametrize("camera", [True, False])
-def test_vida_trabada_reclic_descarte_y_no_se_vuelve_a_elegir(camera):
-    def script(h, n):
-        if h.bot.state is State.ATACAR:
-            return perc(panel=target_panel(0.5))
-        return perc(metins=[metin()])
-
-    h = Harness(script, attack={"reclick_stall_s": 1.0, "max_reclicks": 2},
-                stuck={"fast_s": 1000.0})
-    if camera:
-        h.train_camera()
-    h.run_until(lambda: State.EXPLORAR in h.states())
-    assert h.states()[:3] == [State.ATACAR, State.BUSCAR, State.EXPLORAR]
-    assert h.clicks() == 3            # clic inicial + 2 reclics
-    assert h.keys("esc") == 0 and len(h.bot.discarded) == 1
-    assert h.states().count(State.ATACAR) == 1   # no se vuelve a elegir
-    # pasado el tiempo de descarte vuelve a ser candidato
-    h.clock.t += h.cfg["attack"]["discard_minutes"] * 60 + 1
-    h.run_until(lambda: State.ATACAR in h.states()[1:])
-
-
 def test_un_solo_ciclo_sin_panel_no_cuenta_como_roto():
     seq = [target_panel(0.09), target_panel(0.08), None, target_panel(0.07), target_panel(0.06), None]
     w = {"i": 0}
@@ -442,17 +421,17 @@ def test_destrabe_agota_intentos_y_va_al_centro():
     assert h.keys("s") >= 1                                                  # uno de los intentos fue ATRAS
 
 
-def test_atacar_sin_confirmar_reclickea_quieto_y_a_los_max_clicks_elige_otro():
-    """Sin panel y sin avanzar: clics quietos separados por `attack.min_click_gap_s`, tope `approach.max_clicks` y despues se
-    aparta el metin unos segundos (no se lo descarta 10 minutos) y se elige otro."""
+def test_atacar_sin_ningun_panel_en_2_s_ignora_la_posicion_un_rato():
+    """Decision simple: sin NINGUN panel attack.no_panel_s despues del clic, recien ahi se ignora esa posicion
+    approach.no_label_ignore_s (no 10 minutos); un solo clic."""
     def script(h, n):
         return perc(metins=[metin()])
 
-    h = Harness(script, attack={"confirm_timeout_s": 1.0})
+    h = Harness(script)
     h.train_camera()
-    h.run_until(lambda: any(w.startswith("sin confirmar:") for _, w in h.seen))
-    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and h.clicks() == int(h.cfg["approach"]["max_clicks"])
-    assert all(s.expiry - h.clock.t <= 31 for s in h.bot.discarded)
+    h.run_until(lambda: h.bot.ignored, limit=200)
+    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and h.clicks() == 1 and "ningun panel" in h.seen[1][1]
+    assert h.bot.ignored[0].expiry - h.clock.t <= float(h.cfg["approach"]["no_label_ignore_s"]) + 1
 
 
 NEAR_EDGE_XY = (442, 170)   # adentro del poligono a +4.6 u del borde (menos que explore_margin)
@@ -476,28 +455,6 @@ def test_sin_camara_ataca_en_la_franja_de_tolerancia():
     assert State.ATACAR in h.states() and h.clicks() == 1
 
 
-def test_sin_camara_no_ataca_fuera_de_la_tolerancia():
-    h = Harness(lambda h, n: perc(coords=OUT_XY, metins=[metin()]))
-    h.bot.step()
-    assert State.ATACAR not in h.states() and h.clicks() == 0
-    p = perc(coords=OUT_XY, metins=[metin()])
-    cands, why = h.bot._label_view(p, 0.0)
-    assert not cands and "sin camara y jugador fuera de la zona" in why[0][1]
-
-
-def test_motivo_etiqueta_dudosa_vs_tipo_ignorado():
-    """Una plantilla objetivo que gana sin pasar el umbral es una duda (no "tipo ignorado"); una que no es objetivo, si."""
-    dudosa = MetinDetection(Rect(900, 430, 80, 10), "metin_negro", 0.62, False, (940, 500), True)
-    otro = MetinDetection(Rect(1100, 430, 80, 10), "metin_de_avaricia", 0.95, False, (1140, 500), True)
-    p = perc(metins=[dudosa, otro])
-    h = Harness(lambda h, n: p)
-    cands, why = h.bot._label_view(p, 0.0)
-    msgs = [m for _, m in why]
-    assert not cands
-    assert msgs == ["etiqueta dudosa (se parece a metin_negro, 0.62; no alcanza el umbral)",
-                    "tipo ignorado (metin_de_avaricia)"]
-
-
 @pytest.mark.parametrize("px", [150, 300, 700])
 def test_sin_camara_metin_con_etiqueta_se_ataca_a_cualquier_distancia_en_pantalla(px):
     """Sin limite de pixeles (regla vieja de 160 px): adentro o en la tolerancia, a 174 px o mas, se ataca."""
@@ -509,23 +466,6 @@ def test_sin_camara_metin_con_etiqueta_se_ataca_a_cualquier_distancia_en_pantall
         assert len(cands) == 1 and not why
         h.bot.step()
         assert State.ATACAR in h.states() and h.clicks() == 1
-
-
-def test_sin_camara_metin_con_etiqueta_no_se_ataca_con_el_jugador_afuera():
-    p = perc(coords=OUT_XY, metins=[_far_screen_metin(174)])
-    h = Harness(lambda h, n: p)
-    h.bot.tracker.update(p.coords, h.clock())
-    cands, why = h.bot._label_view(p, 0.0)
-    assert not cands and "jugador fuera de la zona" in why[0][1]
-
-
-def test_sin_camara_piedra_lejana_adentro_o_en_la_tolerancia_pero_no_afuera():
-    h = Harness(lambda h, n: perc())
-    for xy, ok in ((NEAR_EDGE_XY, True), (TOL_XY, True), (OUT_XY, False)):
-        h.bot.tracker.update(Coords(xy[0], xy[1], 1.0), h.clock())
-        h.bot.tracker.forget_reference()
-        r = h.bot._zone_reason(None, h.bot._zone_status(), "piedra lejana")
-        assert (r is None) == ok, (xy, r)
 
 
 def test_camara_lista_filtra_metin_fuera_de_la_zona():
@@ -716,34 +656,11 @@ _LONG = {"max_seconds": 10.0, "reclick_wait_s": 3.0, "hp_progress_s": 2.0, "recl
          "scan_enabled": False}
 
 
-def test_tiempo_maximo_con_vida_bajo_20_no_abandona_reclic_y_sigue(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(_long_attack_script([0.5, 0.15]), attack=_LONG, stuck={"fast_s": 1e9})
-    h.run_until(lambda: h.bot._atk is not None and h.clock.t - h.bot._atk.start_t > 20, limit=200)
-    assert h.bot.state is State.ATACAR and not any("tiempo maximo" in r for _, r in h.seen)
-    assert caplog.text.count("no lo abandono, reclic y sigo") >= 2   # cada reclick_wait_s, no en cada ciclo
-    assert h.clicks() >= 3 and h.keys("g") == 0
-
-
-def test_tiempo_maximo_con_vida_alta_abandona():
-    h = Harness(_long_attack_script([0.5, 0.35]), attack=_LONG, stuck={"fast_s": 1e9})
-    h.run_until(lambda: any("tiempo maximo de ataque" in r for _, r in h.seen), limit=200)
-    assert h.bot._cur is None
-
-
 def test_vida_del_metin_baja_no_se_baja_del_caballo_atacando():
     """Ctrl+G hace que el personaje deje de atacar: solo se baja al recoger, nunca con el metin vivo."""
     h = Harness(_long_attack_script([0.5, 0.2, 0.09, 0.05, 0.04, 0.03]), attack=_LONG, stuck={"fast_s": 1e9})
     h.run_until(lambda: h.bot._atk is not None and h.clock.t - h.bot._atk.start_t > 8, limit=200)
     assert h.bot.state is State.ATACAR and h.keys("g") == 0 and not h.bot._dismounted
-
-
-def test_max_seconds_keep_hp_invalido():
-    cfg = make_cfg()
-    for bad in (1.0, -0.1, True, "0.2"):
-        cfg["attack"]["max_seconds_keep_hp"] = bad
-        with pytest.raises(ConfigError):
-            validate_config(cfg)
 
 
 # ---------------------------------------------------------------- panel perdido con vida 100%: truco del clic derecho
@@ -814,3 +731,58 @@ def test_dos_selecciones_de_monstruo_seguidas_espacio_y_clic_en_la_parte_alta_de
     gap = math.hypot(max(mon.x - x, 0, x - mon.right), max(mon.y - y, 0, y - mon.bottom))
     assert gap > DEFAULTS["attack"]["monster_clear_px"], (clicks, gap)   # lejos de la etiqueta del monstruo
     assert "2 clics seguidos seleccionaron un monstruo" in caplog.text
+
+
+# ---------------------------------------------------------------- decision simple: el panel decide
+def _with_stone(p, x=1300, y=460):
+    from bot.vision.far_metin import FarMetin
+    p.far_metins = [FarMetin(Rect(x - 25, y - 60, 50, 70), (x, y), 0.9, True)]
+    return p
+
+
+def test_piedra_sin_nombre_clic_directo_sin_hover():
+    h = Harness(lambda h, n: _with_stone(perc()) if h.bot.state is State.BUSCAR else perc())
+    h.bot.step()
+    assert h.seen[0][0] is State.ATACAR and h.clicks() == 1
+    assert State.ACERCARSE not in h.states()
+
+
+def test_avaricia_confirmada_por_el_panel_se_va_e_ignora_la_posicion():
+    avaricia = PanelInfo(present=True, kind="other_metin", name="metin_de_avaricia", hp_ratio=1.0)
+
+    def script(h, n):
+        h.clock.t += 0.3
+        return perc(metins=[metin()], panel=avaricia if h.bot.state is State.ATACAR else None)
+    h = Harness(script)
+    h.run_until(lambda: State.ATACAR in h.states() and h.bot.state is not State.ATACAR, limit=40)
+    assert "confirmado por el panel" in h.seen[1][1] and h.bot.ignored and h.clicks() == 1
+
+
+def test_ningun_panel_en_2_s_ignora_la_posicion():
+    def script(h, n):
+        h.clock.t += 0.5
+        return perc(metins=[metin()])
+    h = Harness(script)
+    h.run_until(lambda: h.bot.ignored, limit=40)
+    att = next(i for i, (s, _) in enumerate(h.seen) if s is State.ATACAR)
+    assert "ningun panel" in h.seen[att + 1][1] and h.clicks() == 1
+
+
+def test_volver_con_un_metin_objetivo_cerca_a_la_vista_lo_ataca_antes_de_irse():
+    h = Harness(lambda h, n: perc(coords=OUT_XY, metins=[metin()]))
+    h.bot._enter(State.VOLVER, "test")
+    h.bot.step()
+    assert h.bot.state is State.ATACAR and h.clicks() == 1
+
+
+def test_explorar_frena_en_el_primer_metin_que_aparece_al_girar():
+    seen = {"n": 0}
+
+    def script(h, n):
+        if h.bot.state is State.EXPLORAR:
+            seen["n"] += 1
+        return perc(metins=[metin()]) if seen["n"] >= 3 else perc()
+    h = Harness(script)
+    h.run_until(lambda: State.ATACAR in h.states(), limit=60)
+    assert h.bot._ex is None or h.bot._ex.phase == "sweep"
+    assert State.ACERCARSE not in h.states()

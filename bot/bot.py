@@ -66,7 +66,8 @@ PARTS = {
     State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
     State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters", "items"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters", "items"},
-    State.VOLVER: {"coords", "monsters"}, State.CENTRO: {"coords", "monsters"},   # van por coordenadas (monstruos: rodeado)
+    # van por coordenadas (monstruos: rodeado); las etiquetas: un metin objetivo cerca a la vista se ataca antes de irse
+    State.VOLVER: {"coords", "monsters", "metins"}, State.CENTRO: {"coords", "monsters", "metins"},
     State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
     State.MUERTO: set(), State.FIN: set(),
 }
@@ -173,6 +174,7 @@ class _Attack:
     recover_t: float | None = None              # hora del clic derecho que intenta recuperar el panel (espera `attack.recover_wait_s`)
     recover_lost: bool = False                  # ese clic derecho fue por panel perdido con vida 100%: despues, clic izquierdo
     wrong_streak: int = 0                       # clics seguidos que seleccionaron un monstruo (se reinicia con el panel del metin)
+    panel_seen: bool = False                    # aparecio algun panel desde el clic (si no en attack.no_panel_s: posicion ignorada)
     aim_high: bool = False                      # el proximo reclic va a la parte ALTA de la piedra (`_high_point`)
 
 
@@ -771,11 +773,16 @@ class Bot(ApproachKeysMixin):
         return pos[0] + v[0], pos[1] + v[1]
 
     def _walk_mask(self, p: Perception) -> Any:
-        """Mascara para clics de caminata: evita clickear (y atacar) metin que no son objetivo o estan descartados."""
+        """Mascara para clics de caminata: evita clickear (y atacar) metin que no son objetivo o cuya posicion esta ignorada
+        (lo dijo el panel) o descartada."""
         r = float(self.nav["avoid_metin_px"])
         t = self.clock()
-        pts = [d.click_point for d in p.metins
-               if not d.is_target or self._is_discarded(self._game_pos_of(d.click_point, p), t, d.click_point, p.player_xy)]
+
+        def avoid(d: MetinDetection) -> bool:
+            gp = self._game_pos_of(d.click_point, p)
+            return (not d.is_target or self._is_ignored(gp, t, d.click_point, p.player_xy)
+                    or self._is_discarded(gp, t, d.click_point, p.player_xy))
+        pts = [d.click_point for d in p.metins if avoid(d)]
         return _AvoidMask(p.mask, pts, r) if pts and r > 0 else p.mask
 
     # ------------------------------------------------------------------ posiciones recordadas (descartes, ignoradas)
@@ -890,77 +897,43 @@ class Bot(ApproachKeysMixin):
         return time.strftime("%H:%M", time.localtime(time.time() + (expiry - t)))
 
     def _metin_accepts(self, gp: Xy) -> bool:
-        """Un metin en `gp` (mapa) vale si esta adentro de la zona o a <= `approach.metin_outside_u` afuera del borde."""
-        return self.zone.signed_distance(gp) >= -float(self.apr["metin_outside_u"])
+        """Un metin en `gp` (mapa) vale si esta adentro de la zona o a <= `farm_zone.outside_tolerance` afuera del borde."""
+        return self.zone.accepts(gp)
 
-    def _blind_ok(self, floor_d: float) -> bool:
-        """Metin SIN posicion conocida: solo si esta a distancia de piso <= `approach.blind_near_floor` y el jugador esta
-        adentro de la zona a >= `approach.blind_inside_margin` del borde."""
-        pos = self.tracker.position
-        return (floor_d <= float(self.apr["blind_near_floor"]) and pos is not None
-                and self.zone.signed_distance(pos) >= float(self.apr["blind_inside_margin"]))
-
-    def _zone_reason(self, gp: Xy | None, st: ZoneStatus | None, what: str, near: bool = False) -> str | None:
-        """Motivo por el que algo en `gp` queda fuera de la zona (None si esta aceptado). Con `gp` (camara lista) vale la
-        zona y la posicion del jugador no importa. Sin camara (`gp` None): un metin (con etiqueta o piedra, igual) vale si
-        el jugador esta adentro o en la franja de tolerancia (no mas afuera), sin limite de distancia en pantalla (la
-        guardia de zona del ataque y de la caminata hace el resto). `near` (metin objetivo a piso <= `approach.near_floor`):
-        con `gp` alcanza con que quede adentro de la zona mas `farm_zone.outside_tolerance`; sin la posicion del jugador
-        (coordenadas perdidas un momento) vale la ultima conocida."""
-        if gp is not None:
-            if self._metin_accepts(gp) or (near and self.zone.accepts(gp)):
-                return None
-            return f"{what} fuera de zona (est. ({gp[0]:.0f}, {gp[1]:.0f}), d={self.zone.signed_distance(gp):.0f})"
-        if st is None:
-            last = self.tracker.last_known
-            if near and last is not None and self.zone.accepts(last):
-                return None
-            return f"{what}: sin camara y sin la posicion del jugador"
-        if st is ZoneStatus.OUTSIDE:
-            return f"{what}: sin camara y jugador fuera de la zona"
-        return None
-
-    def _near_floor_of(self, pt: tuple[int, int], p: Perception) -> float:
-        """Distancia de piso (con perspectiva) de un punto de pantalla a los pies del personaje."""
-        return ground_dist(feet_of(p.player_xy, self.cfg), pt, p.shape, self.cfg)
-
-    def _near_ok(self, g: Goal, d: float, p: Perception) -> bool:
-        """Metin objetivo CON etiqueta a piso <= `approach.near_floor` sin posicion por la camara: se ataca aunque el jugador
-        este cerca del borde, si el metin queda adentro de la zona mas `farm_zone.outside_tolerance`. Su posicion sale del
-        rumbo de la camara (minimapa); sin rumbo, el peor caso (jugador +- esa distancia en unidades del mapa)."""
-        if g.kind != "etiqueta" or d > float(self.apr["near_floor"]):
-            return False
+    def _heading_pos(self, pt: tuple[int, int], p: Perception, h: float | None) -> Xy | None:
+        """Posicion en el mapa de un punto de pantalla por el rumbo `h` de la camara (minimapa) y la escala de piso; None sin
+        rumbo o sin posicion del jugador (vale la ultima conocida)."""
         pos = self.tracker.position or self.tracker.last_known
-        if pos is None:
-            return False
-        h = self._heading()
-        if h is not None:
-            return self.zone.accepts(world_pos(pos, h, floor_vec(p.player_xy, g.point, p.shape, self.cfg), self.kscale.k))
-        return self.zone.signed_distance(pos) - d * self.kscale.k >= -self.zone.outside_tolerance
+        if h is None or pos is None:
+            return None
+        return world_pos(pos, h, floor_vec(p.player_xy, pt, p.shape, self.cfg), self.kscale.k)
+
+    def _zone_reason(self, gp: Xy | None, what: str, pt: tuple[int, int] | None = None, p: Perception | None = None,
+                     h: float | None = None) -> str | None:
+        """UNICA regla de zona para elegir: el metin queda CLARAMENTE afuera de la zona mas `farm_zone.outside_tolerance`
+        (posicion por la camara o, si no, por el rumbo `h` del minimapa). Sin estimacion de su posicion no se lo descarta."""
+        w = gp if gp is not None else (self._heading_pos(pt, p, h) if pt is not None and p is not None else None)
+        if w is None or self.zone.accepts(w):
+            return None
+        return f"{what} afuera de la zona mas la tolerancia (est. ({w[0]:.0f}, {w[1]:.0f}), d={self.zone.signed_distance(w):.0f})"
 
     def _label_view(self, p: Perception, t: float, check_discards: bool = True
                     ) -> tuple[list[_Cand], list[tuple[tuple, str]]]:
-        """(candidatos, motivos de los no elegidos): metin con etiqueta objetivo, permitidos, no descartados, en la zona."""
-        st = self._zone_status()
+        """(candidatos, motivos de los no elegidos): TODA etiqueta de metin (objetivo, dudosa o de otro tipo: no se decide por
+        el nombre, decide el panel al hacer clic) salvo: clic no permitido (interfaz), posicion ignorada por lo que dijo el
+        panel (`check_discards`) o claramente afuera de la zona mas la tolerancia."""
         out: list[_Cand] = []
         why: list[tuple[tuple, str]] = []
+        h = self._heading() if p.metins else None
         for d in p.metins:
-            if not d.is_target:
-                if d.name in self._target_slugs:   # gano una plantilla objetivo pero sin pasar el umbral: duda, no es ese tipo
-                    why.append((("dudosa", d.name), f"etiqueta dudosa (se parece a {d.name}, {d.score:.2f}; "
-                                                    "no alcanza el umbral)"))
-                else:
-                    why.append((("tipo", d.name), f"tipo ignorado ({d.name})"))
-                continue
             if not d.allowed:
                 why.append((("ui", d.name), "clic no permitido (interfaz)"))
                 continue
             gp = self._game_pos_of(d.click_point, p)
-            if check_discards and (exp := self._discard_expiry(gp, t, d.click_point, p.player_xy)) is not None:
-                why.append((("descartado", d.name), f"descartado hasta {self._until(exp, t)}"))
+            if check_discards and self._is_ignored(gp, t, d.click_point, p.player_xy):
+                why.append((("ignorada", d.name), f"{d.name}: posicion ignorada (lo dijo el panel)"))
                 continue
-            near = self._near_floor_of(d.click_point, p) <= float(self.apr["near_floor"])
-            zr = self._zone_reason(gp, st, d.name, near)
+            zr = self._zone_reason(gp, d.name, d.click_point, p, h)
             if zr is not None:
                 why.append((("zona", d.name), zr))
                 continue
@@ -972,36 +945,24 @@ class Bot(ApproachKeysMixin):
         """Metin objetivo permitidos, no descartados y dentro de la zona; el mas cercano primero."""
         return self._label_view(p, t, check_discards)[0]
 
-    def _monsters_around(self, f: FarMetin, p: Perception) -> int:
-        """Etiquetas de monstruos a menos de `approach.far_monsters_px` de la piedra."""
-        r = float(self.apr["far_monsters_px"])
-        return sum(1 for m in p.monsters if math.dist(m.center, f.center) <= r)
-
     def _far_view(self, p: Perception, t: float) -> tuple[list[_FarCand], list[tuple[tuple, str]]]:
-        """(piedras lejanas elegibles, motivos de las no elegidas); la mas cercana primero."""
-        st = self._zone_status()
+        """(piedras sin etiqueta elegibles, motivos de las no elegidas); la mas cercana primero. Una piedra se cliquea igual
+        (decide el panel) salvo: clic no permitido (interfaz), posicion ignorada por lo que dijo el panel o claramente afuera
+        de la zona mas la tolerancia."""
         out: list[_FarCand] = []
         why: list[tuple[tuple, str]] = []
+        h = self._heading() if p.far_metins else None
         for f in p.far_metins:
-            lab = self._label_of(f.center, p)
-            if lab is not None:   # una piedra debajo de una etiqueta es esa etiqueta: no es candidata aparte
-                if not lab.is_target:
-                    why.append((("tipo", lab.name), f"tipo ignorado ({lab.name})"))
+            if self._label_of(f.center, p) is not None:   # una piedra debajo de una etiqueta es esa etiqueta: no va aparte
                 continue
             if not f.allowed:
                 why.append((("ui", "far"), "piedra lejana: clic no permitido (interfaz)"))
                 continue
-            if not f.smoke and self._monsters_around(f, p) >= int(self.apr["far_monsters_n"]):
-                why.append((("monstruos", "far"), "piedra lejana sin humo rodeada de monstruos (falso positivo)"))
-                continue
             gp = self._game_pos_of(f.center, p)
             if self._is_ignored(gp, t, f.center, p.player_xy):
-                why.append((("ignorada", "far"), "piedra lejana: posicion ignorada"))
+                why.append((("ignorada", "far"), "piedra lejana: posicion ignorada (lo dijo el panel)"))
                 continue
-            if self._is_discarded(gp, t, f.center, p.player_xy):
-                why.append((("descartada", "far"), "piedra lejana: posicion de un metin descartado"))
-                continue
-            zr = self._zone_reason(gp, st, "piedra lejana")
+            zr = self._zone_reason(gp, "piedra lejana", f.center, p, h)
             if zr is not None:
                 why.append((("zona", "far"), zr))
                 continue
@@ -1036,7 +997,9 @@ class Bot(ApproachKeysMixin):
         self.discarded.extend(s for s in spots if s is not None)
 
     def _discard(self, a: _Attack, reason: str, p: Perception, t: float) -> Transition:
-        self._add_discard(a, t)   # sin Escape: abre el menu de opciones; la seleccion cambia con el proximo clic en un metin
+        """Deja el metin del ataque porque el PANEL dijo que no es un metin objetivo: ignora su posicion
+        (`approach.ignore_minutes`) y vuelve a BUSCAR. Sin Escape (abre el menu de opciones)."""
+        self._ignore_position(a.gp, t, reason, a.click)
         self._atk = self._cur = self._resume = None
         self._dbg("descarte", f"metin descartado ({reason})")
         return State.BUSCAR, f"metin descartado ({reason})"
@@ -1095,8 +1058,10 @@ class Bot(ApproachKeysMixin):
 
     def _goals(self, cands: list[_Cand], far: list[_FarCand], p: Perception, blind_rule: bool = True
                ) -> list[tuple[Goal, float]]:
-        """Metin objetivo con etiqueta y piedras lejanas elegibles, de la mas cercana al personaje (distancia de piso, con
-        perspectiva) a la mas lejana. Sin posicion conocida (`blind_rule`) solo quedan los que cumplen `_blind_ok`. Base de una etiqueta: la piedra lejana que esta debajo o, si no, su punto de clic."""
+        """Metin a la vista (etiquetas y piedras sin etiqueta elegibles), del mas cercano al personaje (distancia de piso, con
+        perspectiva) al mas lejano: SOLO por distancia (ni las etiquetas primero ni las piedras cerca del personaje al final;
+        decide el panel). Base de una etiqueta: la piedra que esta debajo o, si no, su punto de clic. (`blind_rule` ya no se
+        usa: sin posicion conocida tambien se elige.)"""
         lim = float(self.apr["label_match_px"])
         goals: list[Goal] = []
         for c in cands:
@@ -1104,13 +1069,8 @@ class Bot(ApproachKeysMixin):
             base = min(under, key=lambda f: math.dist(f.center, c.det.click_point)).center if under else c.det.click_point
             goals.append(Goal("etiqueta", c.det.name, base, c))
         goals.extend(Goal("piedra", "piedra", c.far.center, c) for c in far)
-        ranked = rank_goals(goals, p.player_xy, p.shape, self.cfg)
-        if not blind_rule:
-            return ranked
-        keep = [(g, d) for g, d in ranked if g.ref.gp is not None or self._blind_ok(d) or self._near_ok(g, d, p)]
-        self._log_reasons([(("ciego", g.kind, g.point), f"{g.name} en {g.point}: posicion desconocida, lejos (piso {d:.1f}) "
-                            "o jugador sin margen adentro de la zona") for g, d in ranked if (g, d) not in keep])
-        return keep
+        feet = feet_of(p.player_xy, self.cfg)
+        return sorted(((g, ground_dist(feet, g.point, p.shape, self.cfg)) for g in goals), key=lambda e: e[1])
 
     def _log_choice(self, ranked: list[tuple[Goal, float]], i: int) -> None:
         g, d = ranked[i]
@@ -1141,28 +1101,20 @@ class Bot(ApproachKeysMixin):
         return None
 
     def _take_goal(self, ranked: list[tuple[Goal, float]], i: int, p: Perception, t: float, attack_why: str) -> Transition:
-        """Va por la meta `ranked[i]`: etiqueta -> clic y ATACAR; piedra -> ACERCARSE. None si no se pudo (clic rechazado o
-        demasiadas aproximaciones a esa posicion)."""
+        """Va por la meta `ranked[i]`: clic izquierdo DIRECTO en la piedra (con o sin nombre: sin hover ni acercamiento con
+        teclado; el personaje camina solo) y ATACAR, donde decide el panel. None si el clic no se pudo mandar."""
         g = ranked[i][0]
         if g.kind == "etiqueta":
             c: _Cand = g.ref
-            if self._keys_approach(ranked[i][1]):   # lejos: alinear la vista, W hasta cerca, frenar y UN clic quieto
-                return self._start_walk(g, ranked, i, p, t)
-            if not self._click_attack(self._clear_point(self._aim(c.det, p), p), c.gp, p, t, ranked[i][1]):
-                return None
-            self._log_choice(ranked, i)
-            self._no_target_t = t
-            return State.ATACAR, attack_why
-        fc: _FarCand = g.ref
-        spot = self._register_approach(fc.gp, fc.far.center, p, t)
-        if spot is None:   # demasiadas aproximaciones a esa posicion: ya quedo ignorada
+            point, gp = self._clear_point(self._aim(c.det, p), p), c.gp
+        else:
+            fc: _FarCand = g.ref
+            point, gp = self._clear_point(fc.far.rect.center, p), fc.gp
+        if not self._click_attack(point, gp, p, t, ranked[i][1]):
             return None
         self._log_choice(ranked, i)
         self._no_target_t = t
-        self._apr = _Approach(t, fc.gp, fc.far.center, spot=spot, point=fc.far.rect.center, floor_d=ranked[i][1],
-                              walk=self._keys_approach(ranked[i][1]))
-        est = "" if fc.gp is None else f", est. ({fc.gp[0]:.0f}, {fc.gp[1]:.0f})"
-        return State.ACERCARSE, f"piedra lejana en {fc.far.center}{est}"
+        return State.ATACAR, attack_why if g.kind == "etiqueta" else f"{attack_why} (piedra sin nombre: decide el panel)"
 
     # ------------------------------------------------------------------ metin en curso
     def _current_dist(self, screen: tuple[int, int], gp: Xy | None) -> float | None:
@@ -1213,7 +1165,7 @@ class Bot(ApproachKeysMixin):
             self._no_target_t = t
             return State.ATACAR, attack_why + " (en curso)"
         lost = t - c.last_seen_t
-        others = any(g.kind == "etiqueta" for g, _ in ranked)   # otro metin objetivo con etiqueta a la vista
+        others = bool(ranked)   # otro metin a la vista (con o sin nombre): se lo suelta enseguida (keep_with_others_s)
         if r is not None:
             others = False   # `attack.after_captcha_keep_s` tras el captcha no se lo suelta por "hay otro a la vista"
         keep = float(self.atk["keep_with_others_s"] if others else self.atk["target_keep_s"])
@@ -1361,8 +1313,43 @@ class Bot(ApproachKeysMixin):
         logger.info("Punto de clic %s con monstruos encima (a %.0f px): uso %s (a %.0f px)", point, gap(point), best, gap(best))
         return best
 
+    def _near_target(self, p: Perception, t: float) -> bool:
+        """Hay un metin OBJETIVO (con su nombre) a la vista a piso <= `approach.near_floor` que se puede elegir (no ignorado ni
+        claramente afuera de la zona mas la tolerancia): el bot no se va a otro lado (VOLVER, centro, puntos, vuelta)."""
+        if not p.metins:
+            return False
+        feet, lim = feet_of(p.player_xy, self.cfg), float(self.apr["near_floor"])
+        return any(c.det.is_target and ground_dist(feet, c.det.click_point, p.shape, self.cfg) <= lim
+                   for c in self._label_view(p, t)[0])
+
+    def _stay_for(self, a: _Attack, p: Perception) -> bool:
+        """Atacando con el personaje afuera de la zona: el metin del ataque sigue a la vista a piso <= `approach.near_floor` y
+        no esta claramente afuera de la zona mas la tolerancia -> se sigue atacando (no se va a VOLVER hasta romperlo). Su
+        posicion: la de la camara o la del rumbo del minimapa; sin ninguna, la del jugador (pegado al metin), que ya esta afuera
+        de la zona mas la tolerancia: claramente afuera."""
+        feet, lim = feet_of(p.player_xy, self.cfg), float(self.apr["near_floor"])
+        r = float(self.atk["relocate_px"])
+        near = [(d, fd) for d in p.metins if math.dist(d.click_point, a.click) <= r
+                and (fd := ground_dist(feet, d.click_point, p.shape, self.cfg)) <= lim]
+        if not near:
+            return False
+        d, fd = min(near, key=lambda e: e[1])
+        w = a.gp if a.gp is not None else self._heading_pos(d.click_point, p, self._heading())
+        if w is not None:
+            return self.zone.accepts(w)
+        return False
+
+    def _attack_near(self, p: Perception, t: float, why: str) -> Transition:
+        """Regla c: antes de irse (VOLVER, CENTRO) un metin objetivo cerca a la vista se ataca."""
+        if self._near_target(p, t):
+            return self._pick_goal(p, t, why)
+        return None
+
     def _do_buscar(self, p: Perception, t: float) -> Transition:
         if self._zone_status() is ZoneStatus.OUTSIDE:
+            out = self._attack_near(p, t, "metin objetivo cerca (no me voy hasta romperlo)")
+            if out is not None:
+                return out
             return State.VOLVER, "fuera de la zona"
         if self.pending_return:
             pos = self.tracker.position
@@ -1374,7 +1361,7 @@ class Bot(ApproachKeysMixin):
             handled, out = self._go_next(p, t)
             if handled:
                 return out
-        if self._cur is None and self._list_ready(t):
+        if self._cur is None and self.ex["candidate_list"] and self._list_ready(t):
             return State.EXPLORAR, f"hay {len(self.cands)} candidatos en la lista: giro hacia el mejor"
         out = self._pick_goal(p, t, "metin elegido")
         if out is not None:
@@ -1514,8 +1501,17 @@ class Bot(ApproachKeysMixin):
             self._track_click(a, p)
         if not rotated:
             self._touch_current(a, p, t)
+        if kind is not None:
+            a.panel_seen = True
         if kind == "target_metin":
             self._read_panel(a, panel, t)
+        elif not a.confirmed and not a.panel_seen and t - a.start_t >= float(self.atk["no_panel_s"]) \
+                and a.recover_t is None and a.pending is None:
+            # el clic no mostro NINGUN panel: no era un metin (o no se le pudo hacer clic): recien ahi se ignora esa posicion
+            self._ignore_position(a.gp, t, f"ningun panel {float(self.atk['no_panel_s']):.0f} s despues del clic", a.click,
+                                  seconds=float(self.apr["no_label_ignore_s"]))
+            self._atk = None
+            return self._after_reject(p, t, "ningun panel tras el clic: posicion ignorada")
         if a.recover_t is not None:   # esperando que el panel vuelva al metin tras el clic derecho
             out = self._recover_check(a, kind, p, t)
             if out is not _NO_RECOVERY:
@@ -1526,6 +1522,15 @@ class Bot(ApproachKeysMixin):
             why, count = a.pending
             a.pending = None
             return self._reclick(a, why, p, t, count)
+        if kind == "other_metin":   # el panel dice otro tipo de metin (Avaricia): se va enseguida
+            what = panel.name or kind
+            logger.info("El panel muestra %s (no es un metin objetivo): un paso atras para dejar de pegarle, me voy e "
+                        "ignoro esa posicion", what)
+            # el clic izquierdo lo hace atacar hasta que pase otra cosa: un paso con teclado corta el ataque
+            if self._hold_chunked(lambda sec: self.gi.hold_keys(["move_down"], sec), float(self.atk["leave_s"])) == "captcha":
+                return None
+            self.tracker.forget_reference()
+            return self._discard(a, f"{what} confirmado por el panel", p, t)
         if kind in WRONG_PANEL_KINDS:
             what = panel.name or kind
             wrong_n = self._count_wrong(a)
@@ -1580,29 +1585,18 @@ class Bot(ApproachKeysMixin):
             handled, out = self._attack_ended(a, p, t, kind is not None)
             if handled:
                 return out
-        if self._zone_status() is ZoneStatus.OUTSIDE:
-            self._atk = None
-            if a.gp is None or not self.zone.accepts(a.gp):   # su posicion queda afuera (o no se sabe): no volver a caer
-                self._add_discard(a, t)
-                self._cur = None
-                logger.info("Metin descartado: salio de la zona atacandolo (posicion %s)",
-                            "desconocida, sin camara" if a.gp is None else f"est. ({a.gp[0]:.0f}, {a.gp[1]:.0f})")
-                self._dbg("descarte", "salio de la zona atacando: metin descartado")
+        if self._zone_status() is ZoneStatus.OUTSIDE and not self._stay_for(a, p):
+            # yendo hacia el metin el personaje salio de la zona mas la tolerancia y el metin no esta cerca a la vista: queda
+            # claramente afuera (aunque no se sepa su posicion exacta): se ignora para no volver a caer
+            self._atk = self._cur = None
+            self._ignore_position(a.gp, t, "metin afuera de la zona mas la tolerancia (sali de la zona yendo a el)", a.click)
             return State.VOLVER, "salio de la zona atacando"
-        if t - a.start_t > float(self.atk["max_seconds"]):
-            if not self._keep_low_hp(a):
-                return self._discard(a, "tiempo maximo de ataque", p, t)
-            if t - a.reclick_t >= float(self.atk["reclick_wait_s"]) and t - a.hp_down_t >= float(self.atk["hp_progress_s"]) \
-                    and (self._scan is None or self._scan.steps == 0) and self._click_gate() is None:
-                logger.info("Tiempo maximo de ataque (%.0f s) con la vida del metin en %.0f%% (menos de %.0f%%): no lo abandono, "
-                            "reclic y sigo", t - a.start_t, (a.last_hp or 0) * 100, float(self.atk["max_seconds_keep_hp"]) * 100)
-                return self._reclick(a, "tiempo maximo con la vida baja", p, t, count=False)
         if kind == "target_metin" and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
             self._scan_while_attacking(a, p, t)   # pegando: es el momento de mirar alrededor
             return None   # esta pegando (la vida baja): no se reclickea por ningun motivo
         if self._scan is not None and self._scan.steps != 0:
             return None   # camara girada y la vida sin bajar: ni reclic ni destrabe; `_scan_guard` corta el barrido enseguida
-        if kind == "target_metin" or not a.confirmed:
+        if kind == "target_metin" or (not a.confirmed and a.panel_seen):   # sin ningun panel decide attack.no_panel_s
             quiet, fast = t - max(a.move_t, a.last_click_t), float(self.stuck["fast_s"])
             if quiet >= fast and t - a.hp_down_t >= fast and not self._arrived_at(a, p):
                 return self._unstick_ladder(a, quiet, p, t)
@@ -1612,6 +1606,11 @@ class Bot(ApproachKeysMixin):
                 if stalled >= float(self.atk["blocked_s"]) and self._blocked_why(a, t) == "girando en circulo":
                     return self._unblock(a, "girando en circulo", stalled, p)
                 if stalled >= float(self.atk["reclick_stall_s"]):
+                    if a.reclicks >= int(self.atk["max_reclicks"]) and self._click_gate() is None:
+                        # reclics sin que baje la vida (algo en el medio): no se descarta, se destraba (paso al costado,
+                        # ESPACIO, DESTRABAR) y se sigue con el mismo metin
+                        a.reclicks = 0
+                        return self._unstick_ladder(a, t - max(a.move_t, a.last_click_t), p, t)
                     return self._reclick(a, "la vida no baja", p, t)
         elif not a.walking and t - max(a.last_click_t, a.progress_t) >= float(self.atk["confirm_timeout_s"]):
             if a.reclicks >= 1 and self.tracker.is_stuck(t):   # ya se reintento una vez y no avanza
@@ -1691,11 +1690,6 @@ class Bot(ApproachKeysMixin):
                     c.unstick_n = c.deselects = 0   # avanza: las escaleras de destrabe y de reclics vuelven a empezar
         a.zero = a.zero + 1 if hp is not None and hp <= 0 else 0
 
-    def _keep_low_hp(self, a: _Attack) -> bool:
-        """Pasado `attack.max_seconds`: True si el metin NO se abandona porque la ultima vida leida en el panel esta por
-        debajo de `attack.max_seconds_keep_hp` (se reclickea y se sigue)."""
-        return a.confirmed and a.last_hp is not None and 0 < a.last_hp < float(self.atk["max_seconds_keep_hp"])
-
     def _attack_ended(self, a: _Attack, p: Perception, t: float, panel_present: bool) -> tuple[bool, Transition]:
         """El panel dejo de mostrar el metin (o la vida llego a 0). (True, transicion) si se resolvio; (False, None) para
         seguir con el ataque. ROTO solo con vida baja (`broken_hp_ratio`), piedra que ya no se ve y `min_break_s` de ataque;
@@ -1755,14 +1749,8 @@ class Bot(ApproachKeysMixin):
         c = a.cm
         if c is not None:
             c.deselects += 1
-            if c.deselects > int(self.atk["max_deselect_reclicks"]):
+            if c.deselects > int(self.atk["max_deselect_reclicks"]):   # no se lo suelta: sigue el reclic (otro punto)
                 c.deselects, c.rounds = 0, c.rounds + 1
-                if c.rounds >= 2:
-                    return self._discard(a, "deseleccionado muchas veces", p, t)
-                logger.info("Panel perdido %d veces seguidas: dejo de reclickear y vuelvo a BUSCAR con el metin en curso",
-                            int(self.atk["max_deselect_reclicks"]))
-                self._atk = None
-                return State.BUSCAR, "reclics por deseleccion agotados"
         if hp is not None and hp >= float(self.atk["recover_hp"]) and self._try_recover(a, p, t, "panel perdido con vida "
                                                                                             "100%", lost=True):
             a.missing = a.gone = 0
@@ -1818,9 +1806,6 @@ class Bot(ApproachKeysMixin):
         n, mx = c.unstick_n, int(self.atk["max_unstick"])
         if n > mx:
             c.unstick_n, c.ladders = 0, c.ladders + 1
-            if c.ladders >= 2 or self._cur is not c:   # sin panel que lo confirme no queda en curso: se lo descarta   # ya paso por DESTRABAR una vez y sigue sin poder llegar: inalcanzable
-                logger.info("Metin en curso inalcanzable: segunda escalera de destrabe agotada, lo descarto")
-                return self._discard(a, "inalcanzable", p, t)
             logger.info("Trabado yendo al metin: %d intentos (ESPACIO y pasos al costado) sin salir: DESTRABAR "
                         "(sigo con el mismo metin despues)", mx)
             self._atk = None
@@ -1891,9 +1876,7 @@ class Bot(ApproachKeysMixin):
         if not a.confirmed and a.clicks >= int(self.apr["max_clicks"]):
             return self._give_up(a, f"{a.clicks} clics sin confirmar ({why})", p, t)
         if count:
-            a.reclicks += 1
-        if a.reclicks > int(self.atk["max_reclicks"]):
-            return self._discard(a, f"{why}, demasiados reclics", p, t)
+            a.reclicks += 1   # (sin tope: un metin a la vista no se descarta por reclics)
         cands = self._candidates(p, t, check_discards=False)   # el metin en curso ya es el elegido
         point = self._relocate(a, p, cands)
         if point is not None:
@@ -2618,19 +2601,16 @@ class Bot(ApproachKeysMixin):
                         "estimada %.0f s)", s.x, s.y, self.spawns.last_sample, self.spawns.respawn_of(s))
 
     def _start_explore(self) -> None:
-        """Al entrar a EXPLORAR (sin metin a la vista): primero el punto conocido mas cercano que ya deberia tener metin
-        (mirando mientras camina y al llegar, `_spawn_leg`); la vuelta de busqueda completa solo si no hay ninguno listo o
-        se esta buscando el metin en curso."""
+        """Al entrar a EXPLORAR (sin metin a la vista): girar la camara de a pasos y frenar en el primer metin que aparezca;
+        recien al terminar la vuelta sin nada, el punto conocido mas cercano (`_new_leg`), y ahi se repite."""
         self._new_sweep()
-        if self._cur is None:
-            self._spawn_leg(self._ex, self.clock())
 
     def _spawn_leg(self, x: _Explore, t: float) -> bool:
         """Si hay un punto conocido listo, el tramo va hacia el: True. Si no, False (exploracion al azar)."""
         pos = self.tracker.position
         if pos is None or not len(self.spawns):
             return False
-        spot = self.spawns.next_target(pos, self.zone.accepts)
+        spot = self.spawns.next_target(pos, self.zone.accepts) or self.spawns.nearest(pos, self.zone.accepts)
         if spot is None:
             wait = self.spawns.seconds_until_ready(self.zone.accepts)
             if wait is not None:
@@ -2689,7 +2669,9 @@ class Bot(ApproachKeysMixin):
         x = self._ex
         pos0 = self.tracker.position
         h = self._heading() if x.phase in ("sweep", "aim") and pos0 is not None else None
-        listing = h is not None   # vuelta unica con lista de candidatos en el mapa (si no, el modo anterior)
+        # vuelta con lista de candidatos en el mapa: apagada en la decision simple (`explore.candidate_list`): cada paso de la
+        # vuelta mira y frena en el primer metin que aparece
+        listing = h is not None and bool(self.ex["candidate_list"])
         if not listing or self._cur is not None:   # con la lista no se elige a mitad de vuelta (salvo retomar el metin en curso)
             out = self._pick_goal(p, t, "metin a la vista")
             if out is not None:
@@ -2758,13 +2740,8 @@ class Bot(ApproachKeysMixin):
             if self._walk is not None:   # parar antes de mirar
                 self._brake(p)
                 self._walk = None
-            if x.spot is not None:   # llegado: mira ahi (sin vuelta); agotado: al proximo punto
+            if x.spot is not None:   # llegado o agotado: visitado; ahi se repite todo (mirar, girar la camara de a pasos)
                 self.spawns.mark_visited(x.spot)
-                if res == "arrived":
-                    x.phase, x.looks = "spot_look", 0
-                else:
-                    self._next_spot_or_sweep(t)
-                return None
             self._new_sweep()
         return None
 
@@ -2976,7 +2953,11 @@ class Bot(ApproachKeysMixin):
         return self._go_back(p, t, State.CENTRO)
 
     def _go_back(self, p: Perception, t: float, kind: State) -> Transition:
-        """VOLVER: hacia el centro hasta quedar adentro con margen. CENTRO: hasta `center.arrive_dist` del centro."""
+        """VOLVER: hacia el centro hasta quedar adentro con margen. CENTRO: hasta `center.arrive_dist` del centro. Antes de
+        irse, un metin objetivo cerca a la vista se ataca (regla c)."""
+        out = self._attack_near(p, t, "metin objetivo cerca (no me voy hasta romperlo)")
+        if out is not None:
+            return out
         pos = self.tracker.position
         if pos is None:
             self.pending_return = False

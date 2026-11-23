@@ -108,9 +108,6 @@ DEFAULTS: dict[str, Any] = {
     "loop": {"cycle_ms": 150, "captcha_full_search_every": 10, "hold_chunk_s": 0.5},
     # ATACAR: tiempos en s, descarte en minutos, radio de descarte en unidades del juego.
     "attack": {"confirm_timeout_s": 6.0, "hp_stall_s": 8.0, "max_reclicks": 3, "max_seconds": 120.0,
-               # max_seconds_keep_hp: pasado max_seconds, un metin con la vida por debajo de esta fraccion NO se abandona:
-               # reclic en el metin (cada reclick_wait_s si la vida no baja) y se sigue atacando.
-               "max_seconds_keep_hp": 0.20,
                "broken_confirm_cycles": 2, "discard_minutes": 10.0, "discard_radius": 8.0, "discard_error_frac": 0.3,
                "max_wrong_selections": 3,
                # blocked_s: confirmado, vida sin bajar y quieto/en circulo -> ESPACIO; circle_ratio: recorrido > ratio x
@@ -142,7 +139,7 @@ DEFAULTS: dict[str, Any] = {
                # Punto de clic: el de la etiqueta (click_dy debajo de ella) se corre hacia arriba label_click_up_frac * click_dy
                # px para caer en el cuerpo de la piedra y no en el piso. Verificacion: a los confirm_wait_s del clic sin panel
                # de metin, reclic mejor apuntado (hasta quick_reclicks; si cae en el mismo punto, quick_up_px mas arriba).
-               "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 2, "quick_up_px": 10,
+               "label_click_up_frac": 0.37, "confirm_wait_s": 1.5, "quick_reclicks": 0, "quick_up_px": 10,
                # RITMO DE CLICS: ningun clic izquierdo de ataque a menos de min_click_gap_s del anterior ni con el personaje en
                # movimiento (coordenadas cambiando). name_gap_px: el clic nunca cae a menos de tantos px debajo del nombre.
                # PANEL AUSENTE (error del juego: a veces atacando un metin no aparece la barra de vida): si el personaje esta
@@ -150,6 +147,11 @@ DEFAULTS: dict[str, Any] = {
                # el cuerpo del monstruo por episodio; si el panel vuelve al metin sigue atacando, si no en recover_wait_s hay un
                # clic izquierdo al metin. La senal por animacion del arma NO se implemento (no es confiable sin secuencias).
                "min_click_gap_s": 1.5, "name_gap_px": 20, "panel_recover": True, "recover_wait_s": 1.5,
+               # DECISION SIMPLE: tras el clic en un metin (con o sin nombre) decide el panel: metin objetivo = atacar; otro
+               # metin (Avaricia) = irse e ignorar esa posicion; NINGUN panel en no_panel_s = recien ahi ignorar esa posicion.
+               "no_panel_s": 2.0,
+               # leave_s: con otro metin en el panel (Avaricia), paso atras (S) de tanto para que el personaje deje de pegarle.
+               "leave_s": 0.6,
                # PANEL PERDIDO con la vida del metin >= recover_hp (100%, error del juego): antes de seguir haciendo clic, clic
                # derecho sobre un monstruo cercano (lo selecciona sin atacarlo y el panel vuelve) y despues clic izquierdo al
                # metin; hasta recover_max veces por metin.
@@ -160,10 +162,10 @@ DEFAULTS: dict[str, Any] = {
                "wrong_high_after": 2, "wrong_space_s": 1.5, "high_frac": 0.45, "high_up_px": 30,
                # Metin en curso: se lo busca a <= relocate_px de su ultimo punto de pantalla (o por posicion estimada) y no
                # se elige otro; si no aparece en target_keep_s se lo suelta.
-               "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 8.0,
+               "relocate_px": 150, "target_keep_s": 25.0, "keep_with_others_s": 0.0,
                # Buscar el proximo metin MIENTRAS se ataca (solo con la vida bajando desde hace scan_after_s): hasta scan_steps
                # pasos de Q/E y vuelta a la posicion original. Lo encontrado se recuerda next_keep_s (ver Bot._scan_while_attacking).
-               "scan_enabled": True, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
+               "scan_enabled": False, "scan_after_s": 5.0, "scan_steps": 12, "next_keep_s": 60.0,
                "scan_hp_margin_s": 2.0,
                # Bichos encima (nombres rojos pegados al amarillo del personaje, vision.monsters.on_me_px): ESPACIO antes de
                # reclickear (deseleccion, seleccion equivocada, trabado). on_me_space_s = duracion de ESPACIO en esos casos.
@@ -216,7 +218,9 @@ DEFAULTS: dict[str, Any] = {
     # tramo nuevo se aparta tanto de los ultimos rumbos. camera_steps x camera_step_s deberia dar ~360 grados. (Estimados.)
     # visited_keep: puntos recientes que la exploracion trata de no repetir; leg_tiebreak_units: desempate al azar
     # (unidades) entre destinos de tramo parecidos.
-    "explore": {"camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
+    # candidate_list: vuelta con lista de candidatos en el mapa (apagada: DECISION SIMPLE, cada paso de la vuelta mira y frena
+    # en el primer metin que aparece; sin metin en toda la vuelta, el punto conocido mas cercano).
+    "explore": {"candidate_list": False, "camera_steps": 12, "camera_step_s": 0.5, "walk_timeout_s": 20.0, "border_margin": 25.0,
                 "leg_s": 10.0, "leg_units": 45.0, "max_without_metin_s": 90.0, "min_leg_sep_deg": 60.0,
                 "recent_legs": 3, "visited_keep": 8, "leg_tiebreak_units": 3.0,
                 # edge_return_u: adentro a menos de esto del borde con el tramo alejandose del poligono (o un barrido
@@ -589,7 +593,8 @@ def resolve_path(p: str | Path) -> Path:
 OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("approach", "blind_screen_px"),
                  ("pickup", "monster_gap_px"), ("pickup", "still_s"), ("pickup", "walk_timeout_s"),
                  ("pickup", "tries_per_item"), ("pickup", "stall_steps"), ("pickup", "stall_gain_px"),
-                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("pickup", "dismount_hp"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
+                 ("pickup", "press_interval_ms"), ("pickup", "reposition_s"), ("pickup", "dismount_hp"),
+                 ("attack", "max_seconds_keep_hp"), ("attack", "walk_stuck_s"), ("stuck", "surrounded_s"),
                  ("attack", "confirm_check_s"),
                  # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
                  ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"), ("approach", "click_floor"),
@@ -1109,13 +1114,13 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                     "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_after_s", "scan_steps",
                     "next_keep_s", "scan_hp_margin_s", "keep_with_others_s", "arrive_px", "label_click_up_frac",
                     "confirm_wait_s", "quick_reclicks", "quick_up_px", "on_me_space_s", "after_captcha_keep_s",
-                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s", "recover_hp", "recover_max",
+                    "lost_swap_after", "min_click_gap_s", "name_gap_px", "recover_wait_s", "recover_hp", "recover_max", "no_panel_s", "leave_s",
                     "wrong_high_after", "wrong_space_s", "high_frac", "high_up_px"),
          ("confirm_timeout_s", "hp_stall_s", "max_seconds", "broken_confirm_cycles", "discard_minutes", "discard_radius",
           "max_wrong_selections", "blocked_s", "circle_ratio", "blocked_window_frac", "walk_max_s", "unstick_space_s",
           "broken_gone_px", "min_break_s", "broken_wait_s", "max_deselect_reclicks", "hp_progress_s", "reclick_stall_s",
           "monster_clear_px", "sidestep_s", "max_unstick", "relocate_px", "target_keep_s", "scan_steps",
-          "next_keep_s", "keep_with_others_s", "confirm_wait_s", "lost_swap_after", "min_click_gap_s", "recover_wait_s"))
+          "next_keep_s", "confirm_wait_s", "lost_swap_after", "min_click_gap_s", "recover_wait_s", "no_panel_s"))
     a = cfg["attack"]
     if not isinstance(a.get("panel_recover"), bool):
         raise ConfigError("attack.panel_recover debe ser true o false")
@@ -1127,9 +1132,6 @@ def _validate_tracking_navigation(cfg: dict) -> None:
         raise ConfigError("attack.scan_enabled debe ser true o false")
     if not 0 <= a["label_click_up_frac"] < 1:
         raise ConfigError("attack.label_click_up_frac debe estar en [0, 1)")
-    keep = a.get("max_seconds_keep_hp")
-    if isinstance(keep, bool) or not isinstance(keep, (int, float)) or not 0 <= keep < 1:
-        raise ConfigError("attack.max_seconds_keep_hp debe ser una fraccion en [0, 1) (0.20 = 20% de vida; 0 = siempre abandona)")
     if not 0 < a["broken_hp_ratio"] <= 1:
         raise ConfigError("attack.broken_hp_ratio debe ser un numero entre 0 y 1")
     offs = a["clear_offsets_px"]
@@ -1155,6 +1157,8 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                      "settle_s", "settle_frames", "edge_return_u"),
          ("camera_step_s", "walk_timeout_s", "leg_s", "leg_units", "max_without_metin_s", "visited_keep", "settle_frames"))
     ex = cfg["explore"]
+    if not isinstance(ex.get("candidate_list"), bool):
+        raise ConfigError("explore.candidate_list debe ser true o false")
     for k in ("sweep_deg", "sweep_max_factor", "aim_tol_deg", "aim_max_turns", "candidate_keep_s", "candidate_merge_u",
               "candidate_tie_u", "candidate_max_u", "candidate_walk_u", "candidate_broken_u",
               "sweep_step_deg", "sweep_max_hovers", "center_return_u", "ground_scale_u", "ground_scale_ema", "ground_reach_u"):

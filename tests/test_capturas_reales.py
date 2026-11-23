@@ -98,8 +98,7 @@ def test_elige_el_metin_de_enfrente(load_sample):
     ("metin_cerca_sin_seleccionar.png", (840, 420)),
     ("metin_oscuridad_a_distancia.png", (157, 400)),
     # el mas cercano es la piedra SIN nombre de la derecha: clic directo (sin hover), el panel decide
-    pytest.param("real_tres_metin_hover.png", (1407, 362),
-                 marks=pytest.mark.xfail(strict=True, reason="hoy va a ACERCARSE (hover); se arregla en el punto 4"))])
+    ("real_tres_metin_hover.png", (1407, 362))])
 def test_con_un_metin_a_la_vista_hace_clic_en_el_mas_cercano(load_sample, name, where):
     h, clicks = _decide_on(load_sample(name))
     assert h.bot.state is State.ATACAR and clicks, (h.seen, clicks)

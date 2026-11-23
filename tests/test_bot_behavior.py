@@ -313,7 +313,7 @@ def test_regla_e_barrido_y_tramos_encuentran_un_metin_lejano():
     env.run_until(lambda: not m.alive or any(t.new == "ATACAR" for t in env.transitions), max_s=600)
     assert any(t.new == "ATACAR" for t in env.transitions)
     assert sum(1 for e in env.backend.events if e in (("key_down", "q"), ("key_down", "e"))) >= env.cfg["explore"]["camera_steps"]
-    assert any(t.new == "ACERCARSE" for t in env.transitions)
+    assert not any(t.new == "ACERCARSE" for t in env.transitions)   # decision simple: clic directo, sin hover
 
 
 def test_sin_ningun_objetivo_en_el_tiempo_maximo_va_al_centro():
@@ -323,40 +323,6 @@ def test_sin_ningun_objetivo_en_el_tiempo_maximo_va_al_centro():
 
 
 # ---------------------------------------------------------------- ACERCARSE
-def test_acercarse_piedra_lejana_aparece_la_etiqueta_y_ataca():
-    env = SimEnv(1, start=(480, 150))
-    m = env.world.add_metin((580, 150))
-    env.run_until(lambda: any(t.new == "ATACAR" for t in env.transitions), max_s=120)
-    news = [t.new for t in env.transitions]
-    assert news[:2] == ["ACERCARSE", "ATACAR"]
-    env.run_until(lambda: not m.alive, max_s=200)
-    assert not m.alive
-
-
-def test_acercarse_si_es_avaricia_ignora_esa_posicion(caplog):
-    caplog.set_level(logging.INFO)
-    env = SimEnv(1, start=(480, 150))
-    env.cfg["explore"]["center_laps"] = 0   # la busqueda recorre la zona (tramos al azar) para encontrar la piedra
-    ava = env.world.add_metin((580, 150), name=AVA)
-    env.run_until(max_s=200)
-    assert all(m is not ava for _, m in env.world.clicks_on_metin)
-    assert env.bot.ignored
-    assert any("posicion ignorada" in w for _, w in [(t.new, t.reason) for t in env.transitions])
-    # una vez calibrada la camara no vuelve a acercarse a la misma posicion
-    last = [t for t in env.transitions if t.new == "ACERCARSE"]
-    assert len(last) <= 3 and not any(t.t > 100 for t in last)   # 1a a ciegas, 2a ya ubicada, y no mas
-    assert any("piedra lejana: posicion ignorada" in x for x in messages(caplog))
-
-
-def test_acercarse_fuera_de_la_zona_loguea_el_motivo_y_no_camina(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(coords=(700, 150), far=[far_at(1800, 548)]))
-    h.train_camera()
-    h.bot.step()     # un ciclo: la camara todavia esta lista (el barrido de EXPLORAR la invalida)
-    assert State.ACERCARSE not in h.states() and h.clicks() == 0
-    assert any("piedra lejana fuera de zona" in x and "est. (" in x and "d=-" in x for x in messages(caplog))
-
-
 def test_acercarse_sin_camara_y_jugador_fuera_no_se_acerca():
     h = Harness(lambda h, n: perc_far(coords=OUT_XY, far=[far_at(1300, 548)]))
     h.bot.step()
@@ -367,82 +333,6 @@ def test_acercarse_sin_camara_y_jugador_fuera_no_se_acerca():
 def hovers(h):
     """Movimientos del mouse sin clic (hover): los move_to del backend falso menos los 2 que emite cada clic."""
     return sum(1 for e in h.be.events if e[0] == "move_to") - 2 * h.clicks()
-
-
-def test_acercarse_sin_camara_en_la_tolerancia_hace_hover_y_sin_nombre_no_clickea(caplog):
-    """Sin camara, jugador en la franja de tolerancia: se acerca igual. Sin etiqueta tras hover_tries hovers: NO es un metin,
-    no hay clic y la posicion queda ignorada."""
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(coords=TOL_XY, far=[far_at(1300, 548)]))
-    h.run_until(lambda: State.ACERCARSE in h.states() and State.BUSCAR in h.states())
-    assert h.states()[:2] == [State.ACERCARSE, State.BUSCAR]
-    assert hovers(h) == 2 and h.clicks() == 0
-    kinds = [e[0] for e in h.be.events]
-    assert kinds[:2] == ["move_to", "move_to"] and "mouse_down" not in kinds
-    assert len(h.bot.ignored) == 1
-    assert any("sin nombre en el hover" in x for x in messages(caplog))
-
-
-def test_hover_etiqueta_objetivo_hace_clic_y_ataca(caplog):
-    caplog.set_level(logging.INFO)
-    fx = far_at(1300, 548)
-
-    def script(h, n):
-        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:   # el mouse esta encima: aparece la etiqueta
-            return perc(metins=[metin(click=(1300, 540))])
-        return perc_far(far=[fx])
-    h = Harness(script)
-    h.run_until(lambda: State.ATACAR in h.states())
-    assert h.states()[:2] == [State.ACERCARSE, State.ATACAR]
-    assert hovers(h) == 1 and h.clicks() == 1
-    assert any("Hover sobre piedra" in x and "etiqueta metin_de_oscuridad" in x for x in messages(caplog))
-    assert not h.bot.ignored
-
-
-def test_hover_otro_tipo_ignora_la_posicion_y_vuelve_a_buscar(caplog):
-    caplog.set_level(logging.INFO)
-
-    def script(h, n):
-        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:
-            return perc(metins=[MetinDetection(Rect(1260, 470, 80, 10), "metin_de_avaricia", 1.0, False, (1300, 540), True)])
-        return perc_far(far=[far_at(1300, 548)])
-    h = Harness(script)
-    h.run_until(lambda: State.ACERCARSE in h.states() and h.bot.state is not State.ACERCARSE)
-    assert h.seen[1][0] is State.BUSCAR and "otro tipo" in h.seen[1][1]
-    assert h.clicks() == 0 and h.bot.ignored
-    assert any("etiqueta metin_de_avaricia" in x for x in messages(caplog))
-
-
-def test_hover_sin_etiqueta_hace_hover_tries_y_clic_igual(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]), approach={"hover_tries": 3})
-    h.run_until(lambda: h.clicks() >= 1)
-    assert hovers(h) == 3
-    assert sum(1 for x in messages(caplog) if "etiqueta ninguna" in x) == 3
-
-
-def test_hover_no_manda_clic_ni_gira_la_camara():
-    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]))
-    h.run_until(lambda: State.ACERCARSE in h.states() and hovers(h) >= 1)
-    assert h.clicks() == 0
-    assert not any(e[0] == "key_down" for e in h.be.events)
-
-
-def test_acercarse_se_pierde_la_piedra_vuelve_a_buscar_sin_ignorarla():
-    def script(h, n):
-        if h.bot.state is State.ACERCARSE and hovers(h) >= 1:
-            return perc()
-        return perc_far(far=[far_at(1300, 548)])
-    h = Harness(script)
-    h.run_until(lambda: State.ACERCARSE in h.states() and h.bot.state is not State.ACERCARSE)
-    assert h.seen[1][0] is State.BUSCAR and "perdio" in h.seen[1][1]
-    assert not h.bot.ignored   # solo se perdio de vista (p. ej. al girar la camara): no se ignora 10 min
-
-
-def test_acercarse_timeout_ignora_la_posicion():
-    h = Harness(lambda h, n: perc_far(far=[far_at(1300, 548)]), approach={"max_seconds": 0.2, "hover_wait_s": 0.5})
-    h.run_until(lambda: len(h.seen) >= 2)
-    assert h.seen[1][0] is State.BUSCAR and "tiempo maximo" in h.seen[1][1] and h.bot.ignored
 
 
 # ---------------------------------------------------------------- diagnostico (sin spam)
@@ -456,23 +346,8 @@ def test_log_del_motivo_de_cada_metin_no_elegido_sin_spam(caplog):
     for _ in range(12):
         h.bot.step()
     msgs = [x for x in messages(caplog) if x.startswith("No elegido:")]
-    assert sorted(msgs) == ["No elegido: clic no permitido (interfaz)", "No elegido: tipo ignorado (metin_de_avaricia)"]
-
-
-def test_log_descartado_hasta_y_fuera_de_zona(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc(metins=[label(OSC, True)]))
-    h.train_camera()
-    h.bot.tracker.update(Coords(*INSIDE_XY, 1.0), h.clock())
-    gp = h.bot._game_pos_of((1000, 500), perc())
-    h.bot.discarded.append(_Spot(gp, h.clock() + 600))
-    h.bot.step()
-    assert any(re.fullmatch(r"No elegido: descartado hasta \d\d:\d\d", x) for x in messages(caplog))
-    caplog.clear()
-    h2 = Harness(lambda h, n: perc(coords=(700, 150), metins=[label(OSC, True, click=(1800, 548))]))
-    h2.train_camera()
-    h2.bot.step()
-    assert any("fuera de zona (est. (" in x and "d=-" in x for x in messages(caplog))
+    # no se decide por el nombre: la etiqueta de Avaricia se cliquea (decide el panel); el clic sobre la interfaz no se manda
+    assert msgs.count("No elegido: clic no permitido (interfaz)") == 1 and not any("tipo ignorado" in x for x in msgs)
 
 
 # ---------------------------------------------------------------- DebugRecorder
@@ -482,8 +357,8 @@ def debug_cfg(tmp_path, **dbg):
 
 def scripted(h, n):
     st = h.bot.state
-    if st is State.BUSCAR and n < 3:
-        return perc(metins=[metin(), label(AVA, False, click=(300, 300))])
+    if st is State.BUSCAR and n < 3:   # (la de (400, 300) cae sobre la interfaz: "no elegido")
+        return perc(metins=[metin(), label(OSC, True, allowed=False, click=(400, 300))])
     if st is State.ATACAR:
         return perc()
     return perc()

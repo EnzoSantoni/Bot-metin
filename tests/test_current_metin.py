@@ -107,12 +107,21 @@ def test_vida_baja_pero_piedra_visible_espera_y_reclickea():
     assert h.bot.stats.metins == 0 and not calls and clicks_xy(h)[-1] == AIM
 
 
-def test_deselecciones_agotadas_vuelve_a_buscar_con_el_metin_en_curso():
+def test_deselecciones_agotadas_no_sueltan_el_metin_y_sigue_el_reclic():
+    """Decision simple: un metin a la vista no se descarta ni se deja por deselecciones: sigue el reclic."""
     h = Harness(None, attack={"max_deselect_reclicks": 2})
     h.script, _ = scripted(lambda i: target_panel(0.9) if i <= 3 else None, stone=lambda i: [metin(A_POINT)])
-    h.run_until(lambda: State.BUSCAR in h.states())
-    assert h.clicks() == 3   # clic inicial + 2 reclics
-    assert h.bot._cur is not None and h.bot.stats.metins == 0
+    h.run_until(lambda: h.clicks() >= 6, limit=600)
+    assert h.bot.state is State.ATACAR and h.bot._cur is not None and not h.bot.ignored
+    assert State.BUSCAR not in h.states()
+
+
+def lose_current(h):
+    """Confirma el metin y despues se lo pierde de vista: BUSCAR con el metin en curso (como 'no veo la piedra para
+    reclickear')."""
+    h.run_until(lambda: h.bot._cur is not None)
+    h.bot._atk = None
+    h.bot._enter(State.BUSCAR, "test: no veo la piedra para reclickear (el metin sigue en curso)")
 
 
 # ---------------------------------------------------------------- 2. no reclickear si pega
@@ -234,8 +243,8 @@ def test_metin_en_curso_solo_existe_tras_confirmar_el_panel():
 
 def test_metin_en_curso_que_no_aparece_en_target_keep_s_se_suelta(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(confirmed_then_lost(lambda h: [], confirmed_cycles=3), attack={"max_deselect_reclicks": 2})
-    h.run_until(lambda: h.bot._cur is not None and State.BUSCAR in h.states())
+    h = Harness(confirmed_then_lost(lambda h: [], confirmed_cycles=3), )
+    lose_current(h)
     t0 = h.clock.t
     h.run_until(lambda: h.bot._cur is None, limit=3000)
     assert h.clock.t - t0 >= float(h.cfg["attack"]["target_keep_s"]) - 1.0
@@ -244,28 +253,27 @@ def test_metin_en_curso_que_no_aparece_en_target_keep_s_se_suelta(caplog):
 
 
 def test_metin_en_curso_se_suelta_a_los_keep_with_others_s_con_otro_objetivo_a_la_vista(caplog):
-    """Mientras se busca el metin en curso perdido, con otro metin objetivo con etiqueta a la vista: no dice 'no hay metin
-    visible' (espera en BUSCAR) y lo suelta a los 8 s (no a los 25 s) para ir al otro."""
+    """Mientras se busca el metin en curso perdido, con otro metin a la vista: lo suelta enseguida (keep_with_others_s 0:
+    nunca impide elegir un metin visible) y va al otro."""
     caplog.set_level(logging.INFO)
     other = metin((1300, 700))   # lejos del ultimo punto de A (no es el mismo metin)
-    h = Harness(confirmed_then_lost(lambda h: [other], confirmed_cycles=3), attack={"max_deselect_reclicks": 2})
-    h.run_until(lambda: h.bot._cur is not None and State.BUSCAR in h.states())
+    h = Harness(confirmed_then_lost(lambda h: [other], confirmed_cycles=3), )
+    lose_current(h)
     t0 = h.clock.t
     n_states = len(h.states())
     h.run_until(lambda: (1300, 676) in clicks_xy(h), limit=3000)
     elapsed = h.clock.t - t0
-    keep, long_keep = float(h.cfg["attack"]["keep_with_others_s"]), float(h.cfg["attack"]["target_keep_s"])
-    assert keep - 1.0 <= elapsed < long_keep - 1.0
+    assert elapsed < 2.0
     assert State.EXPLORAR not in h.states()[n_states - 1:]
     assert not any("no hay metin visible" in m for m in messages(caplog))
     assert any("Abandono el metin en curso" in m and "otro metin objetivo a la vista" in m for m in messages(caplog))
-    assert any("Busco el metin en curso" in m for m in messages(caplog))
+
 
 
 def test_sin_otro_objetivo_el_metin_en_curso_sigue_target_keep_s_aunque_haya_piedras(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(confirmed_then_lost(lambda h: [], confirmed_cycles=3), attack={"max_deselect_reclicks": 2})
-    h.run_until(lambda: h.bot._cur is not None and State.BUSCAR in h.states())
+    h = Harness(confirmed_then_lost(lambda h: [], confirmed_cycles=3), )
+    lose_current(h)
     t0 = h.clock.t
     h.run_until(lambda: h.clock.t - t0 > float(h.cfg["attack"]["keep_with_others_s"]) + 3.0, limit=3000)
     assert h.bot._cur is not None   # sin otras etiquetas a la vista no se lo suelta a los 8 s
@@ -275,9 +283,9 @@ def test_metin_en_curso_se_busca_por_posicion_si_la_camara_giro(caplog):
     """Con la camara calibrada, el metin en curso se reconoce por su posicion estimada aunque la pantalla cambie."""
     caplog.set_level(logging.INFO)
     h = Harness(confirmed_then_lost(lambda h: [metin((1040, 500))], confirmed_cycles=3),
-                attack={"max_deselect_reclicks": 2})
+)
     h.train_camera()
-    h.run_until(lambda: h.bot._cur is not None and State.BUSCAR in h.states())
+    lose_current(h)
     h.bot.camera.rotations += 1   # la camara giro: el punto de pantalla ya no vale, queda la posicion estimada
     n0 = h.clicks()
     h.run_until(lambda: h.clicks() > n0, limit=300)

@@ -53,29 +53,34 @@ def test_piedra_baja_sin_etiqueta_va_al_final_aunque_sea_la_mas_cercana():
 
 
 # ---------------------------------------------------------------- hover sin nombre
-def test_hover_sin_nombre_no_clickea_la_ignora_y_elige_la_siguiente_en_el_mismo_ciclo(caplog):
+def test_piedra_sin_nombre_sin_panel_en_2_s_la_ignora_y_va_a_la_siguiente(caplog):
+    """Decision simple: clic directo (sin hover) en la piedra mas cercana; si no aparece NINGUN panel en 2 s se ignora esa
+    posicion (approach.no_label_ignore_s) y se hace clic en la siguiente."""
     caplog.set_level(logging.INFO)
     near, far = far_at(1300, 548), far_at(500, 300)
-    h = Harness(lambda h, n: perc_far(far=[near, far]))
-    h.run_until(lambda: len(h.seen) >= 1 and h.seen[-1][0] is State.ACERCARSE)
-    assert "piedra lejana en (1300, 548)" in h.seen[-1][1]
-    h.run_until(lambda: any("sin nombre en el hover" in m for m in messages(caplog)))
-    assert h.clicks() == 0 and hovers(h) == int(h.cfg["approach"]["hover_tries"])
-    assert len(h.bot.ignored) == 1
-    assert h.seen[-1][0] is State.ACERCARSE and "piedra lejana en (500, 300)" in h.seen[-1][1]   # siguiente, sin pasar por EXPLORAR
-    assert h.bot._apr.last_screen == (500, 300)
+
+    def script(h, n):
+        h.clock.t += 0.3
+        return perc_far(far=[near, far])
+    h = Harness(script)
+    h.run_until(lambda: len(h.bot.ignored) == 1, limit=60)
     exp = h.bot.ignored[0].expiry - h.clock()
     assert abs(exp - float(h.cfg["approach"]["no_label_ignore_s"])) < 5.0
+    assert hovers(h) == 0 and h.clicks() == 2       # en el mismo ciclo, clic directo en la siguiente
+    assert h.bot.state is State.ATACAR and State.ACERCARSE not in h.states()
 
 
-def test_hover_sin_nombre_la_posicion_ignorada_no_se_vuelve_a_elegir():
+def test_piedra_ignorada_por_no_tener_panel_no_se_vuelve_a_elegir():
     near = far_at(1300, 548)
-    h = Harness(lambda h, n: perc_far(far=[near]))
-    h.run_until(lambda: h.bot.ignored)
-    n0 = len(h.seen)
-    for _ in range(40):
+
+    def script(h, n):
+        h.clock.t += 0.3
+        return perc_far(far=[near])
+    h = Harness(script)
+    h.run_until(lambda: h.bot.ignored, limit=60)
+    for _ in range(20):
         h.bot.step()
-    assert not any(s is State.ACERCARSE for s, _ in h.seen[n0:])   # (los clics de EXPLORAR en el piso no cuentan)
+    assert State.ACERCARSE not in h.states() and h.states().count(State.ATACAR) == 1
 
 
 def test_hover_con_etiqueta_sigue_clickeando_el_metin_objetivo():
@@ -95,16 +100,15 @@ def test_clic_sobre_piedra_que_selecciona_monstruo_la_ignora_y_elige_la_siguient
     caplog.set_level(logging.INFO)
     a, b = far_at(1300, 548), far_at(500, 300)
     other = PanelInfo(present=True, kind="other", name=None)
-    h = Harness(lambda h, n: perc_far(panel=other, far=[a, b]))
-    h.bot.step()   # una captura primero: el input valida la ventana contra la ultima captura
-    p0 = perc_far(far=[a, b])
-    assert h.bot._click_attack(a.center, None, p0, h.clock())   # clic directo a una piedra sin etiqueta
-    assert h.bot._atk.stone
-    h.bot._enter(State.ATACAR, "prueba")
-    h.bot.step()
+    def script(h, n):
+        h.clock.t += 0.3
+        return perc_far(panel=other if h.bot.state is State.ATACAR else None, far=[a, b])
+    h = Harness(script)
+    h.run_until(lambda: len(h.bot.ignored) == 1, limit=60)   # clic directo a la piedra mas cercana (a): el panel es otra cosa
     assert any("el clic selecciono otra cosa (other)" in m for m in messages(caplog))
-    assert len(h.bot.ignored) == 1 and h.bot._cur is None
-    assert h.seen[-1][0] is State.ACERCARSE and "(500, 300)" in h.seen[-1][1]
+    assert h.bot._cur is None
+    h.run_until(lambda: h.clicks() >= 2, limit=60)            # despues, clic directo a la siguiente (b): sin hover
+    assert State.ACERCARSE not in h.states()
 
 
 def test_clic_sobre_etiqueta_que_selecciona_monstruo_no_deja_metin_en_curso():
@@ -167,7 +171,7 @@ def test_rodeado_en_explorar_con_barrido_no_aplica():
 # ---------------------------------------------------------------- config
 def test_config_nueva_validacion():
     for sec, key, bad in (("approach", "unlabeled_closer_ratio", -1), ("approach", "no_label_ignore_s", "x"),
-                          ("attack", "keep_with_others_s", 0), ("stuck", "fast_s", 0),
+                          ("attack", "keep_with_others_s", -1), ("stuck", "fast_s", 0),
                           ("stuck", "surrounded_max", 0), ("debug", "save_raw", 1)):
         cfg = make_cfg()
         cfg[sec][key] = bad

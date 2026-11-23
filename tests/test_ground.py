@@ -102,24 +102,16 @@ def test_captura_real_la_piedra_de_adelante_gana_a_la_etiqueta_de_atras(real, ho
     assert stones[0][1] < 0.5 * label[1]
 
 
-def test_captura_real_pick_goal_va_a_la_piedra_de_adelante_con_hover(real, caplog, monkeypatch):
+def test_captura_real_pick_goal_hace_clic_directo_en_la_piedra_de_adelante(real, caplog, monkeypatch):
+    """Decision simple: la piedra sin nombre mas cercana se cliquea directo (sin hover); decide el panel."""
     caplog.set_level(logging.INFO)
     h, p = _goals_of(real)
     clicked = []
-    monkeypatch.setattr(h.bot, "_click_attack", lambda point, gp, p, t: clicked.append(point) or True)
+    monkeypatch.setattr(h.bot, "_click_attack", lambda point, gp, p, t, *a: clicked.append(point) or True)
     out = h.bot._pick_goal(p, 0.0, "x")
-    assert out is not None and out[0] is State.ACERCARSE and not clicked   # piedra sin etiqueta: primero el hover
+    assert out is not None and out[0] is State.ATACAR and len(clicked) == 1
     msg = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Elegido"))
     assert msg.startswith("Elegido piedra") and "metin_de_oscuridad" in msg and "tambien:" in msg
-
-
-def test_captura_real_con_ratio_bajo_gana_la_etiqueta(real, monkeypatch):
-    """Con un umbral mas exigente (0.4) la etiqueta de atras le gana a la piedra (la regla de prioridad funciona)."""
-    h, p = _goals_of(real)
-    h.bot.cfg["approach"]["unlabeled_closer_ratio"] = 0.4
-    cands, _ = h.bot._label_view(p, 0.0)
-    far, _ = h.bot._far_view(p, 0.0)
-    assert h.bot._goals(cands, far, p)[0][0].kind == "etiqueta"
 
 
 # ---------------------------------------------------------------- eleccion (unitarios)
@@ -135,18 +127,12 @@ def test_etiqueta_a_174_px_se_ataca_con_el_jugador_adentro_o_en_tolerancia(xy):
     assert State.ATACAR in h.states() and h.clicks() == 1
 
 
-def test_etiqueta_a_174_px_no_se_ataca_con_el_jugador_afuera():
-    h = Harness(lambda h, n: perc(coords=OUT_XY, metins=[_lejos_en_pantalla(174)]))
-    h.bot.step()
-    assert State.ATACAR not in h.states() and h.clicks() == 0
-
-
 def test_elige_la_piedra_mas_cercana_aunque_haya_etiqueta_mas_lejos():
     near_stone = far_at(PLAYER[0] + 150, PLAYER[1] + 20)
     far_label = metin(click=(PLAYER[0] - 300, PLAYER[1] - 250))
     h = Harness(lambda h, n: perc_far(far=[near_stone], metins=[far_label]))
     h.bot.step()
-    assert h.states()[0] is State.ACERCARSE and h.clicks() == 0
+    assert h.states()[0] is State.ATACAR and h.clicks() == 1   # clic directo en la piedra (decide el panel)
 
 
 def test_elige_la_etiqueta_mas_cercana_aunque_haya_piedra_mas_lejos():
@@ -157,12 +143,13 @@ def test_elige_la_etiqueta_mas_cercana_aunque_haya_piedra_mas_lejos():
     assert h.states()[0] is State.ATACAR and h.clicks() == 1
 
 
-def test_piedra_debajo_de_una_etiqueta_de_otro_tipo_no_es_candidata():
+def test_piedra_debajo_de_una_etiqueta_de_otro_tipo_va_como_esa_etiqueta():
+    """No se decide por el nombre: la etiqueta de otro tipo es candidata (el panel dira Avaricia) y la piedra de abajo no va
+    aparte."""
     stone = far_at(1300, 548)
     otro = MetinDetection(Rect(1260, 470, 80, 10), "metin_de_avaricia", 1.0, False, (1300, 540), True)
     h = Harness(lambda h, n: perc_far(far=[stone], metins=[otro]))
     p = perc_far(far=[stone], metins=[otro])
-    far, why = h.bot._far_view(p, 0.0)
-    assert far == [] and any("tipo ignorado" in m for _, m in why)
-    h.bot.step()
-    assert State.ACERCARSE not in h.states()
+    far, _ = h.bot._far_view(p, 0.0)
+    cands, _ = h.bot._label_view(p, 0.0)
+    assert far == [] and [c.det for c in cands] == [otro]

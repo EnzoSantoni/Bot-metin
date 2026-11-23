@@ -164,15 +164,15 @@ def test_explorar_al_llegar_o_agotar_el_tiempo_marca_visitado(tmp_path):
     assert sm2.next_target(INSIDE_XY, ALL) is None
 
 
-def test_explorar_al_azar_si_no_hay_punto_listo(tmp_path, caplog):
+def test_sin_punto_listo_va_igual_al_punto_conocido_mas_cercano(tmp_path, caplog):
+    """Regla e: tras la vuelta sin metin, el punto conocido mas cercano aunque todavia no deberia tener metin."""
     caplog.set_level(logging.INFO)
     wall = Wall()
     sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
     sm.record_broken((600.0, 160.0))      # recien roto: no reaparecio
     h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
     _explorar_hasta_tramo(h)
-    assert h.bot._ex.spot is None and h.bot.zone.accepts(h.bot._ex.target)
-    assert any("ningun punto listo" in r.message for r in caplog.records)
+    assert h.bot._ex.spot is not None and h.bot._ex.target == (600.0, 160.0)
 
 
 def test_explorar_sin_mapa_no_cambia(tmp_path):
@@ -284,33 +284,6 @@ def test_explorar_con_punto_sin_hora_va_a_el_y_no_loguea_una_edad_absurda(tmp_pa
     assert "hora desconocida" in msg and "29921" not in msg
 
 
-def test_sin_punto_listo_va_al_centro_y_camina_hasta_llegar_antes_de_buscar(tmp_path, caplog):
-    caplog.set_level(logging.INFO)
-    wall = Wall()
-    sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
-    sm.record_broken((600.0, 160.0))      # recien roto: no reaparecio
-    h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
-    _explorar_hasta_tramo(h)
-    x = h.bot._ex
-    center = h.bot.navigator.return_target(h.bot.tracker.position)
-    if x.center:
-        assert x.target == center and x.spot is None
-        assert any("voy al centro" in r.message for r in caplog.records)
-    else:                                  # ya estaba en el centro: busca de nuevo desde ahi (nada de tramos al azar todavia)
-        assert any("busco de nuevo desde aqui" in r.message for r in caplog.records)
-
-
-# ---------------------------------------------------------------------- recorrido por puntos conocidos (sesion actual)
-def test_horas_de_otra_sesion_no_hacen_esperar_y_el_log_no_las_muestra(tmp_path):
-    wall = Wall()
-    old = make_map(tmp_path, wall)
-    old.record_broken((600.0, 160.0))          # sesion vieja: roto y visto recien para ella
-    wall.t += 30                               # la sesion nueva arranca 30 s despues (antes de respawn_s y de revisit_s)
-    m = make_map(tmp_path, wall)
-    assert m.next_target((0.0, 0.0), ALL) is m.spots[0] and m.ready_in(m.spots[0]) == 0
-    assert m.spots[0].ages(wall.t, m.session_start) == "roto hace en otra sesion, visto hace en otra sesion"
-
-
 def test_mide_la_reaparicion_y_los_puntos_sin_medir_usan_la_mediana(tmp_path):
     wall = Wall()
     m = make_map(tmp_path, wall)
@@ -329,20 +302,18 @@ def test_mide_la_reaparicion_y_los_puntos_sin_medir_usan_la_mediana(tmp_path):
     assert make_map(tmp_path, wall).spots[0].respawn_s == 25.0   # se lee de vuelta
 
 
-def test_al_entrar_a_explorar_va_primero_al_punto_y_si_no_hay_metin_al_siguiente(tmp_path, caplog):
+def test_al_entrar_a_explorar_primero_gira_la_camara_y_despues_va_al_punto(tmp_path, caplog):
+    """Reglas d y e: sin metin a la vista, primero la vuelta de camara de a pasos; recien sin nada, el punto mas cercano."""
     caplog.set_level(logging.INFO)
     wall = Wall()
     sm = SpawnMap(tmp_path / "mapa.json", 6.0, clock_wall=wall)
-    sm.record_broken((INSIDE_XY[0] + 2.0, INSIDE_XY[1]))   # al lado del jugador: llega enseguida
     sm.record_broken((600.0, 160.0))
     wall.t += 1000
     h, _, _ = spawn_harness(tmp_path, lambda h, n: perc(), wall=wall)
     h.run_until(lambda: h.bot.state is State.EXPLORAR, limit=20)
-    x = h.bot._ex
-    assert x.phase == "walk" and x.spot is not None and x.spot.x == INSIDE_XY[0] + 2.0   # sin vuelta de busqueda antes
-    h.run_until(lambda: h.bot._ex.spot is not None and h.bot._ex.spot.x == 600.0, limit=40)
-    assert any("no hay metin a la vista: sigo con el proximo" in r.message for r in caplog.records)
-    assert h.bot._ex.phase == "walk" and h.bot._ex.steps == 0
+    assert h.bot._ex.phase == "sweep" and h.bot._ex.spot is None
+    _explorar_hasta_tramo(h)
+    assert h.bot._ex.spot is not None and h.bot._ex.spot.x == 600.0
 
 
 def test_sin_puntos_listos_hace_la_vuelta_completa(tmp_path):

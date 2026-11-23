@@ -52,6 +52,9 @@ def test_la_piedra_se_movio_en_pantalla_el_reclic_va_a_su_posicion_actual_nunca_
     """La piedra estaba en (277, 183); 9 s despues, con la camara girada, en (1452, 321): se reclickeaba (428, 181)."""
     img = img_of("ataque_punto_viejo_2129.png")
     h = Harness(None)
+    # coordenadas de mentira (INSIDE_XY) con el minimapa de la captura real: el rumbo no corresponde a esa posicion (la
+    # estimacion de zona daria cualquier cosa); aca se prueba solo el punto del reclic
+    h.bot._heading = lambda: None
 
     def capture(region=None):
         h.win.last_capture_rect = h.win.client_rect_on_screen()

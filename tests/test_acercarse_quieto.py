@@ -76,24 +76,6 @@ def check_rhythm(hist, clicks, gap=1.5):
 
 
 # ---------------------------------------------------------------- acercamiento
-def test_acerca_gira_camina_frena_y_hace_un_clic_quieto(caplog):
-    caplog.set_level(logging.INFO)
-    env = kenv()
-    hist, clicks = watch(env)
-    env.world.add_metin((600.0, 90.0), name=OSC)   # de costado: la piedra se ve a la derecha, lejos del centro
-    assert env.run_until(lambda: env.world.clicks_on_metin, max_s=120) == "cond"
-    cam = [t for t, _ in key_events(env, set(env.backend.k_cam))]
-    w_key = next(k for k, d in env.backend.k_move.items() if d == "up")
-    walk = [t for t, _ in key_events(env, {w_key})]
-    assert cam and walk and cam[0] < walk[0], "primero gira la vista (Q/E) hasta centrar la piedra y recien despues camina"
-    assert len(clicks) == 1, "un solo clic en todo el acercamiento"
-    t_click = clicks[0][0]
-    assert not moved_before(hist, t_click, 0.4), "el clic sale con el personaje quieto"
-    assert t_click - walk[-1] >= 0.4 - 1e-3, "frena (sin W) antes del clic"
-    assert any("ACERCARSE -> ATACAR: quieto frente al metin" in m for m in msgs(caplog))
-    assert not any(t.reason.startswith("trabado") for t in env.transitions)
-
-
 def test_metin_cerca_en_pantalla_clic_directo_sin_girar_la_vista(caplog):
     """Metin objetivo en pantalla a piso ~3 (<= approach.near_floor), de costado: clic directo en su cuerpo, sin Q/E para
     centrarlo ni ACERCARSE (antes giraba la vista y lo perdia)."""
@@ -106,37 +88,6 @@ def test_metin_cerca_en_pantalla_clic_directo_sin_girar_la_vista(caplog):
     assert not any("Acercandome:" in m for m in msgs(caplog))
     assert not any(tr.new == "ACERCARSE" for tr in env.transitions)
     assert len(clicks) == 1 and not moved_before(hist, clicks[0][0], 0.4)
-
-
-def test_si_el_panel_no_confirma_otro_clic_quieto_despues_de_1_5_s():
-    env = kenv()
-    hist, clicks = watch(env)
-    env.world.add_metin((600.0, 90.0), name=OSC)
-    orig = env.bot._perceive
-
-    def wrapped(img, cfg, **kw):
-        p = orig(img, cfg, **kw)
-        return dataclasses.replace(p, panel=None if env.world.t < 12.0 else p.panel)   # sin panel un buen rato
-    env.bot._perceive = wrapped
-    assert env.run_until(lambda: len(clicks) >= 2, max_s=60) == "cond"
-    assert clicks[1][0] - clicks[0][0] >= 1.5 - 1e-3
-    check_rhythm(hist, clicks)
-    env.run_until(lambda: env.world.t > 15.0, max_s=60)
-    assert len(clicks) <= 4, "tope de intentos sin confirmar"
-
-
-def test_tope_de_clics_sin_confirmar_aparta_el_metin_sin_descartarlo(caplog):
-    caplog.set_level(logging.INFO)
-    env = kenv()
-    hist, clicks = watch(env)
-    env.world.add_metin((600.0, 90.0), name=OSC)
-    orig = env.bot._perceive
-    env.bot._perceive = lambda img, cfg, **kw: dataclasses.replace(orig(img, cfg, **kw), panel=None)   # nunca hay panel
-    env.run_until(lambda: any("sin confirmar:" in t.reason for t in env.transitions), max_s=120)
-    assert 1 <= len(clicks) <= 4
-    check_rhythm(hist, clicks)
-    assert all(s.expiry - env.world.t <= 31 for s in env.bot.discarded), "se aparta unos segundos, no 10 minutos"
-    assert any("no lo descarto" in m for m in msgs(caplog))
 
 
 @pytest.mark.parametrize("mode", ["teclado", "clic"])
@@ -202,40 +153,6 @@ def bug_panel(env, attacking: bool, with_monster: bool = True):
                 panel = p.panel
         return dataclasses.replace(p, panel=panel, monsters=monsters, monsters_near=near)
     env.bot._perceive = wrapped
-
-
-def test_panel_ausente_pegado_clic_derecho_sobre_monstruo_y_sigue_atacando(caplog):
-    caplog.set_level(logging.INFO)
-    env = kenv(start=(560.0, 150.0))
-    watch(env)
-    m = env.world.add_metin((585.0, 150.0), name=OSC, dps=0.02)
-    bug_panel(env, attacking=True)
-    assert env.run_until(lambda: not m.alive, max_s=240) == "cond"
-    assert len(right_clicks(env)) == 1, "un solo clic derecho por metin"
-    assert any("El panel volvio a mostrar el metin" in x for x in msgs(caplog))
-    assert len(left_click_times(env)) <= 2, "estaba atacando: no hace falta reclickear"
-    assert not any("descart" in t.reason for t in env.transitions)
-    # el clic derecho cae sobre el CUERPO del monstruo (debajo de su etiqueta), nunca en la etiqueta
-    i = next(i for i, e in enumerate(env.backend.events) if e == ("mouse_down", "right"))
-    mv = next(e for e in reversed(env.backend.events[:i]) if e[0] == "move_to")
-    cx, cy = env.window.screen_to_client(mv[1], mv[2])
-    assert cy > env.mon.bottom, "debajo de la etiqueta del monstruo"
-    assert abs(cx - env.mon.center[0]) <= 3
-
-
-def test_panel_ausente_el_panel_no_vuelve_clic_izquierdo_al_metin(caplog):
-    caplog.set_level(logging.INFO)
-    env = kenv(start=(560.0, 150.0))
-    hist, clicks = watch(env)
-    m = env.world.add_metin((585.0, 150.0), name=OSC, dps=0.02)
-    bug_panel(env, attacking=False)
-    assert env.run_until(lambda: not m.alive, max_s=240) == "cond"
-    rc = right_clicks(env)
-    assert len(rc) == 1
-    after = [t for t in left_click_times(env) if t > rc[0]]
-    assert after and after[0] - rc[0] >= 1.5 - 1e-3, "clic izquierdo al metin recien a los 1.5 s del derecho"
-    assert any("no esta atacando, clic izquierdo al metin" in x for x in msgs(caplog))
-    check_rhythm(hist, clicks)
 
 
 def test_panel_ausente_sin_monstruo_cerca_no_hay_clic_derecho():

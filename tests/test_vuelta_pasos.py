@@ -37,7 +37,7 @@ def test_metin_con_nombre_y_cerca_corta_la_vuelta_y_se_ataca(caplog):
 
 
 def test_hover_de_la_vuelta_con_nombre_de_otro_tipo_saca_la_piedra_de_la_lista():
-    h = Harness(lambda h, n: perc())
+    h = Harness(lambda h, n: perc(), explore={"candidate_list": True})
     h.bot.tracker.update(perc().coords, h.clock())
     w = (600.0, 150.0)
     h.bot.cands.add(w, "piedra", False, 0.0)
@@ -49,7 +49,7 @@ def test_hover_de_la_vuelta_con_nombre_de_otro_tipo_saca_la_piedra_de_la_lista()
 
 
 def test_hover_de_la_vuelta_con_nombre_objetivo_la_deja_en_la_lista():
-    h = Harness(lambda h, n: perc())
+    h = Harness(lambda h, n: perc(), explore={"candidate_list": True})
     w = (600.0, 150.0)
     h.bot.cands.add(w, "piedra", False, 0.0)
     x = _Explore(dir="left")
@@ -79,7 +79,7 @@ def test_vuelta_hover_solo_en_piedras_cerca(monkeypatch):
     """Durante la vuelta solo se frena (hover) en una piedra sin confirmar a <= near_floor; las lejanas quedan en la lista."""
     from types import SimpleNamespace
     from bot.ground import Goal
-    h = Harness(lambda h, n: perc())
+    h = Harness(lambda h, n: perc(), explore={"candidate_list": True})
     calls = []
     monkeypatch.setattr(h.bot.gi, "hover_at", lambda x, y, mask: calls.append((x, y)) or True)
     near_f = float(h.bot.cfg["approach"]["near_floor"])

@@ -72,7 +72,7 @@ def world(h, *, drop=True, hp0=0.9, freeze_rotated=False, b_steps=3):
 
 
 def make(**kw):
-    h = Harness(None)
+    h = Harness(None, attack={"scan_enabled": True})   # apagado por defecto (decision simple): aca se prueba la funcion
     script, st = world(h, **kw)
     h.script = script
     return h, st
