@@ -466,3 +466,18 @@ def test_recogida_sin_progreso_termina_y_objetos_primero_espera_para_reintentar(
     for _ in range(10):
         h.bot.step()
     assert State.RECOGER not in [s for s, _ in h.seen[n:]]
+
+
+def test_objeto_salteado_guarda_un_recorte_con_la_hora(tmp_path, caplog):
+    import re
+
+    import cv2
+    caplog.set_level(logging.INFO)
+    h = floor_harness([DOWN], floor_kw={"pickable": False}, pickup={"max_z_per_item": 2},
+                      debug={"enabled": True, "dir": str(tmp_path), "save_raw": False})
+    start(h)
+    h.run_until(lambda: h.bot.state is State.BUSCAR, limit=400)
+    crops = list(tmp_path.glob("run_*/recoger/*_salteado_*.png"))
+    assert len(crops) == 1 and re.fullmatch(r"\d{6}_\d{3}_salteado_\d+_\d+\.png", crops[0].name)
+    assert cv2.imread(str(crops[0])).shape[:2] == (200, 320)   # [160, 110, 90]: 320 de ancho, 200 de alto
+    assert "recorte del objeto salteado" in caplog.text

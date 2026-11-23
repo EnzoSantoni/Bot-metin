@@ -2269,10 +2269,16 @@ class Bot(ApproachKeysMixin):
         return [i for i in items if not any(hit(s, i) for s in skipped)]
 
     def _skip_item(self, k: _Pickup, cur: _Cur, p: Perception, pos: tuple[int, int] | None) -> None:
-        """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo)."""
+        """Saltea el objeto actual (queda en `k.skipped` con su posicion en el mapa si se conoce el rumbo) y guarda en debug un
+        recorte de la captura alrededor de su etiqueta (`<run>/recoger/HHMMSS_mmm_salteado_x_y.png`)."""
         h = self._heading() if pos is not None else None
         k.skipped.append(_Skip(cur.point, pos, self._item_world(cur.point, p, pos, h)))
         k.cur = None
+        hw, up, down = (int(v) for v in self.pk["skip_crop_px"])
+        x, y = cur.point
+        path = self.debug.save_snapshot(self._img, "recoger", f"salteado_{x}_{y}", (x - hw, y - up, 2 * hw, up + down))
+        if path is not None:
+            logger.info("Recoger: recorte del objeto salteado guardado en %s", path)
 
     def _final_look(self, k: _Pickup) -> list | None:
         """Ultima mirada antes de subirse: espera `pickup.final_look_s`, captura de nuevo y devuelve los objetos validos que

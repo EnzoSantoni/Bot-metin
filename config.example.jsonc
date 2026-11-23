@@ -324,6 +324,9 @@
              //  intentados). priority_retry_s: tras una recogida cortada (sin progreso, tope de Z o de tiempo, fuera de la zona),
              //  "objetos primero" espera esto antes de volver a entrar.
              "idle_max_s": 20.0, "priority_retry_s": 60.0,
+             //  skip_crop_px: con debug.enabled, cada objeto salteado (tras max_z_per_item Z o item_max_s) deja un recorte en
+             //  debug/<run>/recoger/HHMMSS_mmm_salteado_<x>_<y>.png: [medio ancho, arriba, abajo] en px alrededor del objeto.
+             "skip_crop_px": [160, 110, 90],
              //  Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto entre
              //  capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido si hubo
              //  un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si este esta a menos

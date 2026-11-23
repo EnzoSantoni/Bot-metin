@@ -186,6 +186,8 @@ DEFAULTS: dict[str, Any] = {
                # intentados); priority_retry_s: tras una recogida cortada (sin progreso, tope de Z o de tiempo, fuera de la zona)
                # "objetos primero" espera esto antes de volver a entrar.
                "idle_max_s": 20.0, "priority_retry_s": 60.0,
+               # skip_crop_px: recorte guardado en debug de cada objeto salteado: [medio ancho, arriba, abajo] del punto del objeto
+               "skip_crop_px": [160, 110, 90],
                # Cada Z junta el objeto MAS CERCANO al personaje: same_px = radio para decir que una etiqueta es el mismo objeto
                # entre capturas (sin caminar); near_px = un objeto que desaparece a menos de esto de los pies cuenta como recogido
                # si hubo un Z en los ultimos progress_window_s; switch_ratio = el objeto actual cambia al mas cercano solo si
@@ -1128,6 +1130,9 @@ def _validate_tracking_navigation(cfg: dict) -> None:
           "full_step_px", "track_px", "same_spot_u", "gone_cycles", "reposition_after_z", "reposition_frac", "item_max_s",
           "max_z_per_item", "skip_match_u",
           "same_px", "near_px", "progress_window_s", "switch_ratio"))
+    _require_numbers(cfg["pickup"].get("skip_crop_px"), "pickup.skip_crop_px", 3)
+    if any(v <= 0 for v in cfg["pickup"]["skip_crop_px"]):
+        raise ConfigError("pickup.skip_crop_px debe tener 3 numeros > 0 (medio ancho, arriba, abajo)")
     if not isinstance(cfg["pickup"].get("dismount"), bool):
         raise ConfigError("pickup.dismount debe ser true o false")
     nums("explore", ("camera_steps", "camera_step_s", "walk_timeout_s", "border_margin", "leg_s", "leg_units",
