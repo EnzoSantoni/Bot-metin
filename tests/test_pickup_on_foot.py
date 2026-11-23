@@ -287,12 +287,15 @@ def test_un_objeto_que_no_era_el_actual_y_desaparece_con_z_cuenta_como_progreso_
     assert h.bot.stats.items == 1 and h.bot._pk.cur is None or h.bot._pk.cur.z <= 1
 
 
-def test_fuera_de_la_zona_corta_la_recogida_y_vuelve():
+def test_fuera_de_la_zona_sigue_recogiendo_y_recien_despues_vuelve():
+    """Los objetos van antes que volver: afuera de la zona se recogen todos y recien despues VOLVER."""
     h = floor_harness([DOWN])
-    h.script = lambda h, n: perc(items=[label(DOWN)], coords=OUT_XY if h.keys("g") >= 1 else (550, 150))
+    floor = h.floor
+    h.script = lambda h, n: perc(items=floor(h, n).items, coords=OUT_XY if h.keys("g") >= 1 else (550, 150))
     start(h)
     h.run_until(lambda: h.bot.state is State.VOLVER)
-    assert h.keys("z") == 0 and h.keys("g") == 2
+    assert h.bot.stats.items == 1 and h.keys("z") >= 1 and h.keys("g") == 2
+    assert h.seen[-1] == (State.VOLVER, "no quedan objetos")
 
 
 def test_captcha_durante_la_bajada():
@@ -421,6 +424,19 @@ def test_buscando_con_objetos_en_el_piso_los_recoge_antes_de_elegir_un_metin():
     h.run_until(lambda: h.bot.state is State.RECOGER, limit=20)
     assert h.seen[0][0] is State.RECOGER and "primero los recojo" in h.seen[0][1]
     assert h.clicks() == 0
+
+
+@pytest.mark.parametrize("state", [State.VOLVER, State.CENTRO, State.DESTRABAR])
+def test_volviendo_o_destrabando_con_objetos_cerca_los_recoge_primero_y_despues_vuelve(state):
+    """En VOLVER, CENTRO o DESTRABAR los objetos validos cerca tambien van primero; despues sigue la vuelta."""
+    h = floor_harness([DOWN])
+    floor = h.floor
+    h.script = lambda h, n: perc(items=floor(h, n).items, coords=OUT_XY)
+    h.bot._enter(state, "test")
+    h.run_until(lambda: State.RECOGER in h.states(), limit=20)
+    assert "primero los recojo" in dict(h.seen)[State.RECOGER]
+    h.run_until(lambda: h.bot.stats.items >= 1 and h.bot.state is not State.RECOGER, limit=400)
+    assert h.bot.state is State.VOLVER
 
 
 def test_objeto_lejos_en_pantalla_no_cuenta_como_objetos_primero():

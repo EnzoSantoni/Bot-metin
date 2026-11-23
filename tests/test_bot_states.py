@@ -400,6 +400,32 @@ def test_atacando_afuera_abandona_y_vuelve():
     assert h.states()[:2] == [State.ATACAR, State.VOLVER] and h.keys("esc") == 0
 
 
+def test_atacando_afuera_con_la_vida_bajando_no_lo_deja_lo_rompe_recoge_y_vuelve(caplog):
+    """Panel confirmado y la vida bajando: salir de la zona no suelta el metin; se rompe, se recoge y recien despues VOLVER
+    (corrida de las 02:36: a las 02:46:12 lo abandono y el metin se rompio igual mientras volvia)."""
+    caplog.set_level(logging.INFO)
+    w = {"i": 0}
+
+    def script(h, n):
+        if h.bot.state is State.ATACAR:
+            w["i"] += 1
+            if w["i"] == 10:
+                h.clock.t += 20.0   # pasaron mas de attack.min_break_s (la vida baja en el ciclo siguiente)
+            if w["i"] < 30:
+                return perc(coords=OUT_XY, panel=target_panel(max(0.05, 0.9 - 0.03 * w["i"])))
+            return perc(coords=OUT_XY)   # roto: sin panel ni piedra
+        if h.bot.state is State.RECOGER:
+            return perc(coords=OUT_XY, items=[item()] if h.keys("z") < 1 else [])
+        return perc(metins=[metin()]) if h.bot.stats.metins == 0 else perc(coords=OUT_XY)
+
+    h = Harness(script)
+    h.train_camera()
+    h.run_until(lambda: h.states()[-1:] == [State.VOLVER], limit=600)
+    assert h.states() == [State.ATACAR, State.RECOGER, State.VOLVER]
+    assert h.bot.stats.metins == 1 and h.keys("z") >= 1
+    assert "salio de la zona atacando" not in caplog.text and "le estoy pegando al metin" in caplog.text
+
+
 def test_trabado_destraba_y_vuelve_al_estado_anterior():
     pos = {"xy": INSIDE_XY}
     h = Harness(lambda h, n: perc(coords=pos["xy"]))

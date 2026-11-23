@@ -164,7 +164,8 @@ def test_empujon_fuera_de_la_tolerancia_vuelve_enseguida():
     assert pushed["d"] > env.zone.outside_tolerance
     assert env.run_until(lambda: env.zone_distance() == 0 and env.world.t > 16, max_s=120) == "cond"
     volver = [t for t in env.transitions if t.new == "VOLVER" and t.t >= 15.0]
-    assert volver and volver[0].t - 15.0 < 3.0
+    # le estaba pegando: no lo deja por la zona mientras la vida siga bajando (attack.hp_progress_s); lejos y sin que baje, vuelve
+    assert volver and volver[0].t - 15.0 < 3.0 + float(env.bot.atk["hp_progress_s"])
     assert env.run_until(lambda: not m.alive, max_s=300) == "cond"
 
 

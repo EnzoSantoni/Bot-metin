@@ -66,9 +66,10 @@ PARTS = {
     State.ATACAR: {"panel", "coords", "metins", "far", "monsters"},
     State.RECOGER: {"items", "coords"}, State.EXPLORAR: {"metins", "coords", "far", "monsters", "items"},
     State.ACERCARSE: {"metins", "coords", "far", "monsters", "items"},
-    # van por coordenadas (monstruos: rodeado); las etiquetas: un metin objetivo cerca a la vista se ataca antes de irse
-    State.VOLVER: {"coords", "monsters", "metins"}, State.CENTRO: {"coords", "monsters", "metins"},
-    State.DESTRABAR: {"coords", "metins", "far", "monsters"}, State.CAPTCHA: {"coords"},
+    # van por coordenadas (monstruos: rodeado); las etiquetas: un metin objetivo cerca a la vista se ataca antes de irse; los
+    # objetos: con objetos validos cerca se recogen primero (`_items_first`), tambien volviendo o destrabando
+    State.VOLVER: {"coords", "monsters", "metins", "items"}, State.CENTRO: {"coords", "monsters", "metins", "items"},
+    State.DESTRABAR: {"coords", "metins", "far", "monsters", "items"}, State.CAPTCHA: {"coords"},
     State.MUERTO: set(), State.FIN: set(),
 }
 WRONG_PANEL_KINDS = ("other", "other_metin")
@@ -80,6 +81,8 @@ _NO_CUT_STATES = (State.CAPTCHA, State.RECOGER)
 END_NO_VOLVER = "no puede volver a la zona"   # motivo de fin con alarma (VOLVER sin lograrlo)
 END_NO_CENTRO = "no puede llegar al centro"   # motivo de fin con alarma (CENTRO sin lograrlo)
 WALKING_STATES = (State.EXPLORAR, State.VOLVER, State.CENTRO, State.ACERCARSE)   # DESTRABAR vuelve a ellos
+# Estados en los que objetos validos cerca mandan a RECOGER antes que nada (`_items_first`); atacando, no
+_ITEMS_FIRST_STATES = (State.BUSCAR, State.EXPLORAR, State.ACERCARSE, State.VOLVER, State.CENTRO, State.DESTRABAR)
 LEG_MAX_AGE_S = 2.0   # un tramo de teclado sin evaluar (o un giro por pantalla) mas viejo que esto ya no se usa
 # Pasos al costado para destrabar yendo al metin: (nombre, acciones de `controls`), alternando izquierda / derecha
 SIDESTEPS = (("A", ["move_left"]), ("D", ["move_right"]), ("W+A", ["move_up", "move_left"]),
@@ -178,6 +181,7 @@ class _Attack:
     stuck_reclicks: int = 0                     # trabado sin monstruos: reclics a la piedra antes del paso al costado
     stuck_reclick_t: float = -math.inf          # hora del ultimo de esos reclics (se espera attack.stuck_reclick_wait_s)
     aim_high: bool = False                      # el proximo reclic va a la parte ALTA de la piedra (`_high_point`)
+    outside_kept: bool = False                  # ya se aviso que sigue pegandole afuera de la zona (no se abandona)
 
 
 @dataclass
@@ -1589,11 +1593,19 @@ class Bot(ApproachKeysMixin):
             if handled:
                 return out
         if self._zone_status() is ZoneStatus.OUTSIDE and not self._stay_for(a, p):
-            # yendo hacia el metin el personaje salio de la zona mas la tolerancia y el metin no esta cerca a la vista: queda
-            # claramente afuera (aunque no se sepa su posicion exacta): se ignora para no volver a caer
-            self._atk = self._cur = None
-            self._ignore_position(a.gp, t, "metin afuera de la zona mas la tolerancia (sali de la zona yendo a el)", a.click)
-            return State.VOLVER, "salio de la zona atacando"
+            if self._hitting(a, p, t):
+                # le esta pegando (panel confirmado y la vida ya bajo): nunca se abandona por la zona; se termina de romper,
+                # se recogen los objetos y recien despues se vuelve (RECOGER no se corta afuera de la zona)
+                if not a.outside_kept:
+                    a.outside_kept = True
+                    logger.info("Afuera de la zona mas la tolerancia pero le estoy pegando al metin (vida %.0f%%): no lo dejo; "
+                                "lo rompo, recojo y recien despues vuelvo", (a.last_hp or 0.0) * 100)
+            else:
+                # yendo hacia el metin el personaje salio de la zona mas la tolerancia y el metin no esta cerca a la vista: queda
+                # claramente afuera (aunque no se sepa su posicion exacta): se ignora para no volver a caer
+                self._atk = self._cur = None
+                self._ignore_position(a.gp, t, "metin afuera de la zona mas la tolerancia (sali de la zona yendo a el)", a.click)
+                return State.VOLVER, "salio de la zona atacando"
         if kind == "target_metin" and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
             self._scan_while_attacking(a, p, t)   # pegando: es el momento de mirar alrededor
             return None   # esta pegando (la vida baja): no se reclickea por ningun motivo
@@ -1621,6 +1633,17 @@ class Bot(ApproachKeysMixin):
                 return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
             return self._reclick(a, "sin confirmar", p, t)
         return None
+
+    def _hitting(self, a: _Attack, p: Perception, t: float) -> bool:
+        """Le esta pegando: el panel confirmo el metin objetivo, su vida ya bajo y sigue bajando (en los ultimos
+        `attack.hp_progress_s`) o el personaje sigue pegado a la piedra (a <= `attack.arrive_px`, a la vista: un parpadeo del
+        panel no cuenta como dejar de pegarle). Si lo empujaron lejos y la vida ya no baja, no le esta pegando."""
+        if not a.confirmed or a.first_drop_t is None:
+            return False
+        if t - a.hp_down_t < float(self.atk["hp_progress_s"]):
+            return True
+        return (math.dist(a.click, p.player_xy) <= float(self.atk["arrive_px"])
+                and self._stone_visible(a.click, p, float(self.atk["relocate_px"])))
 
     def _arrived_at(self, a: _Attack, p: Perception) -> bool:
         """Confirmado, sin ninguna baja de vida todavia y con la piedra a <= `attack.arrive_px` del personaje: ya llego y
@@ -2260,10 +2283,11 @@ class Bot(ApproachKeysMixin):
         return back, reason
 
     def _items_first(self, p: Perception, t: float) -> bool:
-        """Objetos primero: buscando, explorando o yendo a otro metin, si hay objetos validos a <= `pickup.priority_px` del
-        personaje que no se saltearon, se pasa a RECOGER antes que cualquier otra cosa (nunca se elige un metin nuevo con
-        objetos sin intentar). True si entro a RECOGER."""
-        if self.state not in (State.BUSCAR, State.EXPLORAR, State.ACERCARSE) or not p.items or t < self._items_retry_t:
+        """Objetos primero: en cualquier estado salvo ATACAR (y RECOGER, CAPTCHA, MUERTO, FIN), si hay objetos validos a <=
+        `pickup.priority_px` del personaje que no se saltearon, se pasa a RECOGER antes que cualquier otra cosa (nunca se elige
+        un metin nuevo, se vuelve ni se destraba con objetos sin intentar). Si estaba volviendo, la vuelta queda pendiente
+        para despues de recoger. True si entro a RECOGER."""
+        if self.state not in _ITEMS_FIRST_STATES or not p.items or t < self._items_retry_t:
             return False
         lim = float(self.pk["priority_px"])
         near = [i for i in self._valid_items(p) if math.dist(i.click_point, p.player_xy) <= lim]
@@ -2271,6 +2295,8 @@ class Bot(ApproachKeysMixin):
             near = self._not_skipped(self._skipped, p, near)
         if not near:
             return False
+        if self.state is State.VOLVER:
+            self.pending_return = True   # despues de recoger se sigue volviendo
         self._enter(State.RECOGER, f"{len(near)} objeto(s) valido(s) en el piso: primero los recojo")
         return True
 
@@ -2281,7 +2307,8 @@ class Bot(ApproachKeysMixin):
         k = self._pk
         if k is None:
             return State.BUSCAR, "sin recogida en curso"
-        back = State.VOLVER if self.pending_return else State.BUSCAR
+        # afuera de la zona se recoge igual (los objetos van antes que volver): al terminar, VOLVER
+        back = State.VOLVER if self.pending_return or self._zone_status() is ZoneStatus.OUTSIDE else State.BUSCAR
         valid = self._valid_items(p)
         if k.phase == "look":
             return self._pickup_look(k, t, valid, back)
@@ -2306,8 +2333,6 @@ class Bot(ApproachKeysMixin):
             cut = back, "tope de pulsaciones de Z"
         elif t - k.start_t >= float(self.pk["max_seconds"]):
             cut = back, "tiempo maximo recogiendo"
-        elif self._zone_status() is ZoneStatus.OUTSIDE:
-            cut = State.VOLVER, "fuera de la zona recogiendo"
         elif t - k.progress_t >= float(self.pk["idle_max_s"]):
             cut = back, f"{float(self.pk['idle_max_s']):.0f} s sin recoger ningun objeto"
         if cut is not None:   # los que quedan cuentan como intentados: "objetos primero" no vuelve a entrar por ellos
