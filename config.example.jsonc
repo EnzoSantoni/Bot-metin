@@ -389,14 +389,15 @@
   //  angulo de farmeo: nunca T mantenida (llega a plano y la camara se ACERCA al personaje; ese zoom solo se saca con la rueda);
   //  (d) rueda hacia "lejos" otra vez, por seguridad. step_pause_s: pausa entre pasos. t_taps se calibra con
   //  `calibrate.py camara` (guiado: toca T de a uno y pregunta).
-  //  Cuando: al arrancar, despues de cada metin roto, al empezar una vuelta de busqueda si pasaron mas de every_s desde el ultimo
-  //  reinicio, y cuando la camara mira el piso (floor_frames capturas seguidas sin horizonte mientras se busca; minimo min_gap_s
-  //  entre reinicios, que se multiplica si el reinicio no saco la vista del piso). Nunca mientras ataca, recoge o hay captcha.
+  //  Cuando: SOLO cuando el terreno movio la camara (mira el piso: floor_frames capturas seguidas sin horizonte mientras se
+  //  busca), con al menos min_gap_s (60) desde el reinicio anterior, que se multiplica si el reinicio no saco la vista del piso.
+  //  No se reinicia al arrancar (la camara se deja acomodada antes de empezar) ni despues de cada metin. Nunca mientras ataca,
+  //  recoge o hay captcha.
   //  Detector de "mira el piso" (bot/vision/pitch.py, solo como detector): min_confidence, strip_half_frac, sample_*,
   //  player_box_px, tol_*, min_sat, row_floor_frac, run_rows, min_valid_px, min_floor_rows, side_offset_frac, side_half_frac.
   //  (limit, to_limit_px, from_limit_px, *drag*, step_px, calib_max_px: del metodo de topes con arrastre, ya no se usan.)
   "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "t_taps": 4, "t_tap_ms": 120,
-                   "t_gap_ms": 200, "step_pause_s": 0.3, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                   "t_gap_ms": 200, "step_pause_s": 0.3, "floor_frames": 2, "min_gap_s": 60.0,
                    "side_offset_frac": 0.14, "side_half_frac": 0.06,
                    "min_confidence": 0.5,
                    "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],

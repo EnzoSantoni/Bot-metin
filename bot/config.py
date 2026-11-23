@@ -197,7 +197,7 @@ DEFAULTS: dict[str, Any] = {
     # rueda); enabled false = no toca la camara. t_taps se calibra con `calibrate.py camara`. Detector de "mira el piso":
     # bot/vision/pitch.py. Ver config.example.jsonc.
     "camera_pitch": {"enabled": True, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "t_taps": 4, "t_tap_ms": 120,
-                     "t_gap_ms": 200, "step_pause_s": 0.3, "every_s": 60.0, "floor_frames": 2, "min_gap_s": 8.0,
+                     "t_gap_ms": 200, "step_pause_s": 0.3, "floor_frames": 2, "min_gap_s": 60.0,
                      "side_offset_frac": 0.14, "side_half_frac": 0.06, "min_confidence": 0.5,
                      "strip_half_frac": 0.12, "sample_top_px": 70, "sample_bottom_px": 170, "player_box_px": [110, 140, 130],
                      "tol_hue": 10, "tol_val": 22, "min_sat": 10, "row_floor_frac": 0.5, "run_rows": 8,
@@ -584,7 +584,8 @@ OBSOLETE_KEYS = (("stuck", "max_no_progress"), ("volver", "alt_targets"), ("appr
                  ("attack", "confirm_check_s"),
                  # la vuelta se corta con approach.near_floor (metin objetivo "cerca"), igual para todo
                  ("explore", "sweep_cut_floor"), ("explore", "sweep_attack_u"), ("approach", "click_floor"),
-                 # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope
+                 # camera_pitch: la correccion por horizonte se reemplazo por el reinicio desde el tope; sin reinicio periodico
+                 ("camera_pitch", "every_s"),
                  ("camera_pitch", "ref_horizon_frac"), ("camera_pitch", "tolerance"), ("camera_pitch", "gain_px_per_frac"),
                  ("camera_pitch", "max_steps"), ("camera_pitch", "calib_samples"), ("camera_pitch", "calib_pause_s"),
                  ("camera_pitch", "gain_ema"), ("camera_pitch", "min_gain_move_frac"),
@@ -1019,7 +1020,7 @@ def _validate_camera_pitch(cfg: dict) -> None:
     c = _require_dict(cfg.get("camera_pitch"), "camera_pitch")
     if not isinstance(c.get("enabled"), bool):
         raise ConfigError("camera_pitch.enabled debe ser true o false")
-    positive = ("g_hold_s", "t_tap_ms", "every_s", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac",
+    positive = ("g_hold_s", "t_tap_ms", "floor_frames", "min_gap_s", "side_offset_frac", "side_half_frac",
                 "strip_half_frac", "sample_bottom_px", "tol_hue", "tol_val", "row_floor_frac", "run_rows", "min_valid_px")
     nonneg = ("zoom_out_clicks", "t_taps", "t_gap_ms", "step_pause_s", "min_confidence", "sample_top_px", "min_sat",
               "min_floor_rows")

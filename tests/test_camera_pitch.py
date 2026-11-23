@@ -126,7 +126,7 @@ def test_config_camera_pitch_por_defecto_y_validacion():
                 "step_px", "calib_max_px"):
         assert old not in p and ("camera_pitch", old) in OBSOLETE_KEYS
     for key, bad in (("enabled", "si"), ("zoom_out_sign", 0), ("zoom_out_sign", 2), ("g_hold_s", 0), ("t_taps", -1),
-                     ("t_taps", 1.5), ("t_tap_ms", 0), ("t_tap_ms", 2000), ("floor_frames", 0), ("every_s", -1),
+                     ("t_taps", 1.5), ("t_tap_ms", 0), ("t_tap_ms", 2000), ("floor_frames", 0), ("min_gap_s", -1),
                      ("side_half_frac", 0.9)):
         c = cfg()
         c["camera_pitch"][key] = bad
@@ -176,10 +176,10 @@ def test_observe_pide_dos_capturas_seguidas_y_respeta_el_minimo_entre_reinicios(
     assert [cp.observe(img, p, 100.0) for img in (floor, ok, floor, ok, floor)] == [False] * 5   # nunca dos seguidas
     assert cp.observe(floor, p, 100.0) is True                                                    # dos seguidas: reinicia
     cp.last_reset_t = 100.0
-    assert cp.observe(floor, p, 105.0) is False and cp.observe(floor, p, 107.9) is False   # antes de min_gap_s (8)
-    assert cp.observe(floor, p, 108.0) is True
+    assert cp.observe(floor, p, 130.0) is False and cp.observe(floor, p, 159.9) is False   # antes de min_gap_s (60)
+    assert cp.observe(floor, p, 160.0) is True
     cp.fruitless = 1   # el reinicio anterior no arreglo nada: espera el doble
-    assert cp.observe(floor, p, 115.0) is False and cp.observe(floor, p, 116.0) is True
+    assert cp.observe(floor, p, 219.0) is False and cp.observe(floor, p, 220.0) is True
     cp.c["enabled"] = False
     assert cp.observe(floor, p, 1e6) is False
 
@@ -320,17 +320,16 @@ def scrolls(h):
     return [e for e in h.be.events if e[0] == "scroll"]
 
 
-def test_reinicia_al_arrancar_despues_de_la_cuenta_regresiva():
+def test_no_reinicia_al_arrancar():
+    """Enzo deja la camara acomodada antes de empezar: al arrancar no se toca (ni rueda, ni G, ni T)."""
     h = Harness(lambda h, n: perc(), cfg=pitch_cfg())
     with_cam(h, SimCam())
     h.bot.run(max_minutes=0.001)   # corre y termina enseguida por tiempo
-    assert scrolls(h)[:2] == [("scroll", 20), ("scroll", 20)]
-    assert h.cam_states and h.cam_states[0][0] is State.BUSCAR and g_holds(h) == 1
-    assert h.bot.pitch.resets == 1 and h.be.pressed == ([], [])
+    assert scrolls(h) == [] and g_holds(h) == 0 and h.bot.pitch.resets == 0 and h.be.pressed == ([], [])
 
 
 def test_con_camera_pitch_apagada_no_toca_la_camara_para_nada():
-    """enabled false: ni al arrancar, ni despues de cada metin, ni por piso, ni periodico: cero rueda, G o T."""
+    """enabled false: ni por piso ni de ninguna otra forma: cero rueda, G o T."""
     c = pitch_cfg()
     c["camera_pitch"]["enabled"] = False
     h = Harness(lambda h, n: perc(), cfg=c)
@@ -340,7 +339,7 @@ def test_con_camera_pitch_apagada_no_toca_la_camara_para_nada():
     h.bot.state = State.BUSCAR
     assert h.bot._pitch_reset("metin roto") is False    # despues de cada metin
     h.bot._img = cam.image()
-    for _ in range(5):                                             # mirando el piso y con every_s vencido
+    for _ in range(5):                                             # mirando el piso y sin reinicios recientes
         h.clock.t += 100
         assert h.bot._pitch_search_check(perc(), h.clock.t, _Explore(dir="left")) is False
     assert scrolls(h) == [] and h.cam_states == [] and h.bot.pitch.resets == 0
@@ -359,59 +358,54 @@ def break_script(h, n):
     return perc()
 
 
-def test_reinicia_despues_de_romper_y_recoger_y_nunca_atacando_ni_recogiendo(caplog):
-    caplog.set_level(logging.INFO)
-    h = Harness(break_script, cfg=pitch_cfg(camera_pitch={"every_s": 1e9}))
+def test_no_reinicia_despues_de_romper_y_recoger():
+    h = Harness(break_script, cfg=pitch_cfg())
     with_cam(h, SimCam())
-    h.bot.pitch.last_reset_t = h.clock.t   # ya reinicio al arrancar: aqui solo interesa el de despues de recoger
-    h.run_until(lambda: h.bot.stats.metins == 1 and g_holds(h) >= 1)
-    assert State.RECOGER in h.states() and h.be.pressed == ([], [])
-    assert scrolls(h) == [("scroll", 20), ("scroll", 20)]
-    assert any("[metin roto]" in r.getMessage() for r in caplog.records)
-    assert all(s not in (State.ATACAR, State.RECOGER, State.CAPTCHA) for s, _, _ in h.cam_states)
+    h.run_until(lambda: h.bot.stats.metins == 1 and State.BUSCAR in h.states()[1:])
+    for _ in range(5):
+        h.bot.step()
+    assert State.RECOGER in h.states() and scrolls(h) == [] and g_holds(h) == 0 and h.bot.pitch.resets == 0
 
 
-def test_mirar_el_piso_reinicia_y_respeta_el_minimo_entre_reinicios():
-    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+def test_mirar_el_piso_reinicia_y_respeta_60_s_entre_reinicios(caplog):
+    caplog.set_level(logging.INFO)
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}))
     cam = SimCam(floor_at_start=True)
     with_cam(h, cam)
-    h.bot.pitch.last_reset_t = h.clock.t - 1000   # sin reinicios recientes
     h.run_until(lambda: g_holds(h) >= 1)
     t1, n1 = h.cam_states[0][1], g_holds(h)
     h.run_until(lambda: h.bot.pitch.resets == 1)
-    cam.floor = True   # el juego volvio a subir la camara enseguida: no se reinicia antes de min_gap_s
-    while h.clock.t - t1 < 7.5:
+    cam.floor = True   # el juego volvio a subir la camara enseguida: no se reinicia antes de 60 s (22:28:08 y 22:28:27)
+    while h.clock.t - t1 < 59.5:
         h.bot.step()
     assert g_holds(h) == n1
-    h.run_until(lambda: g_holds(h) > n1, limit=3000)
-    assert h.cam_states[-1][1] - t1 >= 8.0
+    h.run_until(lambda: g_holds(h) > n1, limit=6000)
+    assert h.cam_states[-1][1] - t1 >= 60.0
     assert all(s is State.EXPLORAR for s, _, _ in h.cam_states)   # solo mientras se busca
+    assert all("[mira el piso]" in r.getMessage() for r in caplog.records if "Camara: reinicio (" in r.getMessage())
 
 
 def test_reinicio_por_piso_que_no_arregla_nada_espera_mas():
-    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}))
     cam = SimCam(floor_at_start=True)
     cam.keep_floor = True   # terreno alto: tras reiniciar sigue todo piso
     with_cam(h, cam)
-    h.bot.pitch.last_reset_t = h.clock.t - 1000
     h.run_until(lambda: h.bot.pitch.resets >= 1)
-    assert h.bot.pitch.fruitless == 1 and h.bot.pitch.floor_gap_s() == 16.0
+    assert h.bot.pitch.fruitless == 1 and h.bot.pitch.floor_gap_s() == 120.0
 
 
-def test_periodico_solo_al_empezar_una_vuelta_y_tras_every_s():
+def test_sin_reinicio_periodico():
+    """Con la camara bien (horizonte a la vista) nunca reinicia, por mas vueltas y tiempo que pasen."""
     h = Harness(lambda h, n: perc(), cfg=pitch_cfg())
     cam = SimCam()
     with_cam(h, cam)
     h.win.capture()
     bot, p = h.bot, perc()
     bot._img = cam.image()
-    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is True     # nunca reinicio: toca
-    n = g_holds(h)
-    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is False    # recien reiniciado
-    h.clock.t += 61
-    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left", steps=1)) is False   # a mitad de vuelta no
-    assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is True
-    assert g_holds(h) > n
+    for _ in range(5):
+        h.clock.t += 120
+        assert bot._pitch_search_check(p, h.clock.t, _Explore(dir="left")) is False
+    assert g_holds(h) == 0 and bot.pitch.resets == 0
 
 
 # ------------------------------------------------------------------ calibrate.py camara (guiado por Enzo)
@@ -509,12 +503,12 @@ def test_al_arrancar_dice_si_el_reinicio_esta_encendido_o_apagado(caplog, enable
     word = "ENCENDIDO" if enabled else "APAGADO"
     rec = [r for r in caplog.records if f"Camara: reinicio {word}" in r.getMessage()]
     assert len(rec) == 1 and rec[0].levelno == (logging.INFO if enabled else logging.WARNING)
-    assert any("[arranque]" in r.getMessage() for r in caplog.records) is enabled
+    assert not any("[arranque]" in r.getMessage() for r in caplog.records)   # nunca reinicia al arrancar
 
 
 def test_reinicio_por_piso_dice_el_motivo(caplog):
     caplog.set_level(logging.INFO)
-    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}, camera_pitch={"every_s": 1e9}))
+    h = Harness(lambda h, n: perc(), cfg=pitch_cfg(explore={"camera_steps": 100000}))
     with_cam(h, SimCam(floor_at_start=True))
     h.bot.pitch.last_reset_t = h.clock.t - 1000
     h.run_until(lambda: h.bot.pitch.resets >= 1)

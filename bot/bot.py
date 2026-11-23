@@ -500,9 +500,8 @@ class Bot(ApproachKeysMixin):
         self._t_start = self._last_t = self.clock()
         limit = None if max_minutes is None else float(max_minutes) * 60
         try:
+            # sin reinicio al arrancar: Enzo deja la camara acomodada antes de empezar (solo se reinicia si mira el piso)
             logger.log(logging.INFO if self.pitch.enabled else logging.WARNING, "%s", self.pitch.status_line())
-            if self.pitch.enabled and self.window.ensure_ready(should_stop=lambda: self.control.is_stopped):
-                self._pitch_reset("arranque")
             while self.state is not State.FIN:
                 if (limit is not None and self.state not in _NO_CUT_STATES
                         and self.clock() - self._t_start >= limit):
@@ -687,8 +686,6 @@ class Bot(ApproachKeysMixin):
             self._next = None   # el personaje se va a mover lejos: los pasos de camara recordados ya no valen
         if old is State.RECOGER and new not in (State.CAPTCHA, State.MUERTO, State.FIN):
             self._remount()   # con captcha o muerte no se manda nada: se vuelve a montar despues
-            if self.state is new:
-                self._pitch_reset("metin roto")
         if self.state is not new:
             return   # un captcha durante la subida ya cambio el estado: no se ejecuta el bloque de `new`
         self._walk = None
@@ -1917,15 +1914,14 @@ class Bot(ApproachKeysMixin):
         return moved
 
     def _pitch_search_check(self, p: Perception, t: float, x: _Explore) -> bool:
-        """Buscando (EXPLORAR, fases de barrido y de giro hacia un candidato): reinicia la camara si mira el piso (capturas
-        seguidas sin horizonte) o, al empezar una vuelta, si pasaron `camera_pitch.every_s`. True si reinicio algo."""
+        """Buscando (EXPLORAR, fases de barrido y de giro hacia un candidato): reinicia la camara SOLO si el terreno la movio
+        (mira el piso: capturas seguidas sin horizonte), con al menos `camera_pitch.min_gap_s` desde el reinicio anterior.
+        True si reinicio algo."""
         cp = self.pitch
         if not cp.enabled or self._img is None:
             return False
         if cp.observe(self._img, p, t):
             return self._pitch_reset(FLOOR_REASON)
-        if x.phase == "sweep" and x.steps == 0 and x.sw_prev is None and cp.periodic_due(t):
-            return self._pitch_reset("periodico")
         return False
 
     # ------------------------------------------------------------------ buscar el proximo metin mientras se ataca

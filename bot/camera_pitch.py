@@ -11,8 +11,9 @@ al angulo de farmeo, NUNCA T mantenida hasta abajo; (d) rueda hacia "lejos" otra
 `calibrate.py camara`.
 
 Con `camera_pitch.enabled` false el bot no toca la camara para nada. El juego sube la camara solo al acercarse a bordes o
-montanas y no la devuelve: por eso se reinicia al arrancar, tras cada metin roto, cada `every_s` y cuando la camara mira el piso
-(`looks_at_floor`: bot/vision/pitch.py solo como detector de "todo piso", no como medida del angulo).
+montanas y no la devuelve: por eso se reinicia SOLO cuando la camara mira el piso (`looks_at_floor`: bot/vision/pitch.py solo
+como detector de "todo piso", no como medida del angulo), con al menos `min_gap_s` entre reinicios. No se reinicia al arrancar
+(Enzo deja la camara acomodada) ni despues de cada metin.
 """
 from __future__ import annotations
 
@@ -80,12 +81,8 @@ class CameraPitch:
             return "Camara: reinicio APAGADO (camera_pitch.enabled false en config.json): el bot no toca el angulo de la camara"
         wheel = int(c["zoom_out_sign"]) * int(c["zoom_out_clicks"])
         return (f"Camara: reinicio ENCENDIDO (rueda {wheel:+d}, G {float(c['g_hold_s']):.1f} s, T x{int(c['t_taps'])} de "
-                f"{int(c['t_tap_ms'])} ms): al arrancar, tras cada metin roto, si {FLOOR_REASON} y cada "
-                f"{float(c['every_s']):.0f} s buscando")
-
-    def periodic_due(self, t: float) -> bool:
-        """Pasaron `every_s` desde el ultimo reinicio (se chequea al empezar cada vuelta de busqueda)."""
-        return self.enabled and t - self.last_reset_t >= float(self.c["every_s"])
+                f"{int(c['t_tap_ms'])} ms): solo si {FLOOR_REASON} (el terreno movio la camara), con al menos "
+                f"{float(c['min_gap_s']):.0f} s entre reinicios")
 
     def floor_gap_s(self) -> float:
         """Minimo entre reinicios por piso: `min_gap_s`, multiplicado si los ultimos no arreglaron nada (terreno alto)."""
