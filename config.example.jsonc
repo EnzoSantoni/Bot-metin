@@ -427,6 +427,9 @@
                //  Regla de zona de los metin: con posicion conocida solo se va a los que quedan a <= metin_outside_u afuera
                //  del borde (menos que outside_tolerance). Sin posicion (camara no lista): solo si estan a distancia de piso
                //  <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde.
+               //  Excepcion: un metin objetivo CON etiqueta a piso <= near_floor se ataca aunque el jugador este cerca del borde
+               //  (o se perdieron las coordenadas un momento), si el metin queda adentro de la zona mas farm_zone.outside_tolerance
+               //  (posicion por el rumbo del minimapa; sin rumbo, el peor caso).
                "blind_near_floor": 3.0, "blind_inside_margin": 15.0, "metin_outside_u": 15.0,
                "far_monsters_n": 2, "far_monsters_px": 200,
                "hover_wait_s": 0.3, "hover_label_px": 120, "hover_tries": 2,

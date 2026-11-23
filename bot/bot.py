@@ -896,18 +896,43 @@ class Bot(ApproachKeysMixin):
         return (floor_d <= float(self.apr["blind_near_floor"]) and pos is not None
                 and self.zone.signed_distance(pos) >= float(self.apr["blind_inside_margin"]))
 
-    def _zone_reason(self, gp: Xy | None, st: ZoneStatus | None, what: str) -> str | None:
+    def _zone_reason(self, gp: Xy | None, st: ZoneStatus | None, what: str, near: bool = False) -> str | None:
         """Motivo por el que algo en `gp` queda fuera de la zona (None si esta aceptado). Con `gp` (camara lista) vale la
         zona y la posicion del jugador no importa. Sin camara (`gp` None): un metin (con etiqueta o piedra, igual) vale si
         el jugador esta adentro o en la franja de tolerancia (no mas afuera), sin limite de distancia en pantalla (la
-        guardia de zona del ataque y de la caminata hace el resto)."""
+        guardia de zona del ataque y de la caminata hace el resto). `near` (metin objetivo a piso <= `approach.near_floor`):
+        con `gp` alcanza con que quede adentro de la zona mas `farm_zone.outside_tolerance`; sin la posicion del jugador
+        (coordenadas perdidas un momento) vale la ultima conocida."""
         if gp is not None:
-            if self._metin_accepts(gp):
+            if self._metin_accepts(gp) or (near and self.zone.accepts(gp)):
                 return None
             return f"{what} fuera de zona (est. ({gp[0]:.0f}, {gp[1]:.0f}), d={self.zone.signed_distance(gp):.0f})"
-        if st is None or st is ZoneStatus.OUTSIDE:
+        if st is None:
+            last = self.tracker.last_known
+            if near and last is not None and self.zone.accepts(last):
+                return None
+            return f"{what}: sin camara y sin la posicion del jugador"
+        if st is ZoneStatus.OUTSIDE:
             return f"{what}: sin camara y jugador fuera de la zona"
         return None
+
+    def _near_floor_of(self, pt: tuple[int, int], p: Perception) -> float:
+        """Distancia de piso (con perspectiva) de un punto de pantalla a los pies del personaje."""
+        return ground_dist(feet_of(p.player_xy, self.cfg), pt, p.shape, self.cfg)
+
+    def _near_ok(self, g: Goal, d: float, p: Perception) -> bool:
+        """Metin objetivo CON etiqueta a piso <= `approach.near_floor` sin posicion por la camara: se ataca aunque el jugador
+        este cerca del borde, si el metin queda adentro de la zona mas `farm_zone.outside_tolerance`. Su posicion sale del
+        rumbo de la camara (minimapa); sin rumbo, el peor caso (jugador +- esa distancia en unidades del mapa)."""
+        if g.kind != "etiqueta" or d > float(self.apr["near_floor"]):
+            return False
+        pos = self.tracker.position or self.tracker.last_known
+        if pos is None:
+            return False
+        h = self._heading()
+        if h is not None:
+            return self.zone.accepts(world_pos(pos, h, floor_vec(p.player_xy, g.point, p.shape, self.cfg), self.kscale.k))
+        return self.zone.signed_distance(pos) - d * self.kscale.k >= -self.zone.outside_tolerance
 
     def _label_view(self, p: Perception, t: float, check_discards: bool = True
                     ) -> tuple[list[_Cand], list[tuple[tuple, str]]]:
@@ -930,7 +955,8 @@ class Bot(ApproachKeysMixin):
             if check_discards and (exp := self._discard_expiry(gp, t, d.click_point, p.player_xy)) is not None:
                 why.append((("descartado", d.name), f"descartado hasta {self._until(exp, t)}"))
                 continue
-            zr = self._zone_reason(gp, st, d.name)
+            near = self._near_floor_of(d.click_point, p) <= float(self.apr["near_floor"])
+            zr = self._zone_reason(gp, st, d.name, near)
             if zr is not None:
                 why.append((("zona", d.name), zr))
                 continue
@@ -1077,7 +1103,7 @@ class Bot(ApproachKeysMixin):
         ranked = rank_goals(goals, p.player_xy, p.shape, self.cfg)
         if not blind_rule:
             return ranked
-        keep = [(g, d) for g, d in ranked if g.ref.gp is not None or self._blind_ok(d)]
+        keep = [(g, d) for g, d in ranked if g.ref.gp is not None or self._blind_ok(d) or self._near_ok(g, d, p)]
         self._log_reasons([(("ciego", g.kind, g.point), f"{g.name} en {g.point}: posicion desconocida, lejos (piso {d:.1f}) "
                             "o jugador sin margen adentro de la zona") for g, d in ranked if (g, d) not in keep])
         return keep

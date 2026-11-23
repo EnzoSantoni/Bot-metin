@@ -23,7 +23,7 @@ def harness(p, camera=False):
 
 
 def test_sin_posicion_y_lejos_no_se_va():
-    p = perc(coords=INSIDE_XY, metins=[metin((300, 400))])   # piso 3.3 > blind_near_floor
+    p = perc(coords=INSIDE_XY, metins=[metin((200, 350))])   # piso 5.0 > approach.near_floor (4)
     h = harness(p)
     assert not h.bot._goals(h.bot._label_view(p, 0.0)[0], [], p)
     h.bot.step()
@@ -44,16 +44,25 @@ def test_sin_posicion_cerca_pero_jugador_en_la_tolerancia_no_se_va():
     assert h.clicks() == 0
 
 
-def test_sin_posicion_cerca_pero_jugador_pegado_al_borde_adentro_no_se_va():
+def test_sin_posicion_cerca_y_jugador_pegado_al_borde_adentro_si_se_va():
+    """22:22:14: metin a piso 1.3 descartado por "jugador sin margen adentro de la zona". A piso <= near_floor se ataca si
+    el metin queda adentro de la zona mas outside_tolerance (sin rumbo: el peor caso)."""
     p = perc(coords=(442, 170), metins=[metin((1000, 500))])   # adentro pero a 4.6 u del borde (< blind_inside_margin)
     h = harness(p)
     h.bot.step()
-    assert h.clicks() == 0
+    assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_sin_posicion_a_piso_3_3_y_jugador_adentro_si_se_va():
+    p = perc(coords=INSIDE_XY, metins=[metin((300, 400))])   # piso 3.3: > blind_near_floor pero <= near_floor
+    h = harness(p)
+    h.bot.step()
+    assert State.ATACAR in h.states() and h.clicks() == 1
 
 
 def test_posicion_conocida_afuera_no_se_va_y_adentro_si():
     base_xy = (550, 130)   # adentro, a ~6 u del borde de arriba (la camara entrenada: 0.2 u/px)
-    afuera = perc(coords=base_xy, metins=[metin((960, 548 - 145))])   # ~22 u afuera: dentro de la tolerancia, mas que metin_outside_u
+    afuera = perc(coords=base_xy, metins=[metin((960, 548 - 215))])   # ~36 u afuera: mas que outside_tolerance (30)
     h = harness(afuera, camera=True)
     cands, why = h.bot._label_view(afuera, 0.0)
     assert not cands and "fuera de zona" in why[0][1]
@@ -80,3 +89,31 @@ def test_candidato_666_81_fuera_de_la_zona_no_entra_a_la_lista_ni_se_elige():
     assert len(h2.bot.cands) == 0
     h2.bot._harvest(p, 0.0, math.pi / 2, (666.0, 130.0))   # mirando al sur la misma vista cae adentro
     assert len(h2.bot.cands) == 1
+
+
+def test_posicion_conocida_cerca_y_en_la_tolerancia_si_se_va():
+    """Metin a piso 2.1 y ~22 u afuera del borde: mas que metin_outside_u (15) pero adentro de la tolerancia (30)."""
+    p = perc(coords=(550, 130), metins=[metin((960, 548 - 145))])
+    h = harness(p, camera=True)
+    cands, _ = h.bot._label_view(p, 0.0)
+    assert cands
+    h.bot.step()
+    assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_coordenadas_perdidas_un_momento_metin_cerca_con_la_ultima_posicion_adentro_si_se_va():
+    """22:26:45: "metin_negro: sin camara y jugador fuera de la zona" con las coordenadas perdidas (la ultima, adentro)."""
+    h = Harness(lambda h, n: perc(coords=None, metins=[metin((1000, 500))]), strict_zone=True)
+    h.bot.tracker.update(perc(coords=INSIDE_XY).coords, h.clock())
+    h.clock.t += 60   # la posicion quedo vieja: tracker.position es None
+    assert h.bot.tracker.position is None
+    h.bot.step()
+    assert State.ATACAR in h.states() and h.clicks() == 1
+
+
+def test_coordenadas_perdidas_y_metin_lejos_no_se_va():
+    h = Harness(lambda h, n: perc(coords=None, metins=[metin((200, 350))]), strict_zone=True)
+    h.bot.tracker.update(perc(coords=INSIDE_XY).coords, h.clock())
+    h.clock.t += 60
+    cands, why = h.bot._label_view(perc(coords=None, metins=[metin((200, 350))]), h.clock.t)
+    assert not cands and "sin la posicion del jugador" in why[0][1]

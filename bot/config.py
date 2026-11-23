@@ -246,7 +246,8 @@ DEFAULTS: dict[str, Any] = {
     # personaje esta adentro de la zona o en la franja de tolerancia, sin limite de distancia en pantalla;
     # Regla de zona de los metin: con posicion conocida solo se va a los que quedan a <= metin_outside_u afuera del borde
     # (menos que la tolerancia, para no salir del todo); sin posicion (camara no lista) solo si estan a una distancia de
-    # piso <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde.
+    # piso <= blind_near_floor (unos pocos pasos) y el jugador esta adentro a >= blind_inside_margin del borde. Excepcion: un
+    # metin objetivo con etiqueta a piso <= near_floor se ataca si queda adentro de la zona mas farm_zone.outside_tolerance.
     # blind_player_radius = un descarte o ignorado guardado con la posicion del JUGADOR solo aplica a menos de tantas
     # unidades de ese lugar.
     # ACERCARSE = hover (mover el mouse sobre la piedra, sin clic) para leer su etiqueta: espera hover_wait_s, busca una
