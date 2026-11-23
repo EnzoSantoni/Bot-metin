@@ -53,9 +53,9 @@ def test_piedra_baja_sin_etiqueta_va_al_final_aunque_sea_la_mas_cercana():
 
 
 # ---------------------------------------------------------------- hover sin nombre
-def test_piedra_sin_nombre_sin_panel_en_2_s_la_ignora_y_va_a_la_siguiente(caplog):
-    """Decision simple: clic directo (sin hover) en la piedra mas cercana; si no aparece NINGUN panel en 2 s se ignora esa
-    posicion (approach.no_label_ignore_s) y se hace clic en la siguiente."""
+def test_piedra_sin_nombre_sin_panel_tras_el_truco_la_suelta_y_va_a_la_siguiente(caplog):
+    """Decision simple: clic directo (sin hover) en la piedra mas cercana; sin NINGUN panel en 2 s, truco del clic derecho y
+    segundo clic; si sigue sin panel se suelta SOLO esa piedra (approach.reject_s) y se hace clic en la siguiente."""
     caplog.set_level(logging.INFO)
     near, far = far_at(1300, 548), far_at(500, 300)
 
@@ -63,24 +63,29 @@ def test_piedra_sin_nombre_sin_panel_en_2_s_la_ignora_y_va_a_la_siguiente(caplog
         h.clock.t += 0.3
         return perc_far(far=[near, far])
     h = Harness(script)
-    h.run_until(lambda: len(h.bot.ignored) == 1, limit=60)
+    h.run_until(lambda: len(h.bot.ignored) == 1, limit=80)
     exp = h.bot.ignored[0].expiry - h.clock()
-    assert abs(exp - float(h.cfg["approach"]["no_label_ignore_s"])) < 5.0
-    assert hovers(h) == 0 and h.clicks() == 2       # en el mismo ciclo, clic directo en la siguiente
+    assert abs(exp - float(h.cfg["approach"]["reject_s"])) < 5.0
+    rights = [e for e in h.be.events if e == ("mouse_down", "right")]
+    # 2 clics + truco (clic derecho) en la cercana; en el mismo ciclo, clic en la otra; ningun hover (el clic derecho mueve
+    # el mouse como un clic)
+    assert hovers(h) - 2 * len(rights) == 0 and h.clicks() == 3 and len(rights) == 1
     assert h.bot.state is State.ATACAR and State.ACERCARSE not in h.states()
 
 
-def test_piedra_ignorada_por_no_tener_panel_no_se_vuelve_a_elegir():
+def test_piedra_soltada_por_no_tener_panel_no_se_vuelve_a_elegir_en_el_mismo_lugar_hasta_30_s():
     near = far_at(1300, 548)
 
     def script(h, n):
         h.clock.t += 0.3
         return perc_far(far=[near])
     h = Harness(script)
-    h.run_until(lambda: h.bot.ignored, limit=60)
-    for _ in range(20):
-        h.bot.step()
-    assert State.ACERCARSE not in h.states() and h.states().count(State.ATACAR) == 1
+    h.run_until(lambda: h.bot.ignored, limit=80)
+    p = perc_far(far=[near])
+    assert h.bot._far_view(p, h.clock())[0] == []        # la misma piedra en el mismo lugar: no se elige
+    h.clock.t += float(h.cfg["approach"]["reject_s"]) + 1.0
+    assert len(h.bot._far_view(p, h.clock())[0]) == 1    # a los 30 s se la vuelve a intentar
+    assert State.ACERCARSE not in h.states()
 
 
 def test_hover_con_etiqueta_sigue_clickeando_el_metin_objetivo():

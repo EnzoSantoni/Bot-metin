@@ -29,13 +29,13 @@ def test_seleccion_equivocada_repetida_no_descarta_un_metin_con_nombre_y_sigue()
     env.world.wrong_select = 10**6
     env.run_until(max_s=200)
     assert not any("seleccion equivocada" in t.reason for t in env.transitions)   # con nombre: no se descarta
-    # tras approach.max_clicks sin el panel del metin se ignora esa posicion approach.no_label_ignore_s y se elige otro
+    # tras approach.max_clicks con el panel de un monstruo se suelta esa piedra (solo esa, approach.reject_s como maximo)
     assert any(t.reason.startswith("sin confirmar:") for t in env.transitions)
     assert not env.bot.discarded
-    # nunca dos clics a menos de `attack.min_click_gap_s` y el reintento no es un bucle de clics
+    # nunca dos clics a menos de `attack.min_click_gap_s` (con un monstruo SIEMPRE delante se lo reintenta seguido: un giro de
+    # la camara cambia el lugar de la piedra en pantalla y ya no es "la misma")
     times = sorted(t for t, _ in env.world.clicks_on_metin)
     assert all(b - a >= float(env.cfg["attack"]["min_click_gap_s"]) - 1e-3 for a, b in zip(times, times[1:]))
-    assert len(times) <= 4 * (200 // 30 + 2)
     assert env.bot.state in (State.EXPLORAR, State.BUSCAR, State.VOLVER, State.DESTRABAR, State.ATACAR, State.ACERCARSE)
 
 

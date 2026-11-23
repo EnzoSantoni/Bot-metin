@@ -155,12 +155,15 @@ def bug_panel(env, attacking: bool, with_monster: bool = True):
     env.bot._perceive = wrapped
 
 
-def test_panel_ausente_sin_monstruo_cerca_no_hay_clic_derecho():
+def test_panel_ausente_sin_monstruo_cerca_el_truco_va_sobre_el_metin_y_sigue_atacando():
+    """Ningun panel tras el clic (error del juego) y ningun monstruo cerca: el truco del clic derecho va sobre el metin mismo
+    ("un monstruo o metin cercano"), una sola vez; el panel vuelve y se sigue atacando, sin soltar la piedra."""
     env = kenv(start=(560.0, 150.0))
     env.world.add_metin((585.0, 150.0), name=OSC, dps=0.02)
     bug_panel(env, attacking=True, with_monster=False)
     env.run_until(lambda: env.world.t > 40.0, max_s=60)
-    assert right_clicks(env) == []
+    assert len(right_clicks(env)) == 1 and not env.bot.ignored
+    assert env.bot._atk is not None and env.bot._atk.confirmed
 
 
 def test_panel_recover_apagado_no_hace_clic_derecho():

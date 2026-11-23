@@ -447,17 +447,24 @@ def test_destrabe_agota_intentos_y_va_al_centro():
     assert h.keys("s") >= 1                                                  # uno de los intentos fue ATRAS
 
 
-def test_atacar_sin_ningun_panel_en_2_s_ignora_la_posicion_un_rato():
-    """Decision simple: sin NINGUN panel attack.no_panel_s despues del clic, recien ahi se ignora esa posicion
-    approach.no_label_ignore_s (no 10 minutos); un solo clic."""
+def rights(h):
+    return sum(1 for e in h.be.events if e == ("mouse_down", "right"))
+
+
+def test_atacar_sin_ningun_panel_truco_y_segundo_clic_y_recien_ahi_suelta_la_piedra():
+    """Sin NINGUN panel attack.no_panel_s despues del clic puede ser el error del juego: truco del clic derecho y segundo clic
+    izquierdo; recien si sigue sin panel (2 clics seguidos) se suelta SOLO esa piedra, por approach.reject_s como maximo."""
     def script(h, n):
         return perc(metins=[metin()])
 
     h = Harness(script)
     h.train_camera()
     h.run_until(lambda: h.bot.ignored, limit=200)
-    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and h.clicks() == 1 and "ningun panel" in h.seen[1][1]
-    assert h.bot.ignored[0].expiry - h.clock.t <= float(h.cfg["approach"]["no_label_ignore_s"]) + 1
+    assert h.states()[:2] == [State.ATACAR, State.BUSCAR] and "2 clics sin ningun panel" in h.seen[1][1]
+    assert h.clicks() == 2 and rights(h) == 1
+    ev = h.be.events
+    assert ev.index(("mouse_down", "right")) < [i for i, e in enumerate(ev) if e == ("mouse_down", "left")][1]
+    assert h.bot.ignored[0].expiry - h.clock.t <= float(h.cfg["approach"]["reject_s"]) + 1
 
 
 NEAR_EDGE_XY = (442, 170)   # adentro del poligono a +4.6 u del borde (menos que explore_margin)
@@ -784,14 +791,80 @@ def test_avaricia_confirmada_por_el_panel_se_va_e_ignora_la_posicion():
     assert "confirmado por el panel" in h.seen[1][1] and h.bot.ignored and h.clicks() == 1
 
 
-def test_ningun_panel_en_2_s_ignora_la_posicion():
+def test_ningun_panel_tras_el_truco_suelta_la_piedra():
     def script(h, n):
         h.clock.t += 0.5
         return perc(metins=[metin()])
     h = Harness(script)
-    h.run_until(lambda: h.bot.ignored, limit=40)
+    h.run_until(lambda: h.bot.ignored, limit=60)
     att = next(i for i, (s, _) in enumerate(h.seen) if s is State.ATACAR)
-    assert "ningun panel" in h.seen[att + 1][1] and h.clicks() == 1
+    assert "2 clics sin ningun panel" in h.seen[att + 1][1] and h.clicks() == 2 and rights(h) == 1
+
+
+def test_el_truco_hace_volver_el_panel_y_ataca():
+    """Error del juego: el clic funciono pero el panel no aparecio. Tras el clic derecho del truco y el segundo clic el panel
+    muestra el metin: se ataca, no se suelta."""
+    def script(h, n):
+        h.clock.t += 0.3
+        return perc(metins=[metin()], panel=target_panel(0.9) if rights(h) >= 1 else None)
+    h = Harness(script)
+    h.run_until(lambda: h.bot._atk is not None and h.bot._atk.confirmed, limit=80)
+    assert not h.bot.ignored and h.bot.state is State.ATACAR and rights(h) == 1
+
+
+def test_tras_el_truco_el_panel_del_monstruo_del_clic_derecho_no_suelta_la_piedra_enseguida():
+    """El clic derecho del truco selecciona un monstruo: su panel no cuenta como "el clic en la piedra selecciono otra cosa"
+    hasta no_panel_s despues del segundo clic izquierdo; si ahi aparece el panel del metin, se ataca."""
+    mon_panel = PanelInfo(present=True, kind="other", name="Se-Rang", hp_ratio=1.0)
+    st = {"left2_t": None}
+
+    def script(h, n):
+        h.clock.t += 0.2
+        lefts = h.clicks()
+        if lefts >= 2 and st["left2_t"] is None:
+            st["left2_t"] = h.clock.t
+        if rights(h) == 0:
+            panel = None
+        elif st["left2_t"] is None or h.clock.t - st["left2_t"] < 1.0:
+            panel = mon_panel   # el monstruo del clic derecho sigue seleccionado un rato
+        else:
+            panel = target_panel(0.9)
+        return perc(metins=[metin()], panel=panel)
+    h = Harness(script)
+    h.run_until(lambda: h.bot._atk is not None and h.bot._atk.confirmed, limit=120)
+    assert not h.bot.ignored and h.bot.state is State.ATACAR
+
+
+def test_la_piedra_rechazada_solo_tapa_esa_piedra_no_a_las_de_al_lado():
+    """Avaricia confirmada por el panel: solo esa piedra queda ignorada; otro metin a 150 px se cliquea enseguida (antes, la
+    posicion ignorada tapaba a los vecinos)."""
+    avaricia = PanelInfo(present=True, kind="other_metin", name="metin_de_avaricia", hp_ratio=1.0)
+    near, other = (1000, 500), (1150, 520)
+
+    def script(h, n):
+        h.clock.t += 0.3
+        a = h.bot._atk
+        on_avaricia = a is not None and math.dist(a.click, near) < 60
+        return perc(metins=[metin(near), metin(other)],
+                    panel=avaricia if h.bot.state is State.ATACAR and on_avaricia else None)
+    h = Harness(script)
+    h.train_camera()
+    h.run_until(lambda: h.bot.ignored and h.bot._atk is not None and math.dist(h.bot._atk.click, other) < 60, limit=80)
+    assert h.bot.state is State.ATACAR and h.bot._is_ignored(None, h.clock.t, near)
+    assert not h.bot._is_ignored(None, h.clock.t, other)
+
+
+def test_la_piedra_rechazada_se_olvida_a_los_30_s_o_al_girar_la_camara():
+    h = Harness(lambda h, n: perc())
+    h.bot.tracker.update(perc().coords, h.clock())
+    h.bot._ignore_position(None, h.clock(), "test", (1000, 500), seconds=600)
+    assert h.bot._is_ignored(None, h.clock(), (1010, 505))
+    assert h.bot.ignored[0].expiry - h.clock() <= float(h.cfg["approach"]["reject_s"])
+    h.bot.camera.on_camera_rotated()
+    assert not h.bot._is_ignored(None, h.clock(), (1010, 505))
+    h.bot._ignore_position(None, h.clock(), "test", (1000, 500))
+    h.clock.t += float(h.cfg["approach"]["reject_s"]) + 0.1
+    assert not h.bot._is_ignored(None, h.clock(), (1000, 500))
 
 
 def test_volver_con_un_metin_objetivo_cerca_a_la_vista_lo_ataca_antes_de_irse():

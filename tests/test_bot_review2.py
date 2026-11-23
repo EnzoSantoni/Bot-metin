@@ -46,12 +46,15 @@ def test_b1_metin_afuera_de_la_zona_sin_camara_no_hace_loop(seed):
     m = env.world.add_metin((x_at_sd(env, -45), 150.0))
     zd = env.track_zone()
     env.run_until(max_s=300)
-    assert sum(1 for t in env.transitions if t.new == "ATACAR") <= 1
+    # modo clic sin camara ni rumbo: no se puede estimar donde esta el metin, asi que se lo cliquea; al salir de la zona mas la
+    # tolerancia yendo hacia el se vuelve sin ignorar ninguna posicion (solo el panel suelta una piedra). Sin ping-pong:
+    # VOLVER no ataca otro "cerca" hasta estar adentro y approach.reject_s no se cliquean metin sin posicion estimada
+    attacks = [t.t for t in env.transitions if t.new == "ATACAR"]
+    assert len(attacks) <= 300 / float(env.cfg["approach"]["reject_s"]) + 1
+    assert all(b - a >= float(env.cfg["approach"]["reject_s"]) for a, b in zip(attacks, attacks[1:]))
     assert sum(1 for t in env.transitions if t.new == "ACERCARSE") <= 3
-    # modo clic sin camara: no se puede estimar donde esta el metin (la unica regla de zona es "claramente afuera"), asi que
-    # se lo cliquea; al salir de la zona mas la tolerancia yendo hacia el queda ignorado y se vuelve: sin loop
     assert max(zd) <= tol(env) + 25
-    assert m.alive and env.bot.ignored
+    assert m.alive and not env.bot.finished
 
 
 def test_b1_salir_de_la_zona_atacando_descarta_la_posicion():
@@ -67,7 +70,10 @@ def test_b1_salir_de_la_zona_atacando_descarta_la_posicion():
     h.bot.tracker.forget_reference()
     h.bot.tracker.update(__import__("bot.vision.coords", fromlist=["Coords"]).Coords(300, 150, 1.0), h.clock())
     out = h.bot._do_atacar(p, 0.2)
-    assert out is not None and out[0] is State.VOLVER and h.bot.ignored   # el metin quedo claramente afuera
+    assert out is not None and out[0] is State.VOLVER and out[1] == "salio de la zona atacando"
+    # sin ignorar posiciones: VOLVER no ataca otro "cerca" hasta volver adentro y por approach.reject_s no se cliquean metin
+    # sin posicion estimada
+    assert not h.bot.ignored and h.bot._left_zone and h.bot._blind_wait_until > 0.2
 
 
 def test_b1_tramo_cortado_por_la_guardia_alimenta_a_la_camara():
@@ -183,11 +189,11 @@ def test_i2_piedra_fantasma_no_hace_loop():
         return p
     env.bot._perceive = per
     env.run_until(max_s=600)
-    # decision simple: a la piedra fantasma se le hace clic directo; no muestra ningun panel en no_panel_s y su posicion queda
-    # ignorada no_label_ignore_s: en 600 s solo puede volver a intentarse cuando vence (una vez por vencimiento, mas margen)
-    tries = sum(1 for t in env.transitions if "ningun panel" in t.reason)
-    assert 1 <= tries <= 2 + 600 / float(env.cfg["approach"]["no_label_ignore_s"])
-    assert env.bot.ignored and not any(t.new == "ACERCARSE" for t in env.transitions)
+    # decision simple: a la piedra fantasma se le hace clic directo; sin panel, truco y segundo clic, y se la suelta (solo esa,
+    # approach.reject_s como maximo): se la vuelve a intentar de vez en cuando, nunca en bucle
+    tries = [t.t for t in env.transitions if t.new == "ATACAR"]
+    assert 1 <= len(tries) <= 2 + 600 / float(env.cfg["approach"]["reject_s"])
+    assert not any(t.new == "ACERCARSE" for t in env.transitions)
 
 
 def test_i2_tope_de_aproximaciones_por_posicion():

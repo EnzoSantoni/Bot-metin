@@ -476,7 +476,12 @@
                //  near_unlabeled_y_frac del alto (cerca del personaje: de cerca los metin siempre muestran su nombre, asi que
                //  casi seguro es un monstruo) van al final y solo se consideran si no hay otro candidato.
                //  HOVER sin nombre tras hover_tries (ya NO hay clic): se ignora esa posicion no_label_ignore_s segundos.
-               "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
+               "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0,
+               //  PIEDRA RECHAZADA POR EL PANEL (Avaricia, panel de un monstruo, o 2 clics sin ningun panel: el segundo despues
+               //  del truco del clic derecho): se ignora SOLO esa piedra, en su lugar de la pantalla (a <= reject_px; se la sigue
+               //  ciclo a ciclo a <= reject_track_px), por reject_s como maximo. Un giro de la camara o alejarse reject_same_u
+               //  unidades la olvidan. Ninguna otra piedra ni etiqueta a la vista se descarta por posicion.
+               "reject_s": 30.0, "reject_px": 60, "reject_track_px": 80, "reject_same_u": 15.0},
 
   // CENTRO (regla D / E): como VOLVER pero el destino es el centro del poligono; termina a <= arrive_dist unidades y
   //  sigue con barrido + EXPLORAR. Su tope de tiempo y sus episodios de traba son los de VOLVER (volver.max_seconds).

@@ -292,7 +292,12 @@ DEFAULTS: dict[str, Any] = {
                  "keys_enabled": True, "center_tol_px": 140, "walk_chunk_s": 0.5, "quiet_reads": 2,
                  "settle_s": 0.4, "max_clicks": 4, "retry_ignore_s": 30.0, "align_turns_max": 6,
                  "stuck_click_floor": 4.0,
-                 "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0},
+                 "unlabeled_closer_ratio": 0.5, "near_unlabeled_y_frac": 0.55, "no_label_ignore_s": 120.0,
+                 # Piedra rechazada por el panel (Avaricia, panel de un monstruo, 2 clics sin ningun panel): se ignora SOLO esa
+                 # piedra, en su lugar de la pantalla (a <= reject_px; se la sigue ciclo a ciclo a <= reject_track_px), por
+                 # reject_s como maximo; un giro de la camara o alejarse reject_same_u la olvidan. Ninguna otra piedra ni
+                 # etiqueta a la vista se descarta por posicion (ignore_minutes / no_label_ignore_s quedan topeados en reject_s).
+                 "reject_s": 30.0, "reject_px": 60, "reject_track_px": 80, "reject_same_u": 15.0},
     # CENTRO: llega al centro del poligono a <= arrive_dist unidades (el tope de tiempo es volver.max_seconds).
     "center": {"arrive_dist": 8.0},
     # VOLVER: tiempo acumulado maximo de una "vuelta" (s); lo comparte CENTRO.
@@ -1102,8 +1107,9 @@ def _validate_tracking_navigation(cfg: dict) -> None:
                       "far_monsters_n", "far_monsters_px", "hover_wait_s", "hover_label_px", "hover_tries",
                       "unlabeled_closer_ratio", "near_unlabeled_y_frac", "no_label_ignore_s",
                       "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "settle_s", "max_clicks", "retry_ignore_s",
-                      "align_turns_max", "stuck_click_floor"),
-         ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius",
+                      "align_turns_max", "stuck_click_floor", "reject_s", "reject_px", "reject_track_px", "reject_same_u"),
+         ("max_seconds", "ignore_minutes", "ignore_radius", "lost_cycles", "blind_player_radius", "reject_s", "reject_px",
+          "reject_track_px", "reject_same_u",
           "max_tries_per_spot", "far_monsters_n", "far_monsters_px", "hover_label_px", "hover_tries",
           "near_floor", "center_tol_px", "walk_chunk_s", "quiet_reads", "max_clicks", "align_turns_max"))
     if not isinstance(cfg["approach"].get("keys_enabled"), bool):

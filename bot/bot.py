@@ -181,6 +181,10 @@ class _Attack:
     stuck_reclicks: int = 0                     # trabado sin monstruos: reclics a la piedra antes del paso al costado
     stuck_reclick_t: float = -math.inf          # hora del ultimo de esos reclics (se espera attack.stuck_reclick_wait_s)
     aim_high: bool = False                      # el proximo reclic va a la parte ALTA de la piedra (`_high_point`)
+    np_click_t: float = 0.0                     # ultimo clic (izquierdo o el derecho del truco) desde el que corre no_panel_s
+    np_tries: int = 0                           # 1 = el primer clic no mostro ningun panel: truco y segundo clic hechos
+    np_trick: bool = False                      # se hizo el truco del clic derecho por "ningun panel" (el panel puede mostrar
+                                                # al monstruo del clic derecho hasta no_panel_s despues del segundo clic)
     outside_kept: bool = False                  # ya se aviso que sigue pegandole afuera de la zona (no se abandona)
 
 
@@ -330,6 +334,17 @@ class _Spot:
 
 
 @dataclass
+class _Reject:
+    """Piedra que el panel rechazo (o que no mostro ningun panel en 2 clics): se ignora SOLO esa, en su lugar de la pantalla
+    (seguida ciclo a ciclo mientras se la vea), por `approach.reject_s` como maximo. Un giro de la camara o alejarse
+    `approach.reject_same_u` del lugar desde donde se la vio por ultima vez la olvidan (ya no se sabe cual es)."""
+    screen: tuple[int, int]
+    pos: tuple[int, int] | None
+    rot: int
+    expiry: float
+
+
+@dataclass
 class _Approach:
     """Caminata hacia una piedra lejana (sin etiqueta)."""
     start_t: float
@@ -420,7 +435,7 @@ class Bot(ApproachKeysMixin):
         self.debug = DebugRecorder(cfg)
         self.last_perception: Perception | None = None
         self.discarded: list[_Spot] = []   # metin descartados
-        self.ignored: list[_Spot] = []     # piedras lejanas que resultaron de otro tipo, se perdieron o no se pudieron alcanzar
+        self.ignored: list[_Reject] = []   # piedras exactas que el panel rechazo (por pantalla, <= approach.reject_s)
         self._tries: list[_Spot] = []      # aproximaciones a piedras lejanas que todavia no llegaron a atacar
         self.pending_return = False
         self._cycle = 0
@@ -431,6 +446,9 @@ class Bot(ApproachKeysMixin):
         self._apr: _Approach | None = None
         self._sur: _Surround | None = None        # rodeado sin avanzar (EXPLORAR/VOLVER/CENTRO caminando)
         self._detour: _Detour | None = None       # desvio en curso tras una traba sin monstruos (teclado)
+        self._left_zone = False                    # se solto un metin por salir de la zona: sin "metin cerca" hasta volver adentro
+        self._blind_wait_until = -math.inf         # hasta entonces no se cliquean metin SIN posicion estimada (tras soltar uno
+                                                   # por salir de la zona sin saber donde estaba: seria el mismo, en bucle)
         self._blocked: list[tuple[tuple[int, int], float]] = []   # (lugar, rumbo de W) que no avanzo: no se repiten ahi
         self._probe_blind = 0                     # pruebas de W seguidas sin lograr medir el rumbo
         self._cur_log_t = -math.inf               # ultimo "Busco el metin en curso" (sin spam)
@@ -550,6 +568,7 @@ class Bot(ApproachKeysMixin):
             self._debug_coords(t)
             self.last_perception = p
             self._frames += 1
+            self._track_rejects(p)
             self._decide(p, t)
         wait = self.cw["poll_s"] if self.state is State.CAPTCHA else self.loop["cycle_ms"] / 1000
         rest = wait - (self.clock() - t0)
@@ -860,18 +879,52 @@ class Bot(ApproachKeysMixin):
 
     def _is_ignored(self, gp: Xy | None, t: float, screen: tuple[int, int] | None = None,
                     player_xy: tuple[int, int] | None = None) -> bool:
-        """Piedra lejana en una posicion que ya resulto ser de otro tipo (o que se perdio / no se pudo alcanzar)."""
-        return self._expiry(self.ignored, gp, t, screen, player_xy, float(self.apr["ignore_radius"])) is not None
+        """`screen` es la piedra exacta que el panel ya rechazo (mismo lugar de la pantalla, misma vista). Nada mas se descarta
+        por posicion (`gp` y `player_xy` ya no se usan)."""
+        return screen is not None and self._rejected([screen], t)
+
+    def _rejected(self, pts: list[tuple[int, int]], t: float) -> bool:
+        """Alguno de los puntos de pantalla `pts` de una deteccion cae a <= `approach.reject_px` de una piedra rechazada."""
+        if not self.ignored:
+            return False
+        self._prune_rejects(t)
+        lim = float(self.apr["reject_px"])
+        return any(math.dist(q, r.screen) <= lim for r in self.ignored for q in pts)
+
+    def _prune_rejects(self, t: float) -> None:
+        """Olvida las piedras rechazadas vencidas, las de otra vista (la camara giro) y las vistas desde lejos de aca."""
+        pos, lim = self.tracker.position, float(self.apr["reject_same_u"])
+        self.ignored[:] = [r for r in self.ignored if r.expiry > t and r.rot == self.camera.rotations
+                           and (pos is None or r.pos is None or math.dist(pos, r.pos) <= lim)]
+
+    def _track_rejects(self, p: Perception) -> None:
+        """Sigue cada piedra rechazada en pantalla: la deteccion (etiqueta o piedra) mas cercana a <= `approach.reject_track_px`
+        de su ultimo punto es la misma piedra, que se corre cuando el personaje se mueve."""
+        if not self.ignored:
+            return
+        self._prune_rejects(self.clock())
+        pts = [d.click_point for d in p.metins] + [q for f in p.far_metins for q in (f.center, f.rect.center)]
+        if not pts:
+            return
+        lim, pos = float(self.apr["reject_track_px"]), self.tracker.position
+        for r in self.ignored:
+            q = min(pts, key=lambda q: math.dist(q, r.screen))
+            if math.dist(q, r.screen) <= lim:
+                r.screen = (int(q[0]), int(q[1]))
+                if pos is not None:
+                    r.pos = pos
 
     def _ignore_position(self, gp: Xy | None, t: float, why: str, screen: tuple[int, int] | None = None,
                          seconds: float | None = None) -> None:
-        """Ignora una posicion `seconds` (por defecto `approach.ignore_minutes`)."""
-        secs = float(self.apr["ignore_minutes"]) * 60 if seconds is None else seconds
-        s = self._new_spot(gp, screen, t, secs / 60)
-        if s is not None:
-            self.ignored.append(s)
-        logger.info("Posicion ignorada por %.0f s (%s): %s", secs, why,
-                    "sin camara, desde la posicion del jugador" if gp is None else f"est. ({gp[0]:.0f}, {gp[1]:.0f})")
+        """La piedra que el panel rechazo, vista en `screen`, se ignora SOLO ella (mismo lugar de la pantalla) por
+        `approach.reject_s` como maximo (`seconds` lo acorta). Ninguna otra piedra ni etiqueta a la vista se descarta."""
+        cap = float(self.apr["reject_s"])
+        secs = cap if seconds is None else min(float(seconds), cap)
+        if screen is None:
+            logger.info("Piedra rechazada (%s) sin punto de pantalla: no ignoro nada", why)
+            return
+        self.ignored.append(_Reject((int(screen[0]), int(screen[1])), self.tracker.position, self.camera.rotations, t + secs))
+        logger.info("Piedra ignorada %.0f s (%s): solo esa, en (%d, %d) de la pantalla", secs, why, screen[0], screen[1])
         self._dbg("ignorada", why)
 
     def _register_approach(self, gp: Xy | None, center: tuple[int, int], p: Perception, t: float) -> _Spot | None:
@@ -924,6 +977,12 @@ class Bot(ApproachKeysMixin):
             return None
         return f"{what} afuera de la zona mas la tolerancia (est. ({w[0]:.0f}, {w[1]:.0f}), d={self.zone.signed_distance(w):.0f})"
 
+    def _blind_wait(self, t: float, gp: Xy | None, pt: tuple[int, int], p: Perception, h: float | None) -> bool:
+        """`approach.reject_s` despues de soltar un metin por salir de la zona sin saber su posicion, otro metin SIN posicion
+        estimada (ni camara ni rumbo del minimapa) no se cliquea: no se puede saber si es el mismo (bucle adentro-afuera). Los
+        que tienen posicion estimada los decide la regla de zona, como siempre."""
+        return t < self._blind_wait_until and gp is None and self._heading_pos(pt, p, h) is None
+
     def _label_view(self, p: Perception, t: float, check_discards: bool = True
                     ) -> tuple[list[_Cand], list[tuple[tuple, str]]]:
         """(candidatos, motivos de los no elegidos): TODA etiqueta de metin (objetivo, dudosa o de otro tipo: no se decide por
@@ -937,12 +996,17 @@ class Bot(ApproachKeysMixin):
                 why.append((("ui", d.name), "clic no permitido (interfaz)"))
                 continue
             gp = self._game_pos_of(d.click_point, p)
-            if check_discards and self._is_ignored(gp, t, d.click_point, p.player_xy):
-                why.append((("ignorada", d.name), f"{d.name}: posicion ignorada (lo dijo el panel)"))
+            if check_discards and self.ignored and self._rejected(
+                    [d.click_point] + [f.center for f in p.far_metins
+                                       if math.dist(f.center, d.click_point) <= float(self.apr["label_match_px"])], t):
+                why.append((("ignorada", d.name), f"{d.name}: la piedra que el panel ya rechazo (mismo lugar)"))
                 continue
             zr = self._zone_reason(gp, d.name, d.click_point, p, h)
             if zr is not None:
                 why.append((("zona", d.name), zr))
+                continue
+            if self._blind_wait(t, gp, d.click_point, p, h):
+                why.append((("ciega", d.name), f"{d.name}: sin posicion estimada, poco despues de soltar uno por salir de la zona"))
                 continue
             out.append(_Cand(d, gp))
         out.sort(key=lambda c: math.dist(c.det.click_point, p.player_xy))
@@ -966,12 +1030,15 @@ class Bot(ApproachKeysMixin):
                 why.append((("ui", "far"), "piedra lejana: clic no permitido (interfaz)"))
                 continue
             gp = self._game_pos_of(f.center, p)
-            if self._is_ignored(gp, t, f.center, p.player_xy):
-                why.append((("ignorada", "far"), "piedra lejana: posicion ignorada (lo dijo el panel)"))
+            if self.ignored and self._rejected([f.center, f.rect.center], t):
+                why.append((("ignorada", "far"), "piedra lejana: la que el panel ya rechazo (mismo lugar)"))
                 continue
             zr = self._zone_reason(gp, "piedra lejana", f.center, p, h)
             if zr is not None:
                 why.append((("zona", "far"), zr))
+                continue
+            if self._blind_wait(t, gp, f.center, p, h):
+                why.append((("ciega", "far"), "piedra lejana: sin posicion estimada, poco despues de soltar una por salir de la zona"))
                 continue
             out.append(_FarCand(f, gp))
         out.sort(key=lambda c: math.dist(c.far.center, p.player_xy))
@@ -1347,7 +1414,13 @@ class Bot(ApproachKeysMixin):
         return False
 
     def _attack_near(self, p: Perception, t: float, why: str) -> Transition:
-        """Regla c: antes de irse (VOLVER, CENTRO) un metin objetivo cerca a la vista se ataca."""
+        """Regla c: antes de irse (VOLVER, CENTRO) un metin objetivo cerca a la vista se ataca. Salvo si se acaba de soltar un
+        metin por salir de la zona: hasta volver adentro del poligono no se ataca otro "cerca" (seria el mismo: ping-pong)."""
+        if self._left_zone:
+            pos = self.tracker.position
+            if pos is None or self.zone.status(pos) is not ZoneStatus.INSIDE:
+                return None
+            self._left_zone = False
         if self._near_target(p, t):
             return self._pick_goal(p, t, why)
         return None
@@ -1403,7 +1476,7 @@ class Bot(ApproachKeysMixin):
         self._last_click_vec = (point[0] - p.player_xy[0], point[1] - p.player_xy[1])
         pos = self.tracker.position
         self._atk = _Attack(t, point, gp, t, t, pos, last_drop_t=t, trail=[] if pos is None else [(t, pos)],
-                            start_pos=pos, ref=pos, aim=point, quick_t=t)
+                            start_pos=pos, ref=pos, aim=point, quick_t=t, np_click_t=t)
         self._atk.stone = self._label_of(point, p) is None
         self._atk.floor_d = floor_d
         self._atk.cm = self._current_for(point, gp, p, t)
@@ -1508,17 +1581,17 @@ class Bot(ApproachKeysMixin):
             self._track_click(a, p)
         if not rotated:
             self._touch_current(a, p, t)
-        if kind is not None:
+        # tras el truco del clic derecho el panel puede mostrar al monstruo (o al metin) del clic derecho hasta no_panel_s despues
+        # del segundo clic izquierdo: ese panel no es el de la piedra
+        trick = a.np_trick and not a.confirmed and (a.recover_t is not None or a.pending is not None
+                                                     or t - a.np_click_t < float(self.atk["no_panel_s"]))
+        if kind is not None and not (trick and kind != "target_metin"):
             a.panel_seen = True
         if kind == "target_metin":
             self._read_panel(a, panel, t)
-        elif not a.confirmed and not a.panel_seen and t - a.start_t >= float(self.atk["no_panel_s"]) \
-                and a.recover_t is None and a.pending is None:
-            # el clic no mostro NINGUN panel: no era un metin (o no se le pudo hacer clic): recien ahi se ignora esa posicion
-            self._ignore_position(a.gp, t, f"ningun panel {float(self.atk['no_panel_s']):.0f} s despues del clic", a.click,
-                                  seconds=float(self.apr["no_label_ignore_s"]))
-            self._atk = None
-            return self._after_reject(p, t, "ningun panel tras el clic: posicion ignorada")
+        elif (not a.confirmed and not a.panel_seen and a.recover_t is None and a.pending is None
+              and t - a.np_click_t >= float(self.atk["no_panel_s"]) and self._click_gate() is None):
+            return self._no_panel(a, p, t)
         if a.recover_t is not None:   # esperando que el panel vuelva al metin tras el clic derecho
             out = self._recover_check(a, kind, p, t)
             if out is not _NO_RECOVERY:
@@ -1529,6 +1602,8 @@ class Bot(ApproachKeysMixin):
             why, count = a.pending
             a.pending = None
             return self._reclick(a, why, p, t, count)
+        if trick and kind in WRONG_PANEL_KINDS:
+            return None   # el panel todavia puede ser el del clic derecho del truco: se espera el de la piedra
         if kind == "other_metin":   # el panel dice otro tipo de metin (Avaricia): se va enseguida
             what = panel.name or kind
             logger.info("El panel muestra %s (no es un metin objetivo): un paso atras para dejar de pegarle, me voy e "
@@ -1601,10 +1676,12 @@ class Bot(ApproachKeysMixin):
                     logger.info("Afuera de la zona mas la tolerancia pero le estoy pegando al metin (vida %.0f%%): no lo dejo; "
                                 "lo rompo, recojo y recien despues vuelvo", (a.last_hp or 0.0) * 100)
             else:
-                # yendo hacia el metin el personaje salio de la zona mas la tolerancia y el metin no esta cerca a la vista: queda
-                # claramente afuera (aunque no se sepa su posicion exacta): se ignora para no volver a caer
+                # yendo hacia el metin el personaje salio de la zona mas la tolerancia y no le esta pegando: vuelve (sin ignorar
+                # ninguna posicion: solo el panel hace soltar una piedra; la regla de zona decide si se la vuelve a elegir)
                 self._atk = self._cur = None
-                self._ignore_position(a.gp, t, "metin afuera de la zona mas la tolerancia (sali de la zona yendo a el)", a.click)
+                self._left_zone = True
+                if a.gp is None:
+                    self._blind_wait_until = t + float(self.apr["reject_s"])
                 return State.VOLVER, "salio de la zona atacando"
         if kind == "target_metin" and t - a.hp_down_t < float(self.atk["hp_progress_s"]):
             self._scan_while_attacking(a, p, t)   # pegando: es el momento de mirar alrededor
@@ -1633,6 +1710,40 @@ class Bot(ApproachKeysMixin):
                 return self._stuck_transition(State.ATACAR, t, "trabado yendo al metin", goal=a.gp)
             return self._reclick(a, "sin confirmar", p, t)
         return None
+
+    def _no_panel(self, a: _Attack, p: Perception, t: float) -> Transition:
+        """Ningun panel `attack.no_panel_s` despues del clic (quieto y con el ritmo de clics). Puede ser el error del juego (el
+        panel no aparece aunque el clic funciono): la primera vez, truco de Enzo (clic derecho sobre un monstruo o metin cercano,
+        que lo selecciona sin atacar y hace volver el panel) y despues otro clic izquierdo en la piedra. Si tras ese segundo clic
+        sigue sin ningun panel, son 2 clics seguidos sin panel: recien ahi se suelta la piedra (solo esa, `approach.reject_s`)."""
+        n = float(self.atk["no_panel_s"])
+        if a.np_tries == 0:
+            a.np_tries = 1
+            pt = self._trick_point(a, p) if self.atk["panel_recover"] else None
+            if pt is not None and self.gi.right_click(pt[0], pt[1], p.mask):
+                a.np_trick, a.recover_lost = True, True   # tras el clic derecho, clic izquierdo a la piedra (`_recover_check`)
+                a.recover_t = a.np_click_t = self._last_click_t = self.clock()
+                self._planned = pt
+                logger.info("Ningun panel %.0f s despues del clic en %s: puede ser el error del juego; truco: clic derecho en %s "
+                            "(lo selecciona sin atacar y el panel vuelve) y despues otro clic izquierdo en la piedra", n, a.click, pt)
+                self._dbg("recuperar", f"ningun panel: clic derecho en {pt} y segundo clic")
+                return None
+            logger.info("Ningun panel %.0f s despues del clic en %s y nada para el truco del clic derecho: segundo clic en la "
+                        "piedra", n, a.click)
+            a.pending = ("ningun panel: segundo clic en la piedra", False)
+            return None
+        why = "2 clics sin ningun panel" + (" (con el truco del clic derecho)" if a.np_trick else "")
+        self._ignore_position(a.gp, t, why, a.click)
+        self._atk = None
+        return self._after_reject(p, t, f"{why}: suelto la piedra")
+
+    def _trick_point(self, a: _Attack, p: Perception) -> tuple[int, int] | None:
+        """Donde hacer el clic derecho del truco ("sobre un monstruo o metin cercano"): el cuerpo de un monstruo cercano; si no
+        hay, la misma piedra (se selecciona sin atacarla)."""
+        pt = self._monster_body_point(a, p)
+        if pt is not None:
+            return pt
+        return a.click if p.mask.allows(*a.click) else None
 
     def _hitting(self, a: _Attack, p: Perception, t: float) -> bool:
         """Le esta pegando: el panel confirmo el metin objetivo, su vida ya bajo y sigue bajando (en los ultimos
@@ -1947,6 +2058,7 @@ class Bot(ApproachKeysMixin):
             self._last_click_t = self.clock()
             if not a.confirmed:
                 a.clicks += 1
+                a.np_click_t = self._last_click_t   # no_panel_s corre desde este clic
         self._planned = a.click = point
         a.last_click_t = a.last_drop_t = a.reclick_t = self.clock()
         return None
