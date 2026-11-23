@@ -1,6 +1,6 @@
 """Angulo vertical de la camara: detector de "mira el piso" (bot/vision/pitch.py + bot/camera_pitch.py), reinicio con teclas
-(G, toques de T, una rueda al final), cuando lo hace el bot y `calibrate.py camara` (mide G y es guiado). Todo simulado (nada de
-input real)."""
+(G, toques de T, una rueda al final), cuando lo hace el bot y `calibrate.py camara` (guiado). Todo simulado (nada de input
+real)."""
 import ctypes
 import copy
 import json
@@ -14,7 +14,7 @@ import pytest
 import bot.input.base as base
 from bot import calibration as cal
 from bot.bot import State, _Explore
-from bot.camera_pitch import CameraPitch, g_arrival, looks_at_floor, small_gray
+from bot.camera_pitch import CameraPitch, looks_at_floor
 from bot.config import DEFAULTS, OBSOLETE_KEYS, ConfigError, load_config, validate_config
 from bot.control import BotControl, PanicStop
 from bot.geometry import Rect
@@ -121,7 +121,7 @@ def test_config_camera_pitch_por_defecto_y_validacion():
     validate_config(c)
     p = c["camera_pitch"]
     assert p["enabled"] is True and p["zoom_out_clicks"] == 20 and p["zoom_out_sign"] == 1
-    assert (p["g_hold_s"], p["g_margin_s"], p["t_taps"], p["t_tap_ms"], p["t_gap_ms"]) == (3.0, 0.25, 4, 120, 150)
+    assert (p["g_hold_s"], p["t_taps"], p["t_tap_ms"], p["t_gap_ms"]) == (1.5, 4, 120, 150) and "g_margin_s" not in p
     assert p["step_pause_s"] == 0.15
     assert c["controls"]["camera_top"] == "g" and c["controls"]["camera_flat"] == "t"
     for old in ("ref_horizon_frac", "tolerance", "limit", "to_limit_px", "from_limit_px", "max_drag_px", "drag_s",
@@ -129,7 +129,7 @@ def test_config_camera_pitch_por_defecto_y_validacion():
         assert old not in p and ("camera_pitch", old) in OBSOLETE_KEYS
     for key, bad in (("enabled", "si"), ("zoom_out_sign", 0), ("zoom_out_sign", 2), ("g_hold_s", 0), ("t_taps", -1),
                      ("t_taps", 1.5), ("t_tap_ms", 0), ("t_tap_ms", 2000), ("floor_frames", 0), ("min_gap_s", -1),
-                     ("side_half_frac", 0.9), ("g_margin_s", -0.1)):
+                     ("side_half_frac", 0.9)):
         c = cfg()
         c["camera_pitch"][key] = bad
         with pytest.raises(ConfigError):
@@ -218,7 +218,7 @@ def test_reset_secuencia_g_toques_de_t_y_una_rueda_al_final():
     assert cp.reset(one(), g, lambda s: None, 100.0, "prueba") is True
     seq = presses(be)
     assert seq == [("g", "ok")] + [("t", "ok")] * 4 + [("rueda", 20)]   # G, 4 toques de T y UNA rueda lejos, al final
-    assert held == [("camera_top", 3.0)]                                 # G mantenida 3 s
+    assert held == [("camera_top", 1.5)]                                 # G mantenida 1.5 s (fijo)
     assert tapped == [("camera_flat", 0.12)] * 4                         # T: toques precisos de 120 ms (nunca mantenida)
     assert len(cp.tap_ms) == 4 and all(119.9 <= v <= 135.0 for v in cp.tap_ms)
     assert not any(e[0] in ("mouse_down", "mouse_up") for e in be.events)   # nada de clics ni arrastres
@@ -237,7 +237,7 @@ def test_reset_log(caplog):
     caplog.set_level(logging.INFO)
     g, _, _, _ = make()
     CameraPitch(cfg()).reset(one(), g, lambda s: None, 0.0, "arranque")
-    assert any("Camara: reinicio (G 3.00 s, T x4 de 120 ms, rueda +20) [arranque]" in r.getMessage()
+    assert any("Camara: reinicio (G 1.50 s, T x4 de 120 ms, rueda +20) [arranque]" in r.getMessage()
                for r in caplog.records)
     assert any(r.getMessage().startswith("Camara: reinicio listo en ") for r in caplog.records)   # cuanto tardo
 
@@ -266,37 +266,6 @@ def test_reset_se_corta_si_perceive_da_none():
     g, be, _, _ = make()
     assert CameraPitch(cfg()).reset(lambda: None, g, lambda s: None, 0.0, "x") is False
     assert not any(e[0] == "scroll" for e in be.events) and be.pressed == ([], [])
-
-
-# ------------------------------------------------------------------ medir cuanto tarda G
-def cam_frames(arrive_s, fps=30.0, hold_s=1.5, noise=0.0, seed=0):
-    """Cuadros simulados de G: la imagen se corre (la camara sube) hasta `arrive_s` y despues queda quieta (con ruido)."""
-    rng = np.random.default_rng(seed)
-    scene = rng.integers(0, 255, (H, W), dtype=np.uint8)
-    blur = cv2.GaussianBlur(scene, (0, 0), 6)
-
-    def frame(shift):
-        img = np.roll(blur, int(shift), axis=0)
-        if noise:
-            img = np.clip(img.astype(np.int16) + rng.normal(0, noise, img.shape), 0, 255).astype(np.uint8)
-        return small_gray(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
-    base = [frame(0) for _ in range(6)]
-    frames = [(i / fps, frame(min(i / fps, arrive_s) * 300)) for i in range(1, int(hold_s * fps))]
-    return base, frames
-
-
-@pytest.mark.parametrize("arrive", [0.45, 0.8, 1.1])
-def test_g_arrival_da_cuando_la_imagen_queda_quieta(arrive):
-    base, frames = cam_frames(arrive, noise=2.0)
-    got = g_arrival(base, frames)
-    assert got is not None and arrive - 0.01 <= got <= arrive + 1 / 30 + 0.01
-
-
-def test_g_arrival_sin_movimiento_o_sin_llegar_no_mide():
-    base, frames = cam_frames(0.0, noise=2.0)      # ya estaba arriba: no se movio
-    assert g_arrival(base, frames) is None
-    base, frames = cam_frames(5.0, hold_s=1.5)     # se seguia moviendo al soltar G: G no alcanzo
-    assert g_arrival(base, frames) is None
 
 
 def test_reset_suelta_la_tecla_si_se_para_a_mitad():
@@ -487,27 +456,19 @@ def key_downs(be, key):
     return sum(1 for e in be.events if e == ("key_down", key))
 
 
-def test_camara_guiada_mide_g_y_guarda_g_hold_s_con_margen(tmp_cfg, monkeypatch):
-    """La primera G (desde el angulo de farmeo) se mide: g_hold_s = lo medido + g_margin_s, guardado junto con t_taps; los 3
-    reinicios de comprobacion ya usan la G nueva y dicen cuanto tardan."""
+def test_camara_guiada_no_cambia_g_hold_s_solo_elige_los_toques(tmp_cfg, monkeypatch):
+    """G se mantiene g_hold_s fijo (sin medir); calibrate.py camara guarda solo t_taps y dice cuanto tarda cada reinicio de
+    comprobacion."""
     s = cam_session(tmp_cfg, monkeypatch, ["s", "", "s", "s"])
-    monkeypatch.setattr(cal, "g_arrival", lambda base, frames: 0.83)
     held = []
     real_hold = s.gi.hold
     s.gi.hold = lambda action, sec: held.append((action, sec)) or real_hold(action, sec)
     assert cal.cmd_camara(s) == 0
-    assert raw(tmp_cfg)["camera_pitch"]["g_hold_s"] == 1.08 and raw(tmp_cfg)["camera_pitch"]["t_taps"] == 1
-    assert held[0] == ("camera_top", 0.01) and held[1:] == [("camera_top", 1.08)] * 3
-    assert any("G tarda 0.83 s en llegar a la vista desde arriba" in line for line in s.out)
+    assert raw(tmp_cfg)["camera_pitch"]["t_taps"] == 1 and "g_hold_s" not in raw(tmp_cfg)["camera_pitch"]
+    assert held[0] == ("camera_top", 0.01) and held[1:] == [("camera_top", 1.5)] * 3   # 1.5 = config.json (sin g_hold_s)
+    assert not any("g_hold_s" in line or "G tarda" in line for line in s.out)
     assert sum("reinicio" in line and " s, captura en " in line for line in s.out) == 3
     assert any(line.startswith("El reinicio tarda ") for line in s.out)
-
-
-def test_camara_guiada_sin_poder_medir_g_deja_g_hold_s(tmp_cfg, monkeypatch):
-    s = cam_session(tmp_cfg, monkeypatch, ["s", "s", "s"])   # capturas negras: no se ve la camara moverse
-    assert cal.cmd_camara(s) == 0
-    assert "g_hold_s" not in raw(tmp_cfg).get("camera_pitch", {})
-    assert any("No pude medir cuanto tarda G" in line for line in s.out)
 
 
 def test_camara_guiada_toques_uno_menos_listo_guarda_t_taps_y_comprueba_3_veces(tmp_cfg, tmp_path, monkeypatch):

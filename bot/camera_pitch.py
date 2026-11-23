@@ -5,11 +5,11 @@ Datos comprobados por Enzo en el juego:
 - Si se mantiene T mucho, llega a plano y la camara se ACERCA al personaje (el mismo zoom que hacia el arrastre del mouse
   contra el tope horizontal). Ese zoom NO se va al volver con G: solo se saca con la rueda hacia "lejos".
 
-`reset()`: (a) mantener G `g_hold_s` (lo que tarda G en llegar al tope de la vista desde arriba desde el angulo de farmeo, mas
-`g_margin_s`: lo mide `calibrate.py camara`); (b) `t_taps` toques cortos de T (`t_tap_ms` cada uno, `t_gap_ms` entre toques) para
-bajar al angulo de farmeo, NUNCA T mantenida hasta abajo; (c) rueda hacia "lejos" hasta el tope (`zoom_out_sign` x
-`zoom_out_clicks`): deja la distancia bien (el angulo no depende de la distancia). Una sola rueda, al final. `t_taps` y `g_hold_s`
-se calibran con `calibrate.py camara`.
+`reset()`: (a) mantener G `g_hold_s` (tiempo fijo configurable, 1.5 s: llega al tope de la vista desde arriba desde el angulo
+de farmeo; en el tope mantener G de mas no hace nada, solo cuesta tiempo); (b) `t_taps` toques cortos de T (`t_tap_ms` cada uno,
+`t_gap_ms` entre toques) para bajar al angulo de farmeo, NUNCA T mantenida hasta abajo; (c) rueda hacia "lejos" hasta el tope
+(`zoom_out_sign` x `zoom_out_clicks`): deja la distancia bien (el angulo no depende de la distancia). Una sola rueda, al final.
+`t_taps` se calibra con `calibrate.py camara`.
 
 Con `camera_pitch.enabled` false el bot no toca la camara para nada. El juego sube la camara solo al acercarse a bordes o
 montanas y no la devuelve: por eso se reinicia SOLO cuando la camara mira el piso (`looks_at_floor`: bot/vision/pitch.py solo
@@ -24,9 +24,6 @@ import math
 import time
 from typing import Any, Callable
 
-import cv2
-import numpy as np
-
 from bot.vision.metin import player_point
 from bot.vision.pitch import measure_horizon
 
@@ -36,41 +33,6 @@ TOP_ACTION = "camera_top"     # controls: G, vista desde arriba
 FLAT_ACTION = "camera_flat"   # controls: T, perspectiva mas plana
 BACKOFF_MAX = 8   # tope del multiplo de `min_gap_s` tras reinicios por piso que no arreglaron nada
 FLOOR_REASON = "mira el piso"   # motivo del reinicio cuando la camara quedo mirando el piso
-G_SMALL = 8          # medir G: los cuadros se comparan en gris reducidos a 1/G_SMALL
-G_MIN_MOTION = 2.0   # medir G: diferencia media minima (niveles de gris) entre cuadros para decir que la camara se mueve
-G_QUIET_FRAMES = 3   # medir G: cuadros quietos que tiene que haber despues del ultimo que cambio (si no, seguia moviendose)
-
-
-def small_gray(img: Any) -> np.ndarray:
-    """Cuadro en gris reducido (para comparar cuadros al medir G)."""
-    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    size = (max(1, g.shape[1] // G_SMALL), max(1, g.shape[0] // G_SMALL))
-    return cv2.resize(g, size, interpolation=cv2.INTER_AREA).astype(np.int16)
-
-
-def g_arrival(base: list, frames: list) -> float | None:
-    """Cuanto tardo la camara en llegar al tope de la vista desde arriba con G. `base`: cuadros (`small_gray`) con la camara
-    quieta antes de apretar G (el ruido de la imagen: animaciones); `frames`: (segundos desde que se apreto G, cuadro) mientras
-    se mantiene G. Devuelve el instante del ultimo cuadro que todavia cambiaba respecto del anterior (la camara se movia), o
-    None si no se ve movimiento claro (ya estaba arriba) o si se seguia moviendo hasta el final (G no alcanzo)."""
-    def diff(a: np.ndarray, b: np.ndarray) -> float:
-        return float(np.mean(np.abs(a - b)))
-    noise = max((diff(a, b) for a, b in zip(base, base[1:])), default=0.0)
-    ds, prev = [], (base[-1] if base else None)
-    for t, f in frames:
-        if prev is not None:
-            ds.append((t, diff(f, prev)))
-        prev = f
-    if not ds:
-        return None
-    peak = max(d for _, d in ds)
-    if peak < max(2.0 * noise, noise + G_MIN_MOTION):
-        return None
-    thr = noise + 0.25 * (peak - noise)
-    last = max(t for t, d in ds if d > thr)
-    if sum(1 for t, _ in ds if t > last) < G_QUIET_FRAMES:
-        return None
-    return last
 
 
 def looks_at_floor(img: Any, cfg: dict, mask: Any = None, player_xy: tuple[int, int] | None = None) -> bool:

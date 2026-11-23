@@ -414,14 +414,14 @@
 
   // Angulo vertical de la camara (bot/camera_pitch.py). Con enabled false el bot NO toca la camara (ni al arrancar ni despues de
   //  cada metin): para farmear con la camara acomodada a mano. Reinicio con TECLAS (sin arrastres del mouse ni medir el angulo):
-  //  (a) mantener G (controls.camera_top) g_hold_s hasta el tope de la vista desde arriba: lo que tarda G desde el angulo de
-  //  farmeo, medido por `calibrate.py camara`, mas g_margin_s; (b) t_taps toques CORTOS de T (controls.camera_flat, t_tap_ms
+  //  (a) mantener G (controls.camera_top) g_hold_s, tiempo fijo, hasta el tope de la vista desde arriba (en el tope mantener
+  //  G de mas no hace nada, solo cuesta tiempo); (b) t_taps toques CORTOS de T (controls.camera_flat, t_tap_ms
   //  cada uno medido con reloj de alta precision, t_gap_ms fijos entre toques; el log dice cuanto duro cada uno) hasta el
   //  angulo de farmeo: nunca T mantenida (llega a plano y la camara se ACERCA al personaje; ese zoom solo se saca con la rueda);
   //  (c) UNA rueda hacia "lejos" zoom_out_clicks al final, que deja la distancia (zoom_out_sign = sentido de la rueda que
   //  ALEJA: 1 = hacia adelante, -1 = hacia atras; en Guabina tools/prueba_camara.py mostro que 1 ACERCA, asi que alli va -1).
-  //  step_pause_s: pausa entre pasos. El log dice cuanto tardo cada reinicio. t_taps y g_hold_s se calibran con
-  //  `calibrate.py camara` (mide G, despues toca T de a uno y pregunta).
+  //  step_pause_s: pausa entre pasos. El log dice cuanto tardo cada reinicio. t_taps se calibra con `calibrate.py camara`
+  //  (G g_hold_s, despues toca T de a uno y pregunta; no cambia g_hold_s).
   //  Cuando: SOLO cuando el terreno movio la camara (mira el piso: floor_frames capturas seguidas sin horizonte mientras se
   //  busca), con al menos min_gap_s (60) desde el reinicio anterior, que se multiplica si el reinicio no saco la vista del piso.
   //  No se reinicia al arrancar (la camara se deja acomodada antes de empezar) ni despues de cada metin. Nunca mientras ataca,
@@ -429,7 +429,7 @@
   //  Detector de "mira el piso" (bot/vision/pitch.py, solo como detector): min_confidence, strip_half_frac, sample_*,
   //  player_box_px, tol_*, min_sat, row_floor_frac, run_rows, min_valid_px, min_floor_rows, side_offset_frac, side_half_frac.
   //  (limit, to_limit_px, from_limit_px, *drag*, step_px, calib_max_px: del metodo de topes con arrastre, ya no se usan.)
-  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 3.0, "g_margin_s": 0.25,
+  "camera_pitch": {"enabled": true, "zoom_out_clicks": 20, "zoom_out_sign": 1, "g_hold_s": 1.5,
                    "t_taps": 4, "t_tap_ms": 120, "t_gap_ms": 150, "step_pause_s": 0.15, "floor_frames": 2, "min_gap_s": 60.0,
                    "side_offset_frac": 0.14, "side_half_frac": 0.06,
                    "min_confidence": 0.5,
